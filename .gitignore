@@ -12,7 +12,7 @@ temp/
 *.swp
 *~
 
-# 证书和私钥(敏感信息)
+# 证书和私钥(敏感信息, 仅运行时生成于 data/ 目录, 此处全局忽略以防误提交)
 *.key
 *.crt
 ca.key
@@ -20,9 +20,11 @@ ca.crt
 host.key
 host.crt
 
-# 配置文件(可能包含敏感信息)
-config.yml
+# 运行时生成的本地配置(包含敏感信息), 但保留 conf/ 下的配置模板
 *.local.yml
+
+# 注意: conf/server/config.yml 与 conf/client/config.yml 是随仓库分发的模板, 必须保留
+# 仅忽略运行时由 init.sh 生成的配置(位于 data/ 目录, 已被上方 data/ 规则覆盖)
 
 # 系统文件
 .DS_Store

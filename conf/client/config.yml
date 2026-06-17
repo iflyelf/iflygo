@@ -1,0 +1,371 @@
+# iFlyGo Client 配置文件
+# 这是 iFlyGo 客户端节点的配置模板
+# iFlyGo 是注重性能、简洁与安全的 overlay 安全网络隧道工具
+
+# PKI 证书配置 - 定义此节点的身份凭证
+# 每个证书都可以用 yaml 多行语法 ": |" 内联到配置文件
+pki:
+  # CA 证书 - 此节点信任的证书颁发机构 (必须包含一个或多个由 'iflygo-cert ca' 创建的证书)
+  ca: /etc/iflygo/ca.crt
+  # 节点证书 - 由 CA 签发的此节点的身份证书
+  cert: /etc/iflygo/host.crt
+  # 节点私钥 - 与证书配对的私钥
+  key: /etc/iflygo/host.key
+  
+  # 黑名单 - 拒绝通信的证书指纹列表（可选）
+  #blocklist:
+  #  - c99d4e650533b92061b09918e838a5a0a6aaee21eed1d12fd937682865936c72
+  
+  # 是否在证书过期或无效时强制断开客户端连接（可选）
+  #disconnect_invalid: true
+
+# 静态主机映射 - 定义具有固定公网 IP 地址的主机
+# 通常客户端需要在这里定义 lighthouse 的公网地址
+# 语法: "{iflygo内网IP}": ["{可路由的公网IP/域名}:{端口}"]
+# 示例: 如果你的 lighthouse 的 iflygo 内网 IP 是 192.168.100.1，真实公网 IP 是 100.64.22.11，端口 6688:
+static_host_map:
+  "192.168.100.1": ["100.64.22.11:6688"]
+
+# 静态映射行为配置（可选）
+#static_map:
+  # DNS 重新查询的频率 - 当 static_host_map 条目包含 DNS 名称时
+  #cadence: 30s
+  
+  # 网络类型 - 向 DNS 服务器请求的 IP 地址类型
+  # 默认是 "ip4"，因为节点通常不知道自己的公网 IPv4 地址
+  # 通过 IPv4 连接 lighthouse 允许 lighthouse 检测公网地址
+  # 其他有效选项: "ip6" 和 "ip" (同时返回 IPv4 和 IPv6)
+  #network: ip4
+  
+  # DNS 查询超时时间
+  #lookup_timeout: 250ms
+
+# Lighthouse (灯塔) 配置
+lighthouse:
+  # 是否启用 lighthouse 功能 - CLIENT 节点必须设置为 false
+  # 只有配置为网络中 lighthouse 的节点才应该设为 true
+  am_lighthouse: false
+  
+  # 是否启动 DNS 监听器 - 响应各种查询，甚至可以委托解析（可选）
+  #serve_dns: false
+  #dns:
+    # DNS 监听的 IP 地址 - 也可以绑定到 iflygo 节点 IP
+    #host: 0.0.0.0
+    #port: 53
+  
+  # 更新间隔 - 此节点向 lighthouse 报告的时间间隔（秒）
+  # 在更新期间，节点将其当前 IP 地址信息发送给 lighthouse
+  interval: 60
+  
+  # Lighthouse 主机列表 - 此节点应该报告和查询的 lighthouse 列表
+  # 重要提示1: LIGHTHOUSE 节点上此列表应该为空
+  # 重要提示2: 这里应该填写 LIGHTHOUSE 的 iFlyGo 内网 IP，而非公网 IP
+  hosts:
+    - "192.168.100.1"
+
+  # 远程地址允许列表 - 控制此节点在握手时考虑的 IP 范围
+  # 默认情况下，允许任何远程 IP
+  # 可以提供 CIDR，用 `true` 允许，用 `false` 拒绝
+  # 最具体的 CIDR 规则适用于每个远程地址
+  # 如果所有规则都是 "allow"，默认将是 "deny"，反之亦然
+  # 如果同时存在 "allow" 和 "deny" IPv4 规则，则必须为 "0.0.0.0/0" 设置默认规则
+  # 同样，如果同时存在 "allow" 和 "deny" IPv6 规则，则必须为 "::/0" 设置默认规则
+  #remote_allow_list:
+    # 示例: 阻止来自此子网的 IP 用作远程 IP
+    #"172.16.0.0/12": false
+    
+    # 更复杂的示例: 允许公网 IP，但只允许特定子网的私有 IP
+    #"0.0.0.0/0": true
+    #"10.0.0.0/8": false
+    #"10.42.42.0/24": true
+
+  # 本地地址允许列表 - 过滤向 lighthouse 通告的本地 IP 地址
+  # 使用与 `remote_allow_list` 相同的逻辑
+  # 此外，可以指定 `interfaces` 映射，使用正则表达式匹配接口名称
+  # 正则表达式必须匹配整个名称
+  # 所有接口规则必须是 true 或 false（默认值将是相反值）
+  # CIDR 规则在接口名称规则之后匹配
+  # 默认是所有本地 IP 地址
+  #local_allow_list:
+    # 示例: 阻止 tun0 和所有 docker 接口
+    #interfaces:
+      #tun0: false
+      #'docker.*': false
+    # 示例: 只向 lighthouse 通告此子网
+    #"10.0.0.0/8": true
+
+  # 通告地址 - 将与发现的地址一起报告给 lighthouse 的可路由地址
+  # 格式为 "ip:port"。`port` 可以是 `0`，此时将使用实际监听端口
+  # 如果 `listen.port` 设置为 0，这很有用
+  # 此选项主要在主机可以通过 iflygo 通常无法自行发现的静态 IP 地址访问时有用
+  # 例如端口转发或通往互联网的多条路径
+  #advertise_addrs:
+    #- "1.1.1.1:6688"
+    #- "1.2.3.4:0" # 端口将被实际监听端口替换
+
+# iFlyGo 监听端口配置
+# 默认端口是 6688
+# 对于 lighthouse 节点，应该定义端口
+# 但使用端口 0 将动态分配端口，建议用于漫游节点（如笔记本、手机等客户端）
+listen:
+  # 仅监听 ipv4，使用 "0.0.0.0"
+  # 监听 ipv4 和 ipv6，使用 "::"
+  host: "::"
+  # 客户端可以使用 0 让系统动态分配端口（推荐）
+  port: 0
+  
+  # 每次系统调用从内核拉取的最大数据包数量（在支持 recvmmsg 的系统上）
+  # 默认是 64，不支持重载
+  #batch: 64
+  
+  # 配置 udp 侧（外部）的套接字缓冲区，留空使用系统默认值
+  # 值将被内核加倍
+  # 默认是 net.core.rmem_default 和 net.core.wmem_default
+  # 最大值受系统内存限制，使用 SO_RCVBUFFORCE 和 SO_SNDBUFFORCE 避免提高系统范围的最大值
+  # net.core.rmem_max 和 net.core.wmem_max
+  #read_buffer: 10485760
+  #write_buffer: 10485760
+
+# 路由线程数 - 从 tun 和 UDP 队列消费的线程对数量
+# 目前默认为 1，即 1 个 tun 队列读取器和 1 个 UDP 队列读取器
+# 设置大于 1 将在 tun 设备上设置 IFF_MULTI_QUEUE，在 UDP 套接字上设置 SO_REUSEPORT 以允许多个队列
+# 此选项仅在 Linux 上支持
+#routines: 1
+
+# Punchy 配置 - 持续打洞以避免防火墙 NAT 映射过期
+punchy:
+  # 是否持续打洞
+  # 此设置可重载
+  punch: true
+  
+  # 响应模式 - 如果打洞失败，你尝试到达的节点将回连你
+  # 当一个节点在困难的 NAT 后面（如对称 NAT）时非常有用
+  # 默认是 false
+  # 此设置可重载
+  respond: true
+  
+  # 针对行为异常的 NAT 延迟打洞响应，默认是 1 秒
+  # 此设置可重载
+  #delay: 1s
+  
+  # 尝试 punchy.respond 之前的延迟，默认是 5 秒
+  # respond 必须为 true 才能生效
+  # 此设置可重载
+  #respond_delay: 5s
+
+# 加密算法 - 为网络选择可用的加密算法
+# 选项: chachapoly 或 aes
+# 重要提示: 此值在所有节点/灯塔上必须相同！
+# 我们不支持/不会支持同时使用不同的加密算法！
+#cipher: aes
+
+# 首选范围 - 定义关于本地网络范围的提示，加快发现到网络相邻 iflygo 节点的最快路径
+# 此设置可重载
+#preferred_ranges: ["172.16.0.0/24"]
+
+# SSH 管理接口 - 通过 ssh 暴露信息和管理功能（可选，用于调试）
+#sshd:
+  # 是否启用
+  #enabled: true
+  # 监听的主机和端口，出于安全考虑不允许端口 22
+  #listen: 127.0.0.1:2222
+  # 包含 ssh 主机私钥的文件
+  # 生成方式: ssh-keygen -t ed25519 -f ssh_host_ed25519_key -N "" < /dev/null
+  #host_key: ./ssh_host_ed25519_key
+  # 授权用户及其公钥
+  #authorized_users:
+    #- user: admin
+      #keys:
+        #- "ssh-rsa AAAA..."
+
+# 中继配置 - 用于无法建立直接连接的网络（实验性）
+relay:
+  # 中继列表 - 对等节点可以用来中继数据包到我的 iFlyGo IP 列表
+  # 此列表中的 IP 必须在其配置中设置 am_relay 为 true，否则会拒绝中继请求
+  #relays:
+    #- 192.168.100.1
+  
+  # 设置为 true 以允许其他主机在其中继配置中列出我的 IP
+  # 默认 false
+  am_relay: false
+  
+  # 设置为 false 以阻止此实例尝试通过中继建立连接
+  # 默认 true
+  use_relays: true
+
+# 配置私有接口（TUN 设备）
+# 注意: addr 已烧录到 iflygo 证书中
+tun:
+  # 禁用 tun 时，可以在没有本地 tun 接口的情况下启动 lighthouse（因此不需要 root）
+  disabled: false
+  
+  # 设备名称 - 如果未设置，操作系统将选择默认值
+  # macOS: 如果设置，必须是 `utun[0-9]+` 形式
+  # NetBSD: 必须设置，必须是 `tun[0-9]+` 形式
+  dev: iflygo
+  
+  # 是否转发本地广播数据包，地址取决于 pki.cert 中编码的 ip/mask
+  drop_local_broadcast: false
+  
+  # 是否转发组播数据包
+  drop_multicast: false
+  
+  # 传输队列长度 - 如果注意到 tun 上有大量传输丢弃，提高此数字可能有帮助
+  # 默认是 500
+  tx_queue: 500
+  
+  # 默认 MTU - 每个数据包的最大传输单元
+  # 对于基于互联网的流量，安全设置（也是默认值）是 1300
+  mtu: 1300
+
+  # 基于路由的 MTU 覆盖 - 如果已知 vpn ip 路径可以支持更大的 MTU，可以在此增加/减少
+  routes:
+    #- mtu: 8800
+    #  route: 10.0.0.0/16
+
+  # 不安全路由 - 允许通过 iflygo 将流量路由到非 iflygo 节点
+  # 应避免使用不安全路由，除非有无法运行 iflygo 的主机/服务
+  # 如果定义网关列表，支持加权 ECMP，可用于负载均衡或冗余到 iflygo 外部的主机
+  # 注意:
+  # * 如果不在 linux 上，路由表中只会看到单个网关
+  # * 如果网关无法通过覆盖网络访问，将选择另一个网关发送流量，忽略权重
+  #
+  # unsafe_routes:
+  # # 多个网关不定义权重默认权重为 1，将在三个网关之间平均分配流量
+  # - route: 192.168.87.0/24
+  #   via:
+  #     - gateway: 10.0.0.1
+  #     - gateway: 10.0.0.2
+  #     - gateway: 10.0.0.3
+  # # 多个网关带权重，将按权重分配流量
+  # - route: 192.168.87.0/24
+  #   via:
+  #     - gateway: 10.0.0.1
+  #       weight: 10
+  #     - gateway: 10.0.0.2
+  #       weight: 5
+  #
+  # 注意: "via" 节点的 iflygo 证书必须在其证书中将 "route" 定义为子网
+  # `via`: 单个节点或用于此路由的网关列表
+  # `mtu`: 如果未指定此选项，将默认为 tun mtu
+  # `metric`: 如果未指定此选项，将默认为 0
+  # `install`: 将默认为 true，控制是否在系统路由表中安装此路由
+  # 此设置可重载
+  unsafe_routes:
+    #- route: 172.16.1.0/24
+    #  via: 192.168.100.99
+    #  mtu: 1300
+    #  metric: 100
+    #  install: true
+
+# 配置日志级别
+logging:
+  # 日志级别: trace, debug, info, warn, 或 error
+  # 默认是 info，可重载
+  # 注意: Debug 和 trace 模式可以记录远程控制/不可信数据，在某些情况下会快速填满磁盘
+  # Debug 和 trace 日志也是 CPU 密集型的，会降低整体性能
+  # 只在主动调查问题时启用 debug 或 trace 日志
+  level: info
+  
+  # 格式: json 或 text
+  # 默认是 text
+  format: text
+  
+  # 禁用时间戳日志 - 当输出重定向到已添加时间戳的日志系统时很有用
+  # 默认是 false
+  #disable_timestamp: true
+
+# 统计配置（可选）
+# stats 部分可重载
+# HUP 信号可能会更改后端、开关统计、切换监听/主机地址或获取配置的 graphite 主机的新 DNS
+#stats:
+  #type: graphite
+  #prefix: iflygo
+  #protocol: tcp
+  #host: 127.0.0.1:9999
+  #interval: 10s
+
+  #type: prometheus
+  #listen: 127.0.0.1:8080
+  #path: /metrics
+  #namespace: prometheusns
+  #subsystem: iflygo
+  #interval: 10s
+
+# 握手管理器设置（可选）
+#handshakes:
+  # 握手以线性退避在每个间隔发送到所有已知地址
+  # 第 1 次尝试后等待 try_interval，第 2 次后等待 2 * try_interval，依此类推
+  # 直到握手超时
+  # 100ms 间隔和默认 10 次重试将给握手 5.5 秒来解决，然后超时
+  #try_interval: 100ms
+  #retries: 20
+
+# 隧道管理器设置（可选）
+#tunnels:
+  # drop_inactive 控制在 inactive_timeout 期间过期后是否维护或删除非活动隧道
+  # 通常，启用此设置是个好主意
+  # 此设置可重载
+  #drop_inactive: false
+  
+  # inactivity_timeout 控制隧道必须多长时间没有看到任何入站或出站流量才被视为非活动并有资格被删除
+  # 此设置可重载
+  #inactivity_timeout: 10m
+
+# iFlyGo 安全组配置（防火墙规则）
+firewall:
+  # 数据包不被防火墙规则允许时采取的操作
+  # 可选值:
+  #   `drop` (默认): 静默丢弃数据包
+  #   `reject`: 发送拒绝回复
+  #     - 对于 TCP，这将是 RST "连接重置" 数据包
+  #     - 对于其他协议，这将是 ICMP "目标不可达: 通信被管理禁止" 数据包
+  outbound_action: drop
+  inbound_action: drop
+
+  conntrack:
+    tcp_timeout: 12m
+    udp_timeout: 3m
+    default_timeout: 10m
+
+  # 防火墙默认拒绝，无法编写拒绝规则
+  # 规则由协议、端口和主机、组或 CIDR 中的一个或多个组成
+  # 逻辑评估大致为: port AND proto AND (ca_sha OR ca_name) AND (host OR group OR groups OR cidr) AND (local cidr)
+  # - port: 接受 `0` 或 `any` 作为任意，单个数字 `80`，范围 `200-901`，或 `fragment` 匹配分片数据包的第二个及后续片段（因为没有可用端口）
+  #   proto: `any`, `tcp`, `udp`, 或 `icmp`
+  #          如果 proto 是 `icmp`，端口规范将被忽略
+  #   host: `any` 或字面主机名，如 `test-host`
+  #   group: `any` 或字面组名，如 `default-group`
+  #   groups: 与 group 相同，但接受值列表。多个值用 AND 连接，证书必须包含所有组才能通过
+  #   cidr: 远程 CIDR，`0.0.0.0/0` 是任意 ipv4，`::/0` 是任意 ipv6。`any` 表示任意 ip 族和地址
+  #   local_cidr: 本地 CIDR，`0.0.0.0/0` 是任意 ipv4，`::/0` 是任意 ipv6。`any` 表示任意 ip 族和地址
+  #     这可以用于在使用 unsafe_routes 时过滤目标
+  #     默认情况下，这仅设置为通过证书网络字段分配的 VPN（覆盖）网络
+  #   ca_name: 颁发 CA 名称
+  #   ca_sha: 颁发 CA 哈希值
+
+  outbound:
+    # 允许来自此节点的所有出站流量
+    - port: any
+      proto: any
+      host: any
+
+  inbound:
+    # 允许任何 iflygo 主机之间的 icmp
+    - port: any
+      proto: icmp
+      host: any
+
+    # 允许来自具有 laptop 和 home 组的主机的 tcp/443
+    - port: 443
+      proto: tcp
+      groups:
+        - laptop
+        - home
+
+    # 将子网（不安全路由）暴露给具有 remote_client 组的主机
+    # 此示例假设证书中编码了 192.168.100.1/24 或更大的子网
+    - port: 8080
+      proto: tcp
+      group: remote_client
+      local_cidr: 192.168.100.1/24
