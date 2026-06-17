@@ -1,0 +1,108 @@
+version: '3.9'
+
+services:
+  # iFlyGo Server (Lighthouse) 节点
+  iflygo-server:
+    container_name: iflygo-server
+    image: iflyelf/iflygo:latest
+    hostname: iflygo-server
+    tty: true
+    stdin_open: true
+    privileged: true
+    restart: always
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun
+    environment:
+      # 运行模式: server (lighthouse 节点)
+      - RUNMODE=server
+      # 节点名称 (用于证书)
+      - NODE=lighthouse1
+      # 此节点的 iflygo 内网 IP (必须与证书一致)
+      - IFLYGO_IP=192.168.100.1
+      # 内网子网掩码 (默认 24)
+      - IFLYGO_NETMASK=24
+      # lighthouse 的公网入口 (其他节点用于连接此 server)
+      # 格式: host:port 或 domain:port
+      - LIGHTHOUSE_PUBLIC=your-server-ip:6688
+      # 监听端口 (lighthouse 必须固定端口, 默认 6688)
+      - LISTEN_PORT=6688
+      # 日志级别: trace/debug/info/warn/error (默认 info)
+      - LOG_LEVEL=info
+      # 证书签发时的分组(可选, 逗号分隔)
+      - GROUPS=lighthouse,admin
+      # TUN 设备名 (默认 iflygo)
+      - TUN_DEV=iflygo
+      # TUN MTU (默认 1300)
+      - TUN_MTU=1300
+    volumes:
+      # 配置与证书持久化
+      - ./data/server/config:/etc/iflygo:rw
+      # 日志持久化
+      - ./data/server/logs:/var/log/iflygo:rw
+      # 时区同步
+      - /etc/localtime:/etc/localtime:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
+    network_mode: host
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 65535
+        hard: 65535
+
+  # iFlyGo Client 节点
+  iflygo-client:
+    container_name: iflygo-client
+    image: iflyelf/iflygo:latest
+    hostname: iflygo-client
+    tty: true
+    stdin_open: true
+    privileged: true
+    restart: always
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun
+    environment:
+      # 运行模式: client
+      - RUNMODE=client
+      # 节点名称 (用于证书)
+      - NODE=client1
+      # 此节点的 iflygo 内网 IP (必须与证书一致, 且与 server 不同)
+      - IFLYGO_IP=192.168.100.2
+      # 内网子网掩码 (默认 24)
+      - IFLYGO_NETMASK=24
+      # lighthouse 的内网 IP (客户端通过此 IP 查询其他节点)
+      - LIGHTHOUSE_IP=192.168.100.1
+      # lighthouse 的公网入口 (必须与 server 的 LIGHTHOUSE_PUBLIC 一致)
+      - LIGHTHOUSE_PUBLIC=your-server-ip:6688
+      # 监听端口 (client 推荐 0, 系统动态分配)
+      - LISTEN_PORT=0
+      # 日志级别: trace/debug/info/warn/error (默认 info)
+      - LOG_LEVEL=info
+      # 证书签发时的分组(可选, 逗号分隔, 用于防火墙规则)
+      - GROUPS=laptop,home,ssh
+      # TUN 设备名 (默认 iflygo)
+      - TUN_DEV=iflygo
+      # TUN MTU (默认 1300)
+      - TUN_MTU=1300
+    volumes:
+      # 配置与证书持久化
+      - ./data/client/config:/etc/iflygo:rw
+      # 日志持久化
+      - ./data/client/logs:/var/log/iflygo:rw
+      # 时区同步
+      - /etc/localtime:/etc/localtime:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
+    network_mode: host
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 65535
+        hard: 65535
+
+# 注意: 由于使用 network_mode: host, 不再需要定义自定义网络和端口映射
+# 所有服务将直接使用宿主机网络栈
