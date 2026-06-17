@@ -55,172 +55,52 @@ if [ ! -f "${CONF_DIR}/host.crt" ] || [ ! -f "${CONF_DIR}/host.key" ]; then
 fi
 
 # ------------------------------------------------------------------------------
-# 2. 渲染配置文件 (优先使用模板, 仅当目标文件不存在时生成)
+# 2. 渲染配置文件
+#    基于 /etc/iflygo/templates/ 下的完整模板生成, 仅当目标文件不存在时生成
+#    这样可完整保留模板中的高级配置(unsafe_routes / static_map / cipher /
+#    read_buffer / handshakes 等), 再用环境变量替换关键标量字段
 # ------------------------------------------------------------------------------
 TARGET_CONF="${CONF_DIR}/config.yml"
 
-render_server_conf() {
-    cat >"${TARGET_CONF}" <<EOF
-# iFlyGo Server (Lighthouse) 配置 - 由 init.sh 自动生成
-# 节点名称: ${NODE}
-# 内网 IP : ${IFLYGO_IP}/${IFLYGO_NETMASK}
-# 公网入口: ${LIGHTHOUSE_PUBLIC}
+# 根据 RUNMODE 选择模板文件
+case "${RUNMODE}" in
+    server|lighthouse) SRC_TEMPLATE="${TEMPLATE_DIR}/server.yml" ;;
+    client)            SRC_TEMPLATE="${TEMPLATE_DIR}/client.yml" ;;
+    *)
+        echo "[iflygo-init][ERROR] 未知 RUNMODE=${RUNMODE} (期望 server 或 client)"
+        exit 1
+        ;;
+esac
 
-# PKI 证书配置
-pki:
-  ca: ${CONF_DIR}/ca.crt
-  cert: ${CONF_DIR}/host.crt
-  key: ${CONF_DIR}/host.key
-
-# 静态主机映射 - lighthouse 自身公网地址
-static_host_map:
-  "${LIGHTHOUSE_IP}": ["${LIGHTHOUSE_PUBLIC}"]
-
-# Lighthouse 配置
-lighthouse:
-  # SERVER 节点必须为 true
-  am_lighthouse: true
-  interval: 60
-  hosts: []
-
-# 监听端口
-listen:
-  host: "${LISTEN_HOST}"
-  port: ${LISTEN_PORT}
-
-# NAT 打洞
-punchy:
-  punch: true
-
-# 中继(默认关闭)
-relay:
-  am_relay: false
-  use_relays: true
-
-# TUN 配置
-tun:
-  disabled: false
-  dev: ${TUN_DEV}
-  drop_local_broadcast: false
-  drop_multicast: false
-  tx_queue: 500
-  mtu: ${TUN_MTU}
-
-# 日志配置
-logging:
-  level: ${LOG_LEVEL}
-  format: ${LOG_FORMAT}
-
-# 防火墙规则 (lighthouse 通常允许任意, 由各节点用证书 group 控制)
-firewall:
-  outbound_action: drop
-  inbound_action: drop
-  conntrack:
-    tcp_timeout: 12m
-    udp_timeout: 3m
-    default_timeout: 10m
-  outbound:
-    - port: any
-      proto: any
-      host: any
-  inbound:
-    - port: any
-      proto: icmp
-      host: any
-    - port: any
-      proto: any
-      host: any
-EOF
-}
-
-render_client_conf() {
-    cat >"${TARGET_CONF}" <<EOF
-# iFlyGo Client 配置 - 由 init.sh 自动生成
-# 节点名称: ${NODE}
-# 内网 IP : ${IFLYGO_IP}/${IFLYGO_NETMASK}
-# 连接到 lighthouse: ${LIGHTHOUSE_IP} (${LIGHTHOUSE_PUBLIC})
-
-# PKI 证书配置
-pki:
-  ca: ${CONF_DIR}/ca.crt
-  cert: ${CONF_DIR}/host.crt
-  key: ${CONF_DIR}/host.key
-
-# 静态主机映射 - 必须指向 lighthouse 公网入口
-static_host_map:
-  "${LIGHTHOUSE_IP}": ["${LIGHTHOUSE_PUBLIC}"]
-
-# Lighthouse 配置
-lighthouse:
-  # CLIENT 节点必须为 false
-  am_lighthouse: false
-  interval: 60
-  hosts:
-    - "${LIGHTHOUSE_IP}"
-
-# 监听端口 (客户端推荐 0, 系统动态分配)
-listen:
-  host: "${LISTEN_HOST}"
-  port: ${LISTEN_PORT}
-
-# NAT 打洞 (client 建议开启 respond)
-punchy:
-  punch: true
-  respond: true
-
-# 中继(默认关闭)
-relay:
-  am_relay: false
-  use_relays: true
-
-# TUN 配置
-tun:
-  disabled: false
-  dev: ${TUN_DEV}
-  drop_local_broadcast: false
-  drop_multicast: false
-  tx_queue: 500
-  mtu: ${TUN_MTU}
-
-# 日志配置
-logging:
-  level: ${LOG_LEVEL}
-  format: ${LOG_FORMAT}
-
-# 防火墙规则 (默认允许任意出站, 入站允许 icmp; 按需添加更多规则)
-firewall:
-  outbound_action: drop
-  inbound_action: drop
-  conntrack:
-    tcp_timeout: 12m
-    udp_timeout: 3m
-    default_timeout: 10m
-  outbound:
-    - port: any
-      proto: any
-      host: any
-  inbound:
-    - port: any
-      proto: icmp
-      host: any
-EOF
+# 用环境变量替换模板中的关键字段(锚定行首 + 缩进, 避免误伤其他出现位置)
+apply_env_overrides() {
+    local f="$1"
+    # 证书路径(模板默认 /etc/iflygo, 若 CONF_DIR 不同则同步)
+    sed -i "s|/etc/iflygo|${CONF_DIR}|g" "$f"
+    # lighthouse 连接信息: 模板示例值替换为环境变量
+    sed -i "s|lighthouse1.example.com:6688|${LIGHTHOUSE_PUBLIC}|g" "$f"
+    sed -i "s|192.168.100.1|${LIGHTHOUSE_IP}|g" "$f"
+    # TUN 设备名与 MTU
+    sed -i "s|^  dev: iflygo$|  dev: ${TUN_DEV}|" "$f"
+    sed -i "s|^  mtu: 1300$|  mtu: ${TUN_MTU}|" "$f"
+    # 监听地址与端口(server 模板默认 6688, client 模板默认 0)
+    sed -i "s|^  host: \"\\[::\\]\"$|  host: \"${LISTEN_HOST}\"|" "$f"
+    sed -i "s|^  port: 6688$|  port: ${LISTEN_PORT}|" "$f"
+    sed -i "s|^  port: 0$|  port: ${LISTEN_PORT}|" "$f"
+    # 日志级别与格式
+    sed -i "s|^  level: info$|  level: ${LOG_LEVEL}|" "$f"
+    sed -i "s|^  format: text$|  format: ${LOG_FORMAT}|" "$f"
 }
 
 if [ ! -f "${TARGET_CONF}" ]; then
-    case "${RUNMODE}" in
-        server|lighthouse)
-            echo "[iflygo-init] 生成 SERVER (lighthouse) 配置: ${TARGET_CONF}"
-            render_server_conf
-            ;;
-        client)
-            echo "[iflygo-init] 生成 CLIENT 配置: ${TARGET_CONF}"
-            render_client_conf
-            ;;
-        *)
-            echo "[iflygo-init][ERROR] 未知 RUNMODE=${RUNMODE} (期望 server 或 client)"
-            exit 1
-            ;;
-    esac
+    if [ ! -f "${SRC_TEMPLATE}" ]; then
+        echo "[iflygo-init][ERROR] 模板缺失: ${SRC_TEMPLATE}"
+        echo "[iflygo-init] 请确认镜像内已包含 conf/ 模板, 或手动放置配置: ${TARGET_CONF}"
+        exit 1
+    fi
+    echo "[iflygo-init] 基于模板生成 ${RUNMODE} 配置: ${SRC_TEMPLATE} -> ${TARGET_CONF}"
+    cp "${SRC_TEMPLATE}" "${TARGET_CONF}"
+    apply_env_overrides "${TARGET_CONF}"
 else
     echo "[iflygo-init] 已存在配置, 跳过生成: ${TARGET_CONF}"
 fi
