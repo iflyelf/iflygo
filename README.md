@@ -239,22 +239,142 @@ iflygo-cert sign -name client1 -ip 192.168.100.2/24 -groups "laptop,home,ssh"
 
 ## 🚀 高级特性
 
+### 0. 自定义配置（修改模板）
+
+**init.sh 现在基于完整配置模板生成运行时配置**，这意味着你可以通过修改 `conf/server/config.yml` 或 `conf/client/config.yml` 来自定义所有高级特性，而不仅限于环境变量支持的基础字段。
+
+#### 方法一：修改模板并重新构建镜像（推荐）
+
+```bash
+# 1. 克隆仓库并修改配置模板
+git clone https://github.com/iflyelf/iflygo-docker.git
+cd iflygo-docker
+
+# 2. 编辑配置模板（以 server 为例）
+vim conf/server/config.yml
+# 修改 unsafe_routes、static_map、cipher、read_buffer、handshakes 等任意字段
+
+# 3. 重新构建镜像
+docker build -t iflygo:custom .
+
+# 4. 使用自定义镜像启动容器
+docker run -d --name iflygo-server ... iflygo:custom
+```
+
+#### 方法二：直接挂载自定义配置（跳过 init.sh）
+
+```bash
+# 1. 从模板复制并自定义配置
+cp conf/server/config.yml my-custom-config.yml
+vim my-custom-config.yml
+
+# 2. 挂载自定义配置到容器（init.sh 检测到已存在会跳过生成）
+docker run -d \
+  --name iflygo-server \
+  -v $(pwd)/my-custom-config.yml:/etc/iflygo/config.yml:ro \
+  -v $(pwd)/ca.crt:/etc/iflygo/ca.crt:ro \
+  -v $(pwd)/host.crt:/etc/iflygo/host.crt:ro \
+  -v $(pwd)/host.key:/etc/iflygo/host.key:ro \
+  ... \
+  iflyelf/iflygo:latest
+```
+
+#### 支持的高级配置
+
+模板包含以下高级特性，修改后会完整保留：
+
+- **unsafe_routes**: 不安全路由（将非 iFlyGo 子网路由到网关节点）
+- **static_map**: DNS 缓存时间、网络类型（ip4/ip6/ip）、查询超时
+- **cipher**: 加密算法（chachapoly / aes）
+- **read_buffer / write_buffer**: UDP 缓冲区大小（高流量优化）
+- **handshakes**: 握手超时、重试次数、缓冲通道大小
+- **relay**: 中继服务器列表、是否作为中继节点
+- **remote_allow_list / local_allow_list**: IP 范围白名单
+- **preferred_ranges**: 本地网络范围提示
+- **punchy**: 打洞延迟、响应模式
+- **firewall**: 完整的防火墙规则（conntrack、出站/入站规则）
+
+**注意**: 环境变量仅覆盖以下基础字段（证书路径、lighthouse 地址、端口、TUN 设备名、日志级别），其他字段必须通过修改模板配置。
+
+---
+
 ### 1. 不安全路由 (Unsafe Routes)
 
-将 iFlyGo 网络外的子网通过特定节点暴露：
+将 iFlyGo 网络外的子网通过特定节点暴露，实现跨数据中心或 VPC 的网络互通。
+
+#### 单网关路由（最简形式）
+
+在 **server 模板** 的 `tun.unsafe_routes` 中添加：
+
+```yaml
+tun:
+  dev: iflygo
+  mtu: 1300
+  routes: []
+  unsafe_routes:
+    - route: 172.16.1.0/24
+      via: 192.168.100.99      # 网关节点的 iFlyGo 内网 IP
+      mtu: 1300
+      metric: 100
+```
+
+#### 多网关加权 ECMP（负载均衡 + 冗余）
 
 ```yaml
 tun:
   unsafe_routes:
-    - route: 172.16.1.0/24
-      via: 192.168.100.99  # 网关节点的内网 IP
+    # 通过两个网关节点访问 10.0.9.0/24，按权重分配流量
+    - route: 10.0.9.0/24
+      via:
+        - gateway: 192.168.100.11
+          weight: 10               # 大部分流量走此网关
+        - gateway: 192.168.100.12
+          weight: 5                # 少量流量走此网关（冗余）
+      mtu: 1300
+    
+    # 监控网段：等权重负载均衡
+    - route: 10.0.88.0/24
+      via:
+        - gateway: 192.168.100.11
+        - gateway: 192.168.100.12
+
+    # 大规模子网（如整个 10.7.0.0/16）
+    - route: 10.7.0.0/16
+      via:
+        - gateway: 192.168.100.11
+          weight: 10
+        - gateway: 192.168.100.12
+          weight: 5
 ```
 
-⚠️ 网关节点的证书必须在 `-subnets` 字段包含该路由：
+#### 网关节点证书要求
+
+⚠️ **重要**：作为 `via` 网关的节点，其证书必须在 `-subnets` 字段声明该子网，否则路由不生效：
 
 ```bash
-iflygo-cert sign -name gateway -ip 192.168.100.99/24 -subnets "172.16.1.0/24"
+# 在 lighthouse 上签发网关节点证书时声明子网
+iflygo-cert sign \
+  -name gateway1 \
+  -ip 192.168.100.99/24 \
+  -subnets "172.16.1.0/24,10.0.9.0/24,10.0.88.0/24" \
+  -groups "gateway"
 ```
+
+#### 路由生效验证
+
+```bash
+# 进入客户端容器
+docker exec -it iflygo-client bash
+
+# 查看路由表，应看到 unsafe_routes 已注入
+ip route | grep iflygo
+
+# 测试连通性
+ping 172.16.1.10                # 应通过 iFlyGo 网关到达
+traceroute 10.0.9.5             # 查看流量经过哪个网关
+```
+
+> 提示：完整的多网关 ECMP 模板示例可参考 `conf/server/config.yml` 中的 `unsafe_routes` 段落。
 
 ### 2. 中继 (Relay)
 
