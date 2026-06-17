@@ -88,14 +88,16 @@ docker-compose down
 
 ## 🔧 环境变量说明
 
+### 基础环境变量
+
 | 变量名 | 说明 | 默认值 | 示例 |
 |--------|------|--------|------|
 | `RUNMODE` | 运行模式 | `client` | `server` / `client` |
 | `NODE` | 节点名称（用于证书） | `iflygo-node` | `lighthouse1` / `client1` |
 | `IFLYGO_IP` | 此节点的内网 IP | `192.168.100.1` | `192.168.100.2` |
 | `IFLYGO_NETMASK` | 内网子网掩码 | `24` | `24` |
-| `LIGHTHOUSE_IP` | Lighthouse 内网 IP | `192.168.100.1` | `192.168.100.1` |
-| `LIGHTHOUSE_PUBLIC` | Lighthouse 公网入口 | `127.0.0.1:6688` | `1.2.3.4:6688` |
+| `LIGHTHOUSE_IP` | Lighthouse 内网 IP（单节点） | `192.168.100.1` | `192.168.100.1` |
+| `LIGHTHOUSE_PUBLIC` | Lighthouse 公网入口（单节点） | `127.0.0.1:6688` | `1.2.3.4:6688` |
 | `LISTEN_HOST` | 监听地址 | `::` | `0.0.0.0` |
 | `LISTEN_PORT` | 监听端口 | `6688` | `0` (client 推荐 0) |
 | `TUN_DEV` | TUN 设备名 | `iflygo` | `iflygo` |
@@ -105,6 +107,40 @@ docker-compose down
 | `GROUPS` | 证书分组 | (空) | `laptop,home,ssh` |
 | `CERT_DURATION` | 证书有效期 | `26280h` (3年) | `8760h` (1年) |
 | `AUTO_GEN_CA` | 自动生成 CA | `true` | `false` |
+
+### 多 Lighthouse 环境变量（高可用场景）
+
+当部署多个 lighthouse 节点时，使用以下编号变量（自动检测，优先级高于单节点变量）：
+
+| 变量名 | 说明 | 示例 |
+|--------|------|------|
+| `LIGHTHOUSE_IP_1` | 第 1 个 lighthouse 内网 IP | `10.88.0.1` |
+| `LIGHTHOUSE_PUBLIC_1` | 第 1 个 lighthouse 公网入口 | `shanghai.example.com:6688` |
+| `LIGHTHOUSE_IP_1_V6` | 第 1 个 lighthouse IPv6 地址（可选） | `fd88::ffff:a58:1` |
+| `LIGHTHOUSE_IP_2` | 第 2 个 lighthouse 内网 IP | `10.88.0.2` |
+| `LIGHTHOUSE_PUBLIC_2` | 第 2 个 lighthouse 公网入口 | `singapore.example.com:6688` |
+| `LIGHTHOUSE_IP_2_V6` | 第 2 个 lighthouse IPv6 地址（可选） | `fd88::ffff:a58:2` |
+| ... | 依此类推（最多支持 64 个） | ... |
+
+**使用方式**：
+
+```yaml
+# docker-compose.yml 中配置多 lighthouse
+environment:
+  - LIGHTHOUSE_IP_1=10.88.0.1
+  - LIGHTHOUSE_PUBLIC_1=shanghai.example.com:6688
+  - LIGHTHOUSE_IP_1_V6=fd88::ffff:a58:1  # 可选 IPv6
+  - LIGHTHOUSE_IP_2=10.88.0.2
+  - LIGHTHOUSE_PUBLIC_2=singapore.example.com:6688
+  - LIGHTHOUSE_IP_2_V6=fd88::ffff:a58:2
+  - LIGHTHOUSE_IP_3=10.88.0.3
+  - LIGHTHOUSE_PUBLIC_3=tokyo.example.com:6688
+```
+
+**自动检测逻辑**：
+- 如果检测到 `LIGHTHOUSE_IP_1` 和 `LIGHTHOUSE_PUBLIC_1` 存在，自动进入**多 lighthouse 模式**
+- 否则使用 `LIGHTHOUSE_IP` 和 `LIGHTHOUSE_PUBLIC`（**单 lighthouse 模式**，向后兼容）
+- IPv6 地址可选，不配置则仅生成 IPv4 条目
 
 ---
 
