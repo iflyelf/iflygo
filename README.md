@@ -39,6 +39,7 @@ docker run -d \
   --network host \
   -e RUNMODE=server \
   -e NODE=lighthouse1 \
+  -e CERT_HOSTNAME=lighthouse1 \
   -e IFLYGO_IP=192.168.100.1 \
   -e LIGHTHOUSE_PUBLIC=your-server-ip:6688 \
   -e LISTEN_PORT=6688 \
@@ -59,6 +60,7 @@ docker run -d \
   --network host \
   -e RUNMODE=client \
   -e NODE=client1 \
+  -e CERT_HOSTNAME=client1 \
   -e IFLYGO_IP=192.168.100.2 \
   -e LIGHTHOUSE_IP=192.168.100.1 \
   -e LIGHTHOUSE_PUBLIC=your-server-ip:6688 \
@@ -93,7 +95,8 @@ docker-compose down
 | 变量名 | 说明 | 默认值 | 示例 |
 |--------|------|--------|------|
 | `RUNMODE` | 运行模式 | `client` | `server` / `client` |
-| `NODE` | 节点名称（用于证书） | `iflygo-node` | `lighthouse1` / `client1` |
+| `NODE` | 节点名称（用于证书 `-name`） | `iflygo-node` | `lighthouse1` / `client1` |
+| `CERT_HOSTNAME` | 证书文件主机名（命名 `<名>.crt/.key`） | 同 `NODE` | `uola-servers-lead-01` |
 | `IFLYGO_IP` | 此节点的内网 IP | `192.168.100.1` | `192.168.100.2` |
 | `IFLYGO_NETMASK` | 内网子网掩码 | `24` | `24` |
 | `LIGHTHOUSE_IP` | Lighthouse 内网 IP（单节点） | `192.168.100.1` | `192.168.100.1` |
@@ -208,7 +211,25 @@ Client 节点连接到 lighthouse 并与其他客户端建立 P2P 隧道。特�
 容器启动时，`init.sh` 会自动检查并生成缺失的证书：
 
 - **CA 证书** (`ca.crt` / `ca.key`): 首次启动时自动生成
-- **节点证书** (`host.crt` / `host.key`): 根据 `NODE` / `IFLYGO_IP` / `GROUPS` 自动签发
+- **节点证书** (`<CERT_HOSTNAME>.crt` / `<CERT_HOSTNAME>.key`): 根据 `NODE` / `IFLYGO_IP` / `GROUPS` 自动签发
+
+节点证书的文件名由 `CERT_HOSTNAME` 环境变量决定（默认取 `NODE` 的值），便于在共享卷或集中管理时按主机名区分不同节点的证书。例如：
+
+```bash
+# 设置 CERT_HOSTNAME=uola-servers-lead-01
+# 生成的证书文件: uola-servers-lead-01.crt / uola-servers-lead-01.key
+# 配置文件 pki 段会自动指向这两个文件:
+#   cert: /etc/iflygo/uola-servers-lead-01.crt
+#   key:  /etc/iflygo/uola-servers-lead-01.key
+docker run -d \
+  -e NODE=uola-servers-lead-01 \
+  -e CERT_HOSTNAME=uola-servers-lead-01 \
+  -e IFLYGO_IP=10.88.0.1 \
+  ... \
+  iflyelf/iflygo:latest
+```
+
+> 提示：如果不设置 `CERT_HOSTNAME`，证书文件名默认与 `NODE` 相同（如 `NODE=client1` 则生成 `client1.crt` / `client1.key`）。
 
 ### 手动管理
 
@@ -218,18 +239,18 @@ Client 节点连接到 lighthouse 并与其他客户端建立 P2P 隧道。特�
 # 1. 生成 CA (仅在 server 上执行一次)
 docker exec iflygo-server iflygo-cert ca -name "My iFlyGo CA"
 
-# 2. 签发节点证书
+# 2. 签发节点证书（文件名建议与节点的 CERT_HOSTNAME 一致）
 docker exec iflygo-server iflygo-cert sign \
-  -name "client2" \
-  -ip "192.168.100.3/24" \
+  -name "uola-office-dns-01" \
+  -ip "10.88.0.100/24" \
   -groups "laptop,home,ssh" \
-  -out-crt client2.crt \
-  -out-key client2.key
+  -out-crt uola-office-dns-01.crt \
+  -out-key uola-office-dns-01.key
 
-# 3. 复制证书到客户端
+# 3. 复制证书到客户端（保持文件名与 CERT_HOSTNAME 对应）
 docker cp iflygo-server:/etc/iflygo/ca.crt ./data/client2/config/
-docker cp iflygo-server:/etc/iflygo/client2.crt ./data/client2/config/host.crt
-docker cp iflygo-server:/etc/iflygo/client2.key ./data/client2/config/host.key
+docker cp iflygo-server:/etc/iflygo/uola-office-dns-01.crt ./data/client2/config/
+docker cp iflygo-server:/etc/iflygo/uola-office-dns-01.key ./data/client2/config/
 ```
 
 ---
@@ -303,14 +324,16 @@ docker run -d --name iflygo-server ... iflygo:custom
 # 1. 从模板复制并自定义配置
 cp conf/server/config.yml my-custom-config.yml
 vim my-custom-config.yml
+# 注意: 确认配置中 pki.cert / pki.key 指向的文件名与下方挂载一致
 
 # 2. 挂载自定义配置到容器（init.sh 检测到已存在会跳过生成）
+#    证书文件名需与 my-custom-config.yml 里 pki 段声明的路径一致
 docker run -d \
   --name iflygo-server \
   -v $(pwd)/my-custom-config.yml:/etc/iflygo/config.yml:ro \
   -v $(pwd)/ca.crt:/etc/iflygo/ca.crt:ro \
-  -v $(pwd)/host.crt:/etc/iflygo/host.crt:ro \
-  -v $(pwd)/host.key:/etc/iflygo/host.key:ro \
+  -v $(pwd)/lighthouse1.crt:/etc/iflygo/lighthouse1.crt:ro \
+  -v $(pwd)/lighthouse1.key:/etc/iflygo/lighthouse1.key:ro \
   ... \
   iflyelf/iflygo:latest
 ```

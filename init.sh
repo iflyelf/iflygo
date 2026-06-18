@@ -14,6 +14,9 @@ set -euo pipefail
 # 默认变量(可通过 docker -e 覆盖)
 RUNMODE="${RUNMODE:-client}"            # 运行模式: server | client
 NODE="${NODE:-iflygo-node}"             # 节点名称(用于证书 -name)
+# 证书文件主机名(用于命名 <CERT_HOSTNAME>.crt / .key, 默认取 NODE)
+# 例如 CERT_HOSTNAME=uola-servers-lead-01 -> uola-servers-lead-01.crt / .key
+CERT_HOSTNAME="${CERT_HOSTNAME:-${NODE}}"
 IFLYGO_IP="${IFLYGO_IP:-192.168.100.1}" # 此节点的 iflygo 内网 IP
 IFLYGO_NETMASK="${IFLYGO_NETMASK:-24}"  # 内网子网掩码
 
@@ -50,15 +53,19 @@ if [ ! -f "${CONF_DIR}/ca.crt" ] || [ ! -f "${CONF_DIR}/ca.key" ]; then
     fi
 fi
 
-if [ ! -f "${CONF_DIR}/host.crt" ] || [ ! -f "${CONF_DIR}/host.key" ]; then
+# 节点证书文件名(基于自定义主机名, 默认取 NODE)
+HOST_CRT="${CERT_HOSTNAME}.crt"
+HOST_KEY="${CERT_HOSTNAME}.key"
+
+if [ ! -f "${CONF_DIR}/${HOST_CRT}" ] || [ ! -f "${CONF_DIR}/${HOST_KEY}" ]; then
     if [ -f "${CONF_DIR}/ca.crt" ] && [ -f "${CONF_DIR}/ca.key" ]; then
-        echo "[iflygo-init] 自动签发节点证书: name=${NODE} ip=${IFLYGO_IP}/${IFLYGO_NETMASK}"
+        echo "[iflygo-init] 自动签发节点证书: name=${NODE} ip=${IFLYGO_IP}/${IFLYGO_NETMASK} -> ${HOST_CRT}/${HOST_KEY}"
         SIGN_ARGS=(-name "${NODE}" -ip "${IFLYGO_IP}/${IFLYGO_NETMASK}" -duration "${CERT_DURATION}")
         if [ -n "${GROUPS}" ]; then
             SIGN_ARGS+=(-groups "${GROUPS}")
         fi
         ( cd "${CONF_DIR}" && \
-          iflygo-cert sign "${SIGN_ARGS[@]}" -out-crt host.crt -out-key host.key )
+          iflygo-cert sign "${SIGN_ARGS[@]}" -out-crt "${HOST_CRT}" -out-key "${HOST_KEY}" )
     fi
 fi
 
@@ -231,6 +238,9 @@ apply_env_overrides() {
     local f="$1"
     # 证书路径(模板默认 /etc/iflygo, 若 CONF_DIR 不同则同步)
     sed -i "s|/etc/iflygo|${CONF_DIR}|g" "$f"
+    # 节点证书文件名(模板默认 host.crt/host.key, 替换为自定义主机名)
+    sed -i "s|host\\.crt|${HOST_CRT}|g" "$f"
+    sed -i "s|host\\.key|${HOST_KEY}|g" "$f"
     # TUN 设备名与 MTU
     sed -i "s|^  dev: iflygo$|  dev: ${TUN_DEV}|" "$f"
     sed -i "s|^  mtu: 1300$|  mtu: ${TUN_MTU}|" "$f"
@@ -279,4 +289,4 @@ if [ ! -e /dev/net/tun ]; then
     echo "[iflygo-init][WARN] /dev/net/tun 不存在, 请使用 --device /dev/net/tun 启动容器"
 fi
 
-echo "[iflygo-init] 初始化完成: RUNMODE=${RUNMODE} NODE=${NODE} IFLYGO_IP=${IFLYGO_IP}"
+echo "[iflygo-init] 初始化完成: RUNMODE=${RUNMODE} NODE=${NODE} CERT=${HOST_CRT} IFLYGO_IP=${IFLYGO_IP}"

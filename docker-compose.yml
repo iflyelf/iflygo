@@ -18,8 +18,10 @@ services:
     environment:
       # 运行模式: server (lighthouse 节点)
       - RUNMODE=server
-      # 节点名称 (用于证书)
+      # 节点名称 (用于证书 -name)
       - NODE=lighthouse1
+      # 证书文件主机名 (生成 <名>.crt/.key, 默认取 NODE; 用于区分不同节点证书)
+      - CERT_HOSTNAME=lighthouse1
       # 此节点的 iflygo 内网 IP (必须与证书一致)
       - IFLYGO_IP=192.168.100.1
       # 内网子网掩码 (默认 24)
@@ -69,8 +71,10 @@ services:
     environment:
       # 运行模式: client
       - RUNMODE=client
-      # 节点名称 (用于证书)
+      # 节点名称 (用于证书 -name)
       - NODE=client1
+      # 证书文件主机名 (生成 <名>.crt/.key, 默认取 NODE; 用于区分不同节点证书)
+      - CERT_HOSTNAME=client1
       # 此节点的 iflygo 内网 IP (必须与证书一致, 且与 server 不同)
       - IFLYGO_IP=192.168.100.2
       # 内网子网掩码 (默认 24)
