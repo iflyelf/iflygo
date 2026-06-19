@@ -1,5 +1,3 @@
-version: '3.9'
-
 services:
   # iFlyGo Server (Lighthouse) 节点
   iflygo-server:
@@ -83,7 +81,7 @@ services:
       - LIGHTHOUSE_IP=192.168.100.1
       # lighthouse 的公网入口 (必须与 server 的 LIGHTHOUSE_PUBLIC 一致)
       - LIGHTHOUSE_PUBLIC=your-server-ip:6688
-      
+
       # ===== 多 Lighthouse 配置（高可用场景，注释掉使用单 lighthouse） =====
       # 如果配置了 LIGHTHOUSE_IP_1, 会自动覆盖上面的单 lighthouse 变量
       # - LIGHTHOUSE_IP_1=10.88.0.1
@@ -95,7 +93,7 @@ services:
       # - LIGHTHOUSE_IP_3=10.88.0.3
       # - LIGHTHOUSE_PUBLIC_3=tokyo.example.com:6688
       # ==============================================================
-      
+
       # 监听端口 (client 推荐 0, 系统动态分配)
       - LISTEN_PORT=0
       # 日志级别: trace/debug/info/warn/error (默认 info)
