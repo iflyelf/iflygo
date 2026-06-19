@@ -76,7 +76,7 @@ punchy:
 cipher: chachapoly
 
 # 本地范围 - 定义关于本地网络范围的提示，加快发现到网络相邻 iflygo 节点的最快路径
-preferred_ranges: ["192.168.100.0/24"]
+preferred_ranges: ["10.88.0.0/16", "fd88::/64"]
 
 # 中继设置 - 用于无法建立直接连接的网络（实验性）
 relay:

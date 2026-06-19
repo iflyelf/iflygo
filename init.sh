@@ -37,6 +37,20 @@ SUBNETS="${SUBNETS:-}"                  # 网关证书签发时的子网路由(�
 CA_DURATION="${CA_DURATION:-876000h}"   # CA 证书有效期(默认 100 年)
 # 节点证书有效期: 留空则自动取 CA 剩余有效期(防止超过 CA 有效期导致签发失败)
 # 显式设置示例: CERT_DURATION=26280h (3年) / CERT_DURATION=876000h (100年)
+
+# 网络偏好范围: 逗号分隔的 CIDR 列表, 用于加速发现网络相邻节点
+# 默认: 10.88.0.0/16 (IPv4) + fd88::/64 (IPv6)
+PREFERRED_RANGES="${PREFERRED_RANGES:-10.88.0.0/16,fd88::/64}"
+
+# 不安全路由: 用分号分隔多条路由, 每条路由格式如下:
+#   单网关: route=<CIDR>,via=<GW>[,mtu=<MTU>][,metric=<N>]
+#   多网关: route=<CIDR>,via=<GW1>:<W1>|<GW2>:<W2>[,mtu=<MTU>]
+# 示例:
+#   单网关: UNSAFE_ROUTES="route=10.8.1.0/24,via=10.88.1.1,mtu=1300,metric=100"
+#   多网关: UNSAFE_ROUTES="route=10.0.9.0/24,via=10.88.2.1:10|10.88.2.2:5"
+#   多条路由: UNSAFE_ROUTES="route=10.8.1.0/24,via=10.88.1.1;route=10.0.9.0/24,via=10.88.2.1:10|10.88.2.2:5"
+# 留空则使用模板默认值(server 模板保留示例, client 为空)
+UNSAFE_ROUTES="${UNSAFE_ROUTES:-}"
 CERT_DURATION="${CERT_DURATION:-}"
 AUTO_GEN_CA="${AUTO_GEN_CA:-true}"      # 当 ca 不存在时是否自动生成
 
@@ -225,6 +239,39 @@ replace_yaml_block() {
     mv "$tmp" "$f"
 }
 
+# 替换 tun 块中的 unsafe_routes 子字段(保留 tun 块的其他字段)
+replace_tun_unsafe_routes() {
+    local f="$1" new_routes="$2"
+    local tmp
+    tmp=$(mktemp)
+    awk -v new="$new_routes" '
+        BEGIN { in_tun = 0; in_unsafe = 0; printed = 0 }
+        /^tun:/ { in_tun = 1; print; next }
+        # 匹配 tun 内的 unsafe_routes: 字段(2 空格缩进)
+        in_tun == 1 && /^  unsafe_routes:/ {
+            in_unsafe = 1
+            if (!printed) {
+                print new
+                printed = 1
+            }
+            next
+        }
+        # 在 unsafe_routes 块内
+        in_unsafe == 1 {
+            # 遇到顶级 key (无缩进) -> unsafe 和 tun 都结束, 打印此行
+            if (/^[a-zA-Z_]/) { in_unsafe = 0; in_tun = 0; print; next }
+            # 遇到 tun 内的下一个 key (2 空格缩进 + 字母) -> unsafe 结束, 打印此行
+            if (/^  [a-zA-Z_]/) { in_unsafe = 0; print; next }
+            # 其余(列表项 / 注释 / 空行)跳过
+            next
+        }
+        # tun 块结束(遇到下一个顶级 key, 且不在 unsafe 块内)
+        in_tun == 1 && /^[a-zA-Z_]/ { in_tun = 0 }
+        { print }
+    ' "$f" > "$tmp"
+    mv "$tmp" "$f"
+}
+
 # 替换 lighthouse 块中的 hosts 字段(保留 lighthouse 块的其他字段)
 replace_lighthouse_hosts() {
     local f="$1" new_hosts="$2"
@@ -281,6 +328,78 @@ apply_env_overrides() {
     sed -i "s|^  format: text$|  format: ${LOG_FORMAT}|" "$f"
 }
 
+# 生成 preferred_ranges YAML (从环境变量 PREFERRED_RANGES)
+generate_preferred_ranges() {
+    # 输入: 逗号分隔 CIDR (如 10.88.0.0/16,fd88::/64)
+    # 输出: preferred_ranges: ["10.88.0.0/16", "fd88::/64"]
+    if [ -z "${PREFERRED_RANGES}" ]; then
+        echo 'preferred_ranges: []'
+        return
+    fi
+    # 将逗号替换为 ", " 并加上 ["..."]
+    local ranges_json=$(echo "${PREFERRED_RANGES}" | sed 's/,/", "/g')
+    echo "preferred_ranges: [\"${ranges_json}\"]"
+}
+
+# 生成 unsafe_routes YAML (从环境变量 UNSAFE_ROUTES)
+generate_unsafe_routes() {
+    # 输入格式: 分号分隔多条路由
+    #   单网关: route=<CIDR>,via=<GW>[,mtu=<N>][,metric=<N>]
+    #   多网关: route=<CIDR>,via=<GW1>:<W1>|<GW2>:<W2>[,mtu=<N>]
+    # 输出: YAML unsafe_routes 列表 (缩进 2 空格)
+    if [ -z "${UNSAFE_ROUTES}" ]; then
+        echo "  unsafe_routes: []"
+        return
+    fi
+    
+    echo "  unsafe_routes:"
+    # 用分号分隔路由条目
+    IFS=';' read -ra routes <<< "${UNSAFE_ROUTES}"
+    for route_str in "${routes[@]}"; do
+        # 解析 route_str: 拆分 key=value 对
+        local route="" via="" mtu="" metric=""
+        IFS=',' read -ra kv_pairs <<< "${route_str}"
+        for kv in "${kv_pairs[@]}"; do
+            key="${kv%%=*}"
+            val="${kv#*=}"
+            case "$key" in
+                route)  route="$val" ;;
+                via)    via="$val" ;;
+                mtu)    mtu="$val" ;;
+                metric) metric="$val" ;;
+            esac
+        done
+        
+        # 输出 YAML (缩进 4 空格)
+        echo "    - route: ${route}"
+        
+        # via 可能是单网关(10.88.1.1) 或多网关(10.88.2.1:10|10.88.2.2:5)
+        if [[ "$via" =~ \| ]]; then
+            # 多网关 ECMP
+            echo "      via:"
+            IFS='|' read -ra gateways <<< "${via}"
+            for gw_entry in "${gateways[@]}"; do
+                if [[ "$gw_entry" =~ : ]]; then
+                    gw="${gw_entry%%:*}"
+                    weight="${gw_entry#*:}"
+                    echo "        - gateway: ${gw}"
+                    echo "          weight: ${weight}"
+                else
+                    echo "        - gateway: ${gw_entry}"
+                fi
+            done
+        else
+            # 单网关
+            echo "      via: ${via}"
+        fi
+        
+        [ -n "$mtu" ] && echo "      mtu: ${mtu}" || true
+        [ -n "$metric" ] && echo "      metric: ${metric}" || true
+    done
+    return 0
+}
+
+
 if [ ! -f "${TARGET_CONF}" ]; then
     if [ ! -f "${SRC_TEMPLATE}" ]; then
         echo "[iflygo-init][ERROR] 模板缺失: ${SRC_TEMPLATE}"
@@ -299,6 +418,17 @@ if [ ! -f "${TARGET_CONF}" ]; then
     if [ "${RUNMODE}" = "client" ]; then
         new_hosts=$(generate_lighthouse_hosts)
         replace_lighthouse_hosts "${TARGET_CONF}" "${new_hosts}"
+    fi
+
+    # 替换 preferred_ranges (顶级字段, 始终用环境变量值)
+    new_preferred_ranges=$(generate_preferred_ranges)
+    replace_yaml_block "${TARGET_CONF}" "preferred_ranges" "${new_preferred_ranges}"
+
+    # 替换 tun.unsafe_routes (仅当 UNSAFE_ROUTES 环境变量非空时覆盖模板)
+    if [ -n "${UNSAFE_ROUTES}" ]; then
+        echo "[iflygo-init] 应用自定义 unsafe_routes"
+        new_unsafe_routes=$(generate_unsafe_routes)
+        replace_tun_unsafe_routes "${TARGET_CONF}" "${new_unsafe_routes}"
     fi
 
     # 替换简单标量字段

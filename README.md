@@ -111,9 +111,59 @@ docker-compose down
 | `LOG_FORMAT` | 日志格式 | `text` | `json` |
 | `CERT_GROUPS` | 证书分组（**勿用 `GROUPS`**，与 bash 内置变量冲突） | (空) | `laptop,home,ssh` |
 | `SUBNETS` | 网关证书子网路由（用于 unsafe_routes） | (空) | `10.8.1.0/24` |
+| `PREFERRED_RANGES` | 本地网络偏好范围（逗号分隔 CIDR） | `10.88.0.0/16,fd88::/64` | `172.16.0.0/24,10.99.0.0/16` |
+| `UNSAFE_ROUTES` | 不安全路由（分号分隔多条，见下方格式说明） | (空，用模板默认) | `route=10.8.1.0/24,via=10.88.1.1` |
 | `CA_DURATION` | CA 证书有效期 | `876000h` (100年) | `876000h` |
 | `CERT_DURATION` | 节点证书有效期（**留空则自动跟随 CA 剩余有效期**，避免超期报错） | (空，自动跟随) | `26280h` (3年) / `876000h` (100年) |
 | `AUTO_GEN_CA` | 自动生成 CA | `true` | `false` |
+
+#### UNSAFE_ROUTES 环境变量格式
+
+通过环境变量配置不安全路由（无需修改配置文件模板）。格式说明：
+
+- **多条路由**用分号 `;` 分隔
+- **每条路由**字段用逗号 `,` 分隔：`route=<CIDR>,via=<网关>[,mtu=<MTU>][,metric=<N>]`
+- **单网关**：`via=10.88.1.1`
+- **多网关 ECMP**（加权负载均衡）：`via=网关1:权重1|网关2:权重2`（用 `|` 分隔网关，`:` 后跟权重）
+
+**示例**：
+
+```yaml
+# docker-compose.yml
+environment:
+  # 单网关路由
+  - UNSAFE_ROUTES=route=10.8.1.0/24,via=10.88.1.1,mtu=1300,metric=100
+
+  # 多网关 ECMP 加权负载均衡
+  - UNSAFE_ROUTES=route=10.0.9.0/24,via=10.88.2.1:10|10.88.2.2:5
+
+  # 多条路由组合（分号分隔）
+  - UNSAFE_ROUTES=route=10.8.1.0/24,via=10.88.1.1;route=10.0.9.0/24,via=10.88.2.1:10|10.88.2.2:5;route=10.0.88.0/24,via=10.88.2.1:10|10.88.2.2:5,mtu=1300
+```
+
+上述最后一个示例会生成：
+
+```yaml
+tun:
+  unsafe_routes:
+    - route: 10.8.1.0/24
+      via: 10.88.1.1
+    - route: 10.0.9.0/24
+      via:
+        - gateway: 10.88.2.1
+          weight: 10
+        - gateway: 10.88.2.2
+          weight: 5
+    - route: 10.0.88.0/24
+      via:
+        - gateway: 10.88.2.1
+          weight: 10
+        - gateway: 10.88.2.2
+          weight: 5
+      mtu: 1300
+```
+
+> ⚠️ 网关节点（`via` 指向的节点）的证书必须用 `SUBNETS` 声明对应子网，否则路由不生效。
 
 ### 多 Lighthouse 环境变量（高可用场景）
 
