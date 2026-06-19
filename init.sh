@@ -57,13 +57,6 @@ if [ ! -f "${CONF_DIR}/ca.crt" ] || [ ! -f "${CONF_DIR}/ca.key" ]; then
     else
         echo "[iflygo-init][WARN] 未发现 CA 且 AUTO_GEN_CA=false, 请手动放置 ca.crt/ca.key"
     fi
-else
-    # CA 已存在: 打印 CA 有效期, 提醒用户避免节点证书超期
-    if command -v iflygo-cert >/dev/null 2>&1; then
-        ca_expire=$(iflygo-cert print -path "${CONF_DIR}/ca.crt" 2>/dev/null \
-            | grep -iE "not after|expires" | head -1 | sed 's/^[[:space:]]*//')
-        [ -n "${ca_expire}" ] && echo "[iflygo-init] 检测到已存在的 CA, ${ca_expire}"
-    fi
 fi
 
 # 节点证书文件名(基于自定义主机名, 默认取 NODE)
