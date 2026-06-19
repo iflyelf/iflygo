@@ -35,7 +35,9 @@ LOG_FORMAT="${LOG_FORMAT:-text}"        # 日志格式 text/json
 CERT_GROUPS="${CERT_GROUPS:-}"          # 证书签发时的分组(逗号分隔, 注意: 不要用 GROUPS, 它是 bash 内置变量)
 SUBNETS="${SUBNETS:-}"                  # 网关证书签发时的子网路由(逗号分隔, 用于 unsafe_routes)
 CA_DURATION="${CA_DURATION:-876000h}"   # CA 证书有效期(默认 100 年)
-CERT_DURATION="${CERT_DURATION:-876000h}" # 节点证书有效期(默认 100 年)
+# 节点证书有效期: 留空则自动取 CA 剩余有效期(防止超过 CA 有效期导致签发失败)
+# 显式设置示例: CERT_DURATION=26280h (3年) / CERT_DURATION=876000h (100年)
+CERT_DURATION="${CERT_DURATION:-}"
 AUTO_GEN_CA="${AUTO_GEN_CA:-true}"      # 当 ca 不存在时是否自动生成
 
 CONF_DIR="${IFLYGO_CONF_DIR:-/etc/iflygo}"
@@ -55,6 +57,13 @@ if [ ! -f "${CONF_DIR}/ca.crt" ] || [ ! -f "${CONF_DIR}/ca.key" ]; then
     else
         echo "[iflygo-init][WARN] 未发现 CA 且 AUTO_GEN_CA=false, 请手动放置 ca.crt/ca.key"
     fi
+else
+    # CA 已存在: 打印 CA 有效期, 提醒用户避免节点证书超期
+    if command -v iflygo-cert >/dev/null 2>&1; then
+        ca_expire=$(iflygo-cert print -path "${CONF_DIR}/ca.crt" 2>/dev/null \
+            | grep -iE "not after|expires" | head -1 | sed 's/^[[:space:]]*//')
+        [ -n "${ca_expire}" ] && echo "[iflygo-init] 检测到已存在的 CA, ${ca_expire}"
+    fi
 fi
 
 # 节点证书文件名(基于自定义主机名, 默认取 NODE)
@@ -69,8 +78,16 @@ if [ ! -f "${CONF_DIR}/${HOST_CRT}" ] || [ ! -f "${CONF_DIR}/${HOST_KEY}" ]; the
             NETWORKS="${NETWORKS},${IFLYGO_IP_V6}/${IFLYGO_NETMASK_V6}"
         fi
         
-        echo "[iflygo-init] 自动签发节点证书: name=${NODE} networks=${NETWORKS} -> ${HOST_CRT}/${HOST_KEY}"
-        SIGN_ARGS=(-name "${NODE}" -networks "${NETWORKS}" -duration "${CERT_DURATION}")
+        # 构建签发参数(SIGN_ARGS 数组), 支持 -duration 可选
+        SIGN_ARGS=(-name "${NODE}" -networks "${NETWORKS}")
+        
+        if [ -n "${CERT_DURATION}" ]; then
+            SIGN_ARGS+=(-duration "${CERT_DURATION}")
+            echo "[iflygo-init] 自动签发节点证书: name=${NODE} networks=${NETWORKS} duration=${CERT_DURATION} -> ${HOST_CRT}/${HOST_KEY}"
+        else
+            # 不指定 -duration: nebula 默认会取 CA 剩余有效期(确保不会超过 CA)
+            echo "[iflygo-init] 自动签发节点证书: name=${NODE} networks=${NETWORKS} duration=<跟随 CA 剩余有效期> -> ${HOST_CRT}/${HOST_KEY}"
+        fi
         
         if [ -n "${CERT_GROUPS}" ]; then
             SIGN_ARGS+=(-groups "${CERT_GROUPS}")

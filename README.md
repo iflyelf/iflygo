@@ -112,7 +112,7 @@ docker-compose down
 | `CERT_GROUPS` | 证书分组（**勿用 `GROUPS`**，与 bash 内置变量冲突） | (空) | `laptop,home,ssh` |
 | `SUBNETS` | 网关证书子网路由（用于 unsafe_routes） | (空) | `10.8.1.0/24` |
 | `CA_DURATION` | CA 证书有效期 | `876000h` (100年) | `876000h` |
-| `CERT_DURATION` | 节点证书有效期（须 ≤ CA） | `876000h` (100年) | `26280h` (3年) |
+| `CERT_DURATION` | 节点证书有效期（**留空则自动跟随 CA 剩余有效期**，避免超期报错） | (空，自动跟随) | `26280h` (3年) / `876000h` (100年) |
 | `AUTO_GEN_CA` | 自动生成 CA | `true` | `false` |
 
 ### 多 Lighthouse 环境变量（高可用场景）
@@ -272,8 +272,11 @@ docker cp iflygo-server:/etc/iflygo/uola-office-dns-01.crt ./data/client2/config
 docker cp iflygo-server:/etc/iflygo/uola-office-dns-01.key ./data/client2/config/
 ```
 
-> ⚠️ **重要**：CA 有效期必须**大于等于**节点证书有效期，否则签发会报错 `certificate expires after signing certificate`。
-> 推荐 CA 设 100 年（`876000h`），节点证书按需 1-3 年或同样 100 年。
+> ⚠️ **重要**：
+> - CA 有效期必须**大于等于**节点证书有效期，否则签发会报错 `certificate expires after signing certificate`
+> - **推荐方案**：不设置 `CERT_DURATION`（留空），自动跟随 CA 剩余有效期，避免超期问题
+> - **手动指定场景**：如果所有证书统一 100 年，手动设置 `CA_DURATION=876000h` + `CERT_DURATION=876000h`
+> - **旧 CA 兼容**：如果挂载卷里有旧 CA（短有效期），删除旧 CA 让 init.sh 重新生成，或不设置 `CERT_DURATION`
 
 ---
 
@@ -495,7 +498,23 @@ stats:
 sudo modprobe tun
 ```
 
-### 2. 无法 ping 通其他节点
+### 2. 证书签发失败 `certificate expires after signing certificate`
+
+**原因**: 挂载卷里残留了旧的 CA（有效期较短），但节点证书指定了更长的有效期，导致超过 CA 有效期。
+
+```bash
+# 解决方法 1: 删除旧 CA, 让 init.sh 重新生成 100 年的 CA
+docker compose down
+rm -f data/server/config/ca.crt data/server/config/ca.key
+rm -f data/server/config/*.crt data/server/config/*.key
+docker compose up -d
+
+# 解决方法 2: 不设置 CERT_DURATION (推荐)
+# 留空则自动跟随 CA 剩余有效期, 避免超期问题
+# docker-compose.yml 中删除 CERT_DURATION 环境变量即可
+```
+
+### 3. 无法 ping 通其他节点
 
 ```bash
 # 检查日志
@@ -508,7 +527,7 @@ docker logs iflygo-client
 # - 防火墙规则阻止
 ```
 
-### 3. 查看隧道状态
+### 4. 查看隧道状态
 
 ```bash
 # 进入容器
