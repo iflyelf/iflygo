@@ -33,8 +33,8 @@ services:
       - LISTEN_PORT=6688
       # 日志级别: trace/debug/info/warn/error (默认 info)
       - LOG_LEVEL=info
-      # 证书签发时的分组(可选, 逗号分隔)
-      - GROUPS=lighthouse,admin
+      # 证书签发时的分组(可选, 逗号分隔; 注意: 勿用 GROUPS 与 bash 内置变量冲突)
+      - CERT_GROUPS=lighthouse,admin
       # TUN 设备名 (默认 iflygo)
       - TUN_DEV=iflygo
       # TUN MTU (默认 1300)
@@ -100,8 +100,8 @@ services:
       - LISTEN_PORT=0
       # 日志级别: trace/debug/info/warn/error (默认 info)
       - LOG_LEVEL=info
-      # 证书签发时的分组(可选, 逗号分隔, 用于防火墙规则)
-      - GROUPS=laptop,home,ssh
+      # 证书签发时的分组(可选, 逗号分隔, 用于防火墙规则; 注意: 勿用 GROUPS 与 bash 内置变量冲突)
+      - CERT_GROUPS=laptop,home,ssh
       # TUN 设备名 (默认 iflygo)
       - TUN_DEV=iflygo
       # TUN MTU (默认 1300)

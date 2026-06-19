@@ -17,11 +17,13 @@ NODE="${NODE:-iflygo-node}"             # 节点名称(用于证书 -name)
 # 证书文件主机名(用于命名 <CERT_HOSTNAME>.crt / .key, 默认取 NODE)
 # 例如 CERT_HOSTNAME=uola-servers-lead-01 -> uola-servers-lead-01.crt / .key
 CERT_HOSTNAME="${CERT_HOSTNAME:-${NODE}}"
-IFLYGO_IP="${IFLYGO_IP:-192.168.100.1}" # 此节点的 iflygo 内网 IP
-IFLYGO_NETMASK="${IFLYGO_NETMASK:-24}"  # 内网子网掩码
+IFLYGO_IP="${IFLYGO_IP:-10.88.0.1}"     # 此节点的 iflygo 内网 IPv4 地址
+IFLYGO_IP_V6="${IFLYGO_IP_V6:-fd88::ffff:a58:1}"  # 此节点的 iflygo 内网 IPv6 地址(可选, 留空则不签发 IPv6)
+IFLYGO_NETMASK="${IFLYGO_NETMASK:-16}"  # 内网子网掩码(IPv4 CIDR 位数)
+IFLYGO_NETMASK_V6="${IFLYGO_NETMASK_V6:-64}"  # IPv6 子网掩码(CIDR 位数, 默认 64)
 
 # 单 lighthouse 模式变量(向后兼容)
-LIGHTHOUSE_IP="${LIGHTHOUSE_IP:-192.168.100.1}"               # lighthouse 的内网 IP
+LIGHTHOUSE_IP="${LIGHTHOUSE_IP:-10.88.0.1}"                   # lighthouse 的内网 IP
 LIGHTHOUSE_PUBLIC="${LIGHTHOUSE_PUBLIC:-127.0.0.1:6688}"      # lighthouse 的公网地址 host:port
 
 LISTEN_HOST="${LISTEN_HOST:-::}"        # 监听地址
@@ -30,8 +32,10 @@ TUN_DEV="${TUN_DEV:-iflygo}"            # tun 设备名
 TUN_MTU="${TUN_MTU:-1300}"              # tun MTU
 LOG_LEVEL="${LOG_LEVEL:-info}"          # 日志级别 trace/debug/info/warn/error
 LOG_FORMAT="${LOG_FORMAT:-text}"        # 日志格式 text/json
-GROUPS="${GROUPS:-}"                    # 证书签发时的分组(逗号分隔)
-CERT_DURATION="${CERT_DURATION:-26280h}" # 证书有效期(默认 3 年, ca 默认 1 年, 这里用 -duration)
+CERT_GROUPS="${CERT_GROUPS:-}"          # 证书签发时的分组(逗号分隔, 注意: 不要用 GROUPS, 它是 bash 内置变量)
+SUBNETS="${SUBNETS:-}"                  # 网关证书签发时的子网路由(逗号分隔, 用于 unsafe_routes)
+CA_DURATION="${CA_DURATION:-876000h}"   # CA 证书有效期(默认 100 年)
+CERT_DURATION="${CERT_DURATION:-876000h}" # 节点证书有效期(默认 100 年)
 AUTO_GEN_CA="${AUTO_GEN_CA:-true}"      # 当 ca 不存在时是否自动生成
 
 CONF_DIR="${IFLYGO_CONF_DIR:-/etc/iflygo}"
@@ -45,9 +49,9 @@ mkdir -p "${CONF_DIR}/hosts" "${LOG_DIR}"
 # ------------------------------------------------------------------------------
 if [ ! -f "${CONF_DIR}/ca.crt" ] || [ ! -f "${CONF_DIR}/ca.key" ]; then
     if [ "${AUTO_GEN_CA}" = "true" ]; then
-        echo "[iflygo-init] 未发现 CA, 自动生成: ${CONF_DIR}/ca.{crt,key}"
+        echo "[iflygo-init] 未发现 CA, 自动生成: ${CONF_DIR}/ca.{crt,key} (有效期: ${CA_DURATION})"
         ( cd "${CONF_DIR}" && \
-          iflygo-cert ca -name "iFlyGo CA (${NODE})" -duration "${CERT_DURATION}" )
+          iflygo-cert ca -name "iFlyGo CA (${NODE})" -duration "${CA_DURATION}" )
     else
         echo "[iflygo-init][WARN] 未发现 CA 且 AUTO_GEN_CA=false, 请手动放置 ca.crt/ca.key"
     fi
@@ -59,11 +63,24 @@ HOST_KEY="${CERT_HOSTNAME}.key"
 
 if [ ! -f "${CONF_DIR}/${HOST_CRT}" ] || [ ! -f "${CONF_DIR}/${HOST_KEY}" ]; then
     if [ -f "${CONF_DIR}/ca.crt" ] && [ -f "${CONF_DIR}/ca.key" ]; then
-        echo "[iflygo-init] 自动签发节点证书: name=${NODE} ip=${IFLYGO_IP}/${IFLYGO_NETMASK} -> ${HOST_CRT}/${HOST_KEY}"
-        SIGN_ARGS=(-name "${NODE}" -ip "${IFLYGO_IP}/${IFLYGO_NETMASK}" -duration "${CERT_DURATION}")
-        if [ -n "${GROUPS}" ]; then
-            SIGN_ARGS+=(-groups "${GROUPS}")
+        # 构建 -networks 参数: IPv4 必需, IPv6 可选
+        NETWORKS="${IFLYGO_IP}/${IFLYGO_NETMASK}"
+        if [ -n "${IFLYGO_IP_V6}" ]; then
+            NETWORKS="${NETWORKS},${IFLYGO_IP_V6}/${IFLYGO_NETMASK_V6}"
         fi
+        
+        echo "[iflygo-init] 自动签发节点证书: name=${NODE} networks=${NETWORKS} -> ${HOST_CRT}/${HOST_KEY}"
+        SIGN_ARGS=(-name "${NODE}" -networks "${NETWORKS}" -duration "${CERT_DURATION}")
+        
+        if [ -n "${CERT_GROUPS}" ]; then
+            SIGN_ARGS+=(-groups "${CERT_GROUPS}")
+        fi
+        
+        if [ -n "${SUBNETS}" ]; then
+            SIGN_ARGS+=(-subnets "${SUBNETS}")
+            echo "[iflygo-init]   网关子网: ${SUBNETS}"
+        fi
+        
         ( cd "${CONF_DIR}" && \
           iflygo-cert sign "${SIGN_ARGS[@]}" -out-crt "${HOST_CRT}" -out-key "${HOST_KEY}" )
     fi

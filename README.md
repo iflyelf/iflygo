@@ -97,9 +97,11 @@ docker-compose down
 | `RUNMODE` | 运行模式 | `client` | `server` / `client` |
 | `NODE` | 节点名称（用于证书 `-name`） | `iflygo-node` | `lighthouse1` / `client1` |
 | `CERT_HOSTNAME` | 证书文件主机名（命名 `<名>.crt/.key`） | 同 `NODE` | `uola-servers-lead-01` |
-| `IFLYGO_IP` | 此节点的内网 IP | `192.168.100.1` | `192.168.100.2` |
-| `IFLYGO_NETMASK` | 内网子网掩码 | `24` | `24` |
-| `LIGHTHOUSE_IP` | Lighthouse 内网 IP（单节点） | `192.168.100.1` | `192.168.100.1` |
+| `IFLYGO_IP` | 此节点的内网 IPv4 地址 | `10.88.0.1` | `10.88.0.2` |
+| `IFLYGO_IP_V6` | 此节点的内网 IPv6 地址（留空则不签发 IPv6） | `fd88::ffff:a58:1` | `fd88::ffff:a58:2` |
+| `IFLYGO_NETMASK` | IPv4 子网掩码（CIDR 位数） | `16` | `16` / `24` |
+| `IFLYGO_NETMASK_V6` | IPv6 子网掩码（CIDR 位数） | `64` | `64` |
+| `LIGHTHOUSE_IP` | Lighthouse 内网 IP（单节点） | `10.88.0.1` | `10.88.0.1` |
 | `LIGHTHOUSE_PUBLIC` | Lighthouse 公网入口（单节点） | `127.0.0.1:6688` | `1.2.3.4:6688` |
 | `LISTEN_HOST` | 监听地址 | `::` | `0.0.0.0` |
 | `LISTEN_PORT` | 监听端口 | `6688` | `0` (client 推荐 0) |
@@ -107,8 +109,10 @@ docker-compose down
 | `TUN_MTU` | TUN MTU | `1300` | `1300` |
 | `LOG_LEVEL` | 日志级别 | `info` | `debug` / `trace` |
 | `LOG_FORMAT` | 日志格式 | `text` | `json` |
-| `GROUPS` | 证书分组 | (空) | `laptop,home,ssh` |
-| `CERT_DURATION` | 证书有效期 | `26280h` (3年) | `8760h` (1年) |
+| `CERT_GROUPS` | 证书分组（**勿用 `GROUPS`**，与 bash 内置变量冲突） | (空) | `laptop,home,ssh` |
+| `SUBNETS` | 网关证书子网路由（用于 unsafe_routes） | (空) | `10.8.1.0/24` |
+| `CA_DURATION` | CA 证书有效期 | `876000h` (100年) | `876000h` |
+| `CERT_DURATION` | 节点证书有效期（须 ≤ CA） | `876000h` (100年) | `26280h` (3年) |
 | `AUTO_GEN_CA` | 自动生成 CA | `true` | `false` |
 
 ### 多 Lighthouse 环境变量（高可用场景）
@@ -211,7 +215,7 @@ Client 节点连接到 lighthouse 并与其他客户端建立 P2P 隧道。特�
 容器启动时，`init.sh` 会自动检查并生成缺失的证书：
 
 - **CA 证书** (`ca.crt` / `ca.key`): 首次启动时自动生成
-- **节点证书** (`<CERT_HOSTNAME>.crt` / `<CERT_HOSTNAME>.key`): 根据 `NODE` / `IFLYGO_IP` / `GROUPS` 自动签发
+- **节点证书** (`<CERT_HOSTNAME>.crt` / `<CERT_HOSTNAME>.key`): 根据 `NODE` / `IFLYGO_IP` / `IFLYGO_IP_V6` / `CERT_GROUPS` 自动签发（使用 v2 证书的 `-networks` 语法，同时支持 IPv4 + IPv6 双栈）
 
 节点证书的文件名由 `CERT_HOSTNAME` 环境变量决定（默认取 `NODE` 的值），便于在共享卷或集中管理时按主机名区分不同节点的证书。例如：
 
@@ -236,22 +240,40 @@ docker run -d \
 如果需要在多个节点间共享 CA 或预先签发证书：
 
 ```bash
-# 1. 生成 CA (仅在 server 上执行一次)
-docker exec iflygo-server iflygo-cert ca -name "My iFlyGo CA"
+# 1. 生成 CA (仅在 server 上执行一次, 默认有效期 100 年)
+docker exec iflygo-server iflygo-cert ca \
+  -name "My iFlyGo CA" \
+  -duration 876000h \
+  -out-key ca.key \
+  -out-crt ca.crt
 
-# 2. 签发节点证书（文件名建议与节点的 CERT_HOSTNAME 一致）
+# 2. 签发节点证书（使用 v2 -networks 语法支持 IPv4+IPv6 双栈）
 docker exec iflygo-server iflygo-cert sign \
   -name "uola-office-dns-01" \
-  -ip "10.88.0.100/24" \
+  -networks "10.88.0.100/16,fd88::ffff:a58:100/64" \
   -groups "laptop,home,ssh" \
+  -duration 876000h \
   -out-crt uola-office-dns-01.crt \
   -out-key uola-office-dns-01.key
 
-# 3. 复制证书到客户端（保持文件名与 CERT_HOSTNAME 对应）
+# 3. 签发网关证书（带 -subnets 子网路由, 用于 unsafe_routes）
+docker exec iflygo-server iflygo-cert sign \
+  -name "uola-home-gw-01" \
+  -networks "10.88.1.1/16,fd88::ffff:a58:101/64" \
+  -groups "home" \
+  -subnets "10.8.1.0/24" \
+  -duration 876000h \
+  -out-crt uola-home-gw-01.crt \
+  -out-key uola-home-gw-01.key
+
+# 4. 复制证书到客户端（保持文件名与 CERT_HOSTNAME 对应）
 docker cp iflygo-server:/etc/iflygo/ca.crt ./data/client2/config/
 docker cp iflygo-server:/etc/iflygo/uola-office-dns-01.crt ./data/client2/config/
 docker cp iflygo-server:/etc/iflygo/uola-office-dns-01.key ./data/client2/config/
 ```
+
+> ⚠️ **重要**：CA 有效期必须**大于等于**节点证书有效期，否则签发会报错 `certificate expires after signing certificate`。
+> 推荐 CA 设 100 年（`876000h`），节点证书按需 1-3 年或同样 100 年。
 
 ---
 
@@ -289,7 +311,7 @@ firewall:
 签发证书时通过 `-groups` 参数指定分组：
 
 ```bash
-iflygo-cert sign -name client1 -ip 192.168.100.2/24 -groups "laptop,home,ssh"
+iflygo-cert sign -name client1 -networks "192.168.100.2/24" -groups "laptop,home,ssh" -duration 876000h
 ```
 
 ---
@@ -411,12 +433,13 @@ tun:
 ⚠️ **重要**：作为 `via` 网关的节点，其证书必须在 `-subnets` 字段声明该子网，否则路由不生效：
 
 ```bash
-# 在 lighthouse 上签发网关节点证书时声明子网
+# 在 lighthouse 上签发网关节点证书时声明子网（使用 v2 -networks 语法）
 iflygo-cert sign \
   -name gateway1 \
-  -ip 192.168.100.99/24 \
+  -networks "192.168.100.99/24" \
   -subnets "172.16.1.0/24,10.0.9.0/24,10.0.88.0/24" \
-  -groups "gateway"
+  -groups "gateway" \
+  -duration 876000h
 ```
 
 #### 路由生效验证
