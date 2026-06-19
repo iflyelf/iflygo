@@ -42,7 +42,8 @@ AUTO_GEN_CA="${AUTO_GEN_CA:-true}"      # 当 ca 不存在时是否自动生成
 
 CONF_DIR="${IFLYGO_CONF_DIR:-/etc/iflygo}"
 LOG_DIR="${IFLYGO_LOG_DIR:-/var/log/iflygo}"
-TEMPLATE_DIR="${CONF_DIR}/templates"
+# 模板目录: 放在 /opt/iflygo/templates/ 不会被用户挂载 /etc/iflygo 覆盖
+TEMPLATE_DIR="${IFLYGO_TEMPLATE_DIR:-/opt/iflygo/templates}"
 
 mkdir -p "${CONF_DIR}/hosts" "${LOG_DIR}"
 

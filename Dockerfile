@@ -305,8 +305,9 @@ RUN set -eux && \
     /usr/local/bin/iflygo -version || true
 
 # ***** 拷贝默认配置模板(server/client) 与启动脚本 *****
-COPY conf/server/config.yml /etc/iflygo/templates/server.yml
-COPY conf/client/config.yml /etc/iflygo/templates/client.yml
+# 模板放在 /opt/iflygo/templates/ (不会被用户挂载 /etc/iflygo 覆盖)
+COPY conf/server/config.yml /opt/iflygo/templates/server.yml
+COPY conf/client/config.yml /opt/iflygo/templates/client.yml
 COPY init.sh        /init.sh
 COPY entrypoint.sh  /entrypoint.sh
 RUN set -eux && \
