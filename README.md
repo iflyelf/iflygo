@@ -542,6 +542,47 @@ docker cp iflygo-server:/etc/iflygo/uola-office-dns-01.key ./data/client2/config
 > - **手动指定场景**：如果所有证书统一 100 年，手动设置 `CA_DURATION=876000h` + `CERT_DURATION=876000h`
 > - **旧 CA 兼容**：如果挂载卷里有旧 CA（短有效期），删除旧 CA 让 init.sh 重新生成，或不设置 `CERT_DURATION`
 
+### 查看证书信息
+
+使用 `iflygo-cert print` 命令查看证书详细信息（网络、分组、有效期等）：
+
+```bash
+# 查看 CA 证书信息
+docker exec -it iflygo-server iflygo-cert print -path /etc/iflygo/ca.crt
+
+# 查看节点证书信息
+docker exec -it iflygo-server iflygo-cert print -path /etc/iflygo/uola-servers-lead-01.crt
+
+# 在本地查看（如果证书已挂载到宿主机）
+docker run --rm -v $(pwd)/data/server/config:/certs \
+  iflyelf/iflygo:latest iflygo-cert print -path /certs/ca.crt
+```
+
+**输出示例**（CA 证书）：
+```
+iFlyGo Certificate (version 2)
+  Name: iFlyGo Root CA
+  Not before: 2024-01-01 00:00:00 +0000 UTC
+  Not after: 2123-12-31 23:59:59 +0000 UTC
+  Is CA: true
+```
+
+**输出示例**（节点证书）：
+```
+iFlyGo Certificate (version 2)
+  Name: uola-servers-lead-01
+  Networks:
+    - 10.88.0.1/16
+    - fd88::ffff:a58:1/64
+  Groups:
+    - lead
+  Is CA: false
+  Not before: 2024-01-01 00:00:00 +0000 UTC
+  Not after: 2123-12-31 23:59:59 +0000 UTC
+```
+
+> 💡 提示：通过 `print` 命令可以快速确认证书的网络地址、分组和有效期，排查配置问题。
+
 ---
 
 ## 🔥 防火墙规则
