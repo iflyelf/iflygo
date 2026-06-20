@@ -220,7 +220,7 @@ docker-compose down
 | **🔐 加密与证书（PKI）** | | | |
 | `CIPHER` | 加密算法（**所有节点必须一致**） | `chachapoly` | `chachapoly` / `aes` |
 | `PKI_INITIATING_VERSION` | 证书版本（推荐 v2） | `2` | `1` / `2` |
-| `CERT_GROUPS` | 证书分组（**勿用 `GROUPS`**，与 bash 内置变量冲突） | (空) | `laptop,home,ssh` |
+| `CERT_GROUPS` | 证书分组（**勿用 `GROUPS`**，与 bash 内置变量冲突） | server: `lead`<br>client: (空) | `laptop,home,ssh` |
 | `SUBNETS` | 网关证书子网路由（用于 unsafe_routes） | (空) | `10.8.1.0/24` |
 | `CA_DURATION` | CA 证书有效期 | `876000h` (100年) | `876000h` |
 | `CERT_DURATION` | 节点证书有效期（**留空则自动跟随 CA 剩余有效期**） | (空，自动跟随) | `26280h` (3年) |

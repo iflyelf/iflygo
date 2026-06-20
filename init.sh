@@ -33,7 +33,13 @@ TUN_DEV="${TUN_DEV:-iflygo}"            # tun 设备名
 TUN_MTU="${TUN_MTU:-1300}"              # tun MTU
 LOG_LEVEL="${LOG_LEVEL:-info}"          # 日志级别 trace/debug/info/warn/error
 LOG_FORMAT="${LOG_FORMAT:-text}"        # 日志格式 text/json
-CERT_GROUPS="${CERT_GROUPS:-}"          # 证书签发时的分组(逗号分隔, 注意: 不要用 GROUPS, 它是 bash 内置变量)
+# 证书签发时的分组(逗号分隔, 注意: 不要用 GROUPS, 它是 bash 内置变量)
+# server 模式默认签发到 "lead" 分组, client 模式默认为空
+if [ "${RUNMODE}" = "server" ] || [ "${RUNMODE}" = "lighthouse" ]; then
+    CERT_GROUPS="${CERT_GROUPS:-lead}"
+else
+    CERT_GROUPS="${CERT_GROUPS:-}"
+fi
 SUBNETS="${SUBNETS:-}"                  # 网关证书签发时的子网路由(逗号分隔, 用于 unsafe_routes)
 CA_DURATION="${CA_DURATION:-876000h}"   # CA 证书有效期(默认 100 年)
 # 节点证书有效期: 留空则自动取 CA 剩余有效期(防止超过 CA 有效期导致签发失败)
