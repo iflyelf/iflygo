@@ -28,7 +28,12 @@ LIGHTHOUSE_IP_V6="${LIGHTHOUSE_IP_V6:-fd88::ffff:a58:1}"      # lighthouse 的�
 LIGHTHOUSE_PUBLIC="${LIGHTHOUSE_PUBLIC:-127.0.0.1:6688}"      # lighthouse 的公网地址 host:port
 
 LISTEN_HOST="${LISTEN_HOST:-[::]}"      # 监听地址
-LISTEN_PORT="${LISTEN_PORT:-6688}"      # 监听端口(client 推荐 0)
+# 监听端口: server/lighthouse 默认固定 6688, client 默认 0(系统动态分配)
+if [ "${RUNMODE}" = "server" ] || [ "${RUNMODE}" = "lighthouse" ]; then
+    LISTEN_PORT="${LISTEN_PORT:-6688}"
+else
+    LISTEN_PORT="${LISTEN_PORT:-0}"
+fi
 TUN_DEV="${TUN_DEV:-iflygo}"            # tun 设备名
 TUN_MTU="${TUN_MTU:-1300}"              # tun MTU
 LOG_LEVEL="${LOG_LEVEL:-info}"          # 日志级别 trace/debug/info/warn/error

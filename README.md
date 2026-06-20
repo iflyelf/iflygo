@@ -213,7 +213,7 @@ docker-compose down
 | `LIGHTHOUSE_IP_N_V6` | 第 N 个 lighthouse IPv6（可选） | (空) | `fd88::ffff:a58:1` |
 | **🔌 监听（Listen）** | | | |
 | `LISTEN_HOST` | 监听地址 | `[::]` | `0.0.0.0` |
-| `LISTEN_PORT` | 监听端口 | `6688` | `0` (client 推荐 0) |
+| `LISTEN_PORT` | 监听端口 | server: `6688`<br>client: `0` | `0` (动态端口) |
 | `READ_BUFFER` | UDP 读缓冲区大小（字节） | `20000000` | `30000000` |
 | `WRITE_BUFFER` | UDP 写缓冲区大小（字节） | `20000000` | `30000000` |
 | `SEND_RECV_ERROR` | recv_error 数据包模式 | `always` | `always` / `never` / `private` |
