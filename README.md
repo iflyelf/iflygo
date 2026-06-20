@@ -431,16 +431,20 @@ docker run -d \
 
 ### 在服务端签发客户端证书（快捷方式）
 
-使用 `docker compose run --rm` 可以在服务端便捷地为客户端签发证书，无需手动输入 `iflygo-cert` 命令：
+使用 `docker run --rm` 可以在服务端便捷地为客户端签发证书，无需手动输入 `iflygo-cert` 命令（需挂载服务端的证书目录，以使用已有的 CA）：
 
 ```bash
 # 基础用法: 签发 IPv4 单栈证书
-docker compose run --rm iflygo-server sign \
+docker run --rm \
+  -v $(pwd)/data/server/config:/etc/iflygo \
+  iflyelf/iflygo:latest sign \
   -name client2 \
   -ip 10.88.0.101
 
 # 完整用法: 签发 IPv4+IPv6 双栈 + 分组 + 网关子网路由
-docker compose run --rm iflygo-server sign \
+docker run --rm \
+  -v $(pwd)/data/server/config:/etc/iflygo \
+  iflyelf/iflygo:latest sign \
   -name uola-home-gw-01 \
   -ip 10.88.1.1 \
   -ip6 fd88::ffff:a58:101 \
@@ -449,13 +453,16 @@ docker compose run --rm iflygo-server sign \
   -duration 876000h
 
 # 也可用环境变量传参(与命令行等价)
-docker compose run --rm \
+docker run --rm \
+  -v $(pwd)/data/server/config:/etc/iflygo \
   -e NODE=client3 \
   -e IFLYGO_IP=10.88.0.102 \
   -e IFLYGO_IP_V6=fd88::ffff:a58:102 \
   -e CERT_GROUPS=laptop,ssh \
-  iflygo-server sign
+  iflyelf/iflygo:latest sign
 ```
+
+> 💡 提示：`-v $(pwd)/data/server/config:/etc/iflygo` 挂载是必需的，签发脚本需要读取该目录下已有的 `ca.crt`/`ca.key` 来签发，并将新证书输出到同一目录。
 
 **输出文件**：
 - 证书：`data/server/config/client2.crt`

@@ -4,7 +4,8 @@
 # 在服务端(已有 CA)上为客户端节点签发证书
 #
 # 用法:
-#   docker compose run --rm iflygo-server sign \
+#   docker run --rm -v $(pwd)/data/server/config:/etc/iflygo \
+#     iflyelf/iflygo:latest sign \
 #     -name client2 \
 #     -ip 10.88.0.101 \
 #     [-ip6 fd88::ffff:a58:101] \

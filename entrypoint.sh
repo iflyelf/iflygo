@@ -4,7 +4,8 @@
 # 默认: 调用 init.sh 初始化配置, 然后启动 iflygo 主进程
 # 子命令:
 #   sign  - 在服务端为客户端签发证书 (调用 sign-client.sh)
-#           用法: docker compose run --rm iflygo-server sign -name c2 -ip 10.88.0.101 ...
+#           用法: docker run --rm -v $(pwd)/data/server/config:/etc/iflygo \
+#                   iflyelf/iflygo:latest sign -name c2 -ip 10.88.0.101 ...
 # ==============================================================================
 set -euo pipefail
 
