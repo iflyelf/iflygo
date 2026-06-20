@@ -254,8 +254,12 @@ docker-compose down
 | **📝 日志** | | | |
 | `LOG_LEVEL` | 日志级别 | `info` | `debug` / `trace` / `warn` / `error` |
 | `LOG_FORMAT` | 日志格式 | `text` | `text` / `json` |
+| **⚙️ 配置管理** | | | |
+| `FORCE_REGEN` | 强制用环境变量重新生成配置（旧配置自动备份为 `.bak`） | `false` | `true` / `false` |
 
 > 提示：大部分高级配置保持默认值即可，仅在特殊场景下调整（如高流量扩大缓冲区、特定 NAT 环境调整打洞参数、统一证书加密算法等）。
+
+> ⚠️ **配置更新机制**：首次启动会根据环境变量生成 `config.yml`，**之后再修改环境变量默认不会生效**（避免覆盖用户手动修改）。如需让新环境变量生效，设置 `FORCE_REGEN=true` 强制重新生成（旧配置会自动备份为 `config.yml.bak.<时间戳>`）。
 
 #### UNSAFE_ROUTES 环境变量格式
 
@@ -717,7 +721,28 @@ docker logs iflygo-client
 # - 防火墙规则阻止
 ```
 
-### 4. 查看隧道状态
+### 4. 修改环境变量后配置不更新
+
+**原因**: `init.sh` 默认在 `config.yml` 已存在时跳过生成，避免覆盖用户的手动修改。
+
+```bash
+# 方法 1: 设置 FORCE_REGEN=true 强制重新生成（推荐）
+# 在 docker-compose.yml 中添加:
+#   environment:
+#     - FORCE_REGEN=true
+docker compose up -d   # 旧配置会备份为 config.yml.bak.<时间戳>
+
+# 方法 2: 手动删除旧配置后重启
+rm data/server/config/config.yml
+docker compose restart iflygo-server
+
+# 方法 3: 一次性命令
+docker compose run --rm -e FORCE_REGEN=true iflygo-server
+```
+
+> 💡 **建议**：首次部署或调试阶段可设置 `FORCE_REGEN=true` 让每次重启都用最新环境变量；生产稳定后改回 `false` 避免误覆盖。
+
+### 5. 查看隧道状态
 
 ```bash
 # 进入容器

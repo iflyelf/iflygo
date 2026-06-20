@@ -95,6 +95,11 @@ STATIC_MAP_LOOKUP_TIMEOUT="${STATIC_MAP_LOOKUP_TIMEOUT:-250ms}"  # DNS 查询超
 # PKI 配置
 PKI_INITIATING_VERSION="${PKI_INITIATING_VERSION:-2}"    # 证书版本: 1/2 (推荐2)
 
+# 配置重生策略
+# false (默认): 已存在 config.yml 时跳过生成, 保留用户手动修改
+# true        : 强制根据当前环境变量重新生成 config.yml (会备份旧配置为 config.yml.bak)
+FORCE_REGEN="${FORCE_REGEN:-false}"
+
 CONF_DIR="${IFLYGO_CONF_DIR:-/etc/iflygo}"
 LOG_DIR="${IFLYGO_LOG_DIR:-/var/log/iflygo}"
 # 模板目录: 放在 /opt/iflygo/templates/ 不会被用户挂载 /etc/iflygo 覆盖
@@ -541,6 +546,15 @@ generate_unsafe_routes() {
     return 0
 }
 
+# ------------------------------------------------------------------------------
+# 5. 配置生成主逻辑
+# ------------------------------------------------------------------------------
+
+# 强制重新生成配置(若 FORCE_REGEN=true)
+if [ "${FORCE_REGEN}" = "true" ] && [ -f "${TARGET_CONF}" ]; then
+    echo "[iflygo-init] FORCE_REGEN=true, 备份现有配置并强制重新生成"
+    mv "${TARGET_CONF}" "${TARGET_CONF}.bak.$(date +%Y%m%d_%H%M%S)"
+fi
 
 if [ ! -f "${TARGET_CONF}" ]; then
     if [ ! -f "${SRC_TEMPLATE}" ]; then
@@ -589,6 +603,7 @@ if [ ! -f "${TARGET_CONF}" ]; then
     apply_env_overrides "${TARGET_CONF}"
 else
     echo "[iflygo-init] 已存在配置, 跳过生成: ${TARGET_CONF}"
+    echo "[iflygo-init] 如需用新环境变量重新生成, 请设置 FORCE_REGEN=true"
 fi
 
 # 设置严格的文件权限(私钥 600)
