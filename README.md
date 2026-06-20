@@ -94,74 +94,68 @@ docker-compose down
 
 | 变量名 | 说明 | 默认值 | 示例 |
 |--------|------|--------|------|
+| **🚀 基础运行** | | | |
 | `RUNMODE` | 运行模式 | `client` | `server` / `client` |
 | `NODE` | 节点名称（用于证书 `-name`） | `iflygo-node` | `lighthouse1` / `client1` |
 | `CERT_HOSTNAME` | 证书文件主机名（命名 `<名>.crt/.key`） | 同 `NODE` | `uola-servers-lead-01` |
+| **🌐 节点网络** | | | |
 | `IFLYGO_IP` | 此节点的内网 IPv4 地址 | `10.88.0.1` | `10.88.0.2` |
 | `IFLYGO_IP_V6` | 此节点的内网 IPv6 地址（留空则不签发 IPv6） | `fd88::ffff:a58:1` | `fd88::ffff:a58:2` |
 | `IFLYGO_NETMASK` | IPv4 子网掩码（CIDR 位数） | `16` | `16` / `24` |
 | `IFLYGO_NETMASK_V6` | IPv6 子网掩码（CIDR 位数） | `64` | `64` |
-| `LIGHTHOUSE_IP` | Lighthouse 内网 IP（单节点） | `10.88.0.1` | `10.88.0.1` |
-| `LIGHTHOUSE_PUBLIC` | Lighthouse 公网入口（单节点） | `127.0.0.1:6688` | `1.2.3.4:6688` |
+| **🏠 Lighthouse（单节点）** | | | |
+| `LIGHTHOUSE_IP` | Lighthouse 内网 IP | `10.88.0.1` | `10.88.0.1` |
+| `LIGHTHOUSE_PUBLIC` | Lighthouse 公网入口 | `127.0.0.1:6688` | `1.2.3.4:6688` |
+| `LIGHTHOUSE_INTERVAL` | 向 lighthouse 报告间隔（秒） | `3` | `60` |
+| **🏘️ Lighthouse（多节点）** | 见下方[多 Lighthouse 章节](#多-lighthouse-环境变量高可用场景) | | |
+| `LIGHTHOUSE_IP_N` | 第 N 个 lighthouse 内网 IP | (空) | `10.88.0.1` |
+| `LIGHTHOUSE_PUBLIC_N` | 第 N 个 lighthouse 公网入口 | (空) | `shanghai.example.com:6688` |
+| `LIGHTHOUSE_IP_N_V6` | 第 N 个 lighthouse IPv6（可选） | (空) | `fd88::ffff:a58:1` |
+| **🔌 监听（Listen）** | | | |
 | `LISTEN_HOST` | 监听地址 | `::` | `0.0.0.0` |
 | `LISTEN_PORT` | 监听端口 | `6688` | `0` (client 推荐 0) |
-| `TUN_DEV` | TUN 设备名 | `iflygo` | `iflygo` |
-| `TUN_MTU` | TUN MTU | `1300` | `1300` |
-| `LOG_LEVEL` | 日志级别 | `info` | `debug` / `trace` |
-| `LOG_FORMAT` | 日志格式 | `text` | `json` |
+| `READ_BUFFER` | UDP 读缓冲区大小（字节） | `20000000` | `30000000` |
+| `WRITE_BUFFER` | UDP 写缓冲区大小（字节） | `20000000` | `30000000` |
+| `SEND_RECV_ERROR` | recv_error 数据包模式 | `always` | `always` / `never` / `private` |
+| **🔐 加密与证书（PKI）** | | | |
+| `CIPHER` | 加密算法（**所有节点必须一致**） | `chachapoly` | `chachapoly` / `aes` |
+| `PKI_INITIATING_VERSION` | 证书版本（推荐 v2） | `2` | `1` / `2` |
 | `CERT_GROUPS` | 证书分组（**勿用 `GROUPS`**，与 bash 内置变量冲突） | (空) | `laptop,home,ssh` |
 | `SUBNETS` | 网关证书子网路由（用于 unsafe_routes） | (空) | `10.8.1.0/24` |
-| `PREFERRED_RANGES` | 本地网络偏好范围（逗号分隔 CIDR） | `10.88.0.0/16,fd88::/64` | `172.16.0.0/24,10.99.0.0/16` |
-| `UNSAFE_ROUTES` | 不安全路由（分号分隔多条，见下方格式说明） | (空，用模板默认) | `route=10.8.1.0/24,via=10.88.1.1` |
 | `CA_DURATION` | CA 证书有效期 | `876000h` (100年) | `876000h` |
-| `CERT_DURATION` | 节点证书有效期（**留空则自动跟随 CA 剩余有效期**，避免超期报错） | (空，自动跟随) | `26280h` (3年) / `876000h` (100年) |
+| `CERT_DURATION` | 节点证书有效期（**留空则自动跟随 CA 剩余有效期**） | (空，自动跟随) | `26280h` (3年) |
 | `AUTO_GEN_CA` | 自动生成 CA | `true` | `false` |
+| **🌉 中继（Relay）** | | | |
+| `RELAYS` | 中继服务器列表（逗号分隔内网 IP） | (空，用模板) | `10.88.0.1,10.88.0.2` |
+| `AM_RELAY` | 是否作为中继节点 | (空，用模板) | `true` / `false` |
+| `USE_RELAYS` | 是否使用中继连接 | (空，用模板) | `true` / `false` |
+| **🔗 NAT 打洞（Punchy）** | | | |
+| `PUNCH` | 是否持续打洞 | `true` | `true` / `false` |
+| `PUNCH_RESPOND` | 响应模式（对称 NAT 穿透） | `true` | `true` / `false` |
+| `PUNCH_DELAY` | 打洞响应延迟 | `1s` | `2s` |
+| **🤝 握手（Handshakes）** | | | |
+| `HANDSHAKE_TRY_INTERVAL` | 握手重试间隔 | `100ms` | `200ms` |
+| `HANDSHAKE_RETRIES` | 握手超时次数 | `10` | `20` |
+| `HANDSHAKE_TRIGGER_BUFFER` | 握手缓冲通道大小 | `64` | `128` |
+| **🛡️ TUN 设备** | | | |
+| `TUN_DEV` | TUN 设备名 | `iflygo` | `iflygo` |
+| `TUN_MTU` | TUN MTU | `1300` | `1300` |
+| `TUN_DISABLED` | 是否禁用 TUN（lighthouse 可禁用） | `false` | `true` / `false` |
+| `DROP_LOCAL_BROADCAST` | 是否转发本地广播 | `true` | `true` / `false` |
+| `DROP_MULTICAST` | 是否转发组播 | `true` | `true` / `false` |
+| `TX_QUEUE` | 传输队列长度 | `1500` | `2000` |
+| **🛣️ 路由配置** | | | |
+| `PREFERRED_RANGES` | 本地网络偏好范围（逗号分隔 CIDR） | `10.88.0.0/16,fd88::/64` | `172.16.0.0/24,10.99.0.0/16` |
+| `UNSAFE_ROUTES` | 不安全路由（[格式说明](#unsafe_routes-环境变量格式)） | (空，用模板默认) | `route=10.8.1.0/24,via=10.88.1.1` |
+| **🌍 静态映射（DNS）** | | | |
+| `STATIC_MAP_CADENCE` | DNS 缓存时间 | `30s` | `60s` |
+| `STATIC_MAP_NETWORK` | 网络地址类型 | `ip` | `ip4` / `ip6` / `ip` |
+| `STATIC_MAP_LOOKUP_TIMEOUT` | DNS 查询超时 | `250ms` | `500ms` |
+| **📝 日志** | | | |
+| `LOG_LEVEL` | 日志级别 | `info` | `debug` / `trace` / `warn` / `error` |
+| `LOG_FORMAT` | 日志格式 | `text` | `text` / `json` |
 
-### 完整环境变量列表（高级配置）
-
-除上述常用变量外，还支持以下高级配置环境变量（所有字段均可通过环境变量覆盖模板默认值）：
-
-**网络核心**：
-- `CIPHER`：加密算法（`chachapoly` 推荐 / `aes`），默认 `chachapoly`，**所有节点必须一致**
-
-**中继配置（relay）**：
-- `RELAYS`：中继服务器列表（逗号分隔内网 IP，如 `10.88.0.1,10.88.0.2`），默认空（用模板）
-- `AM_RELAY`：是否作为中继节点（`true`/`false`），默认空（server=true, client=false）
-- `USE_RELAYS`：是否使用中继连接（`true`/`false`），默认空（server=false, client=true）
-
-**Lighthouse**：
-- `LIGHTHOUSE_INTERVAL`：向 lighthouse 报告间隔（秒），默认 `3`
-
-**TUN 设备**：
-- `TUN_DISABLED`：是否禁用 TUN（`true`/`false`），默认 `false`
-- `DROP_LOCAL_BROADCAST`：是否转发本地广播（`true`/`false`），默认 `true`
-- `DROP_MULTICAST`：是否转发组播（`true`/`false`），默认 `true`
-- `TX_QUEUE`：传输队列长度，默认 `1500`
-
-**Listen（监听）**：
-- `READ_BUFFER`：UDP 读缓冲区大小（字节），默认 `20000000`
-- `WRITE_BUFFER`：UDP 写缓冲区大小（字节），默认 `20000000`
-- `SEND_RECV_ERROR`：recv_error 数据包（`always`/`never`/`private`），默认 `always`
-
-**Punchy（NAT 打洞）**：
-- `PUNCH`：是否持续打洞（`true`/`false`），默认 `true`
-- `PUNCH_RESPOND`：响应模式（对称NAT穿透，`true`/`false`），默认 `true`
-- `PUNCH_DELAY`：打洞响应延迟，默认 `1s`
-
-**Handshakes（握手）**：
-- `HANDSHAKE_TRY_INTERVAL`：握手重试间隔，默认 `100ms`
-- `HANDSHAKE_RETRIES`：握手超时次数，默认 `10`
-- `HANDSHAKE_TRIGGER_BUFFER`：握手缓冲通道大小，默认 `64`
-
-**Static_map（DNS）**：
-- `STATIC_MAP_CADENCE`：DNS 缓存时间，默认 `30s`
-- `STATIC_MAP_NETWORK`：网络地址类型（`ip4`/`ip6`/`ip`），默认 `ip`
-- `STATIC_MAP_LOOKUP_TIMEOUT`：DNS 查询超时，默认 `250ms`
-
-**PKI（证书）**：
-- `PKI_INITIATING_VERSION`：证书版本（`1`/`2`），默认 `2`（推荐）
-
-> 提示：大部分高级配置保持默认值即可，仅在特殊场景下调整（如高流量需要扩大缓冲区、特定 NAT 环境需要调整打洞参数等）。
+> 提示：大部分高级配置保持默认值即可，仅在特殊场景下调整（如高流量扩大缓冲区、特定 NAT 环境调整打洞参数、统一证书加密算法等）。
 
 #### UNSAFE_ROUTES 环境变量格式
 
