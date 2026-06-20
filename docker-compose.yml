@@ -13,69 +13,52 @@ services:
       - SYS_MODULE
     devices:
       - /dev/net/tun
+    # 环境变量
     environment:
-      # 运行模式: server (lighthouse 节点)
+      # 强制用环境变量重新生成配置(改环境变量后生效, 旧配置自动备份)
+      - FORCE_REGEN=true
+      # 运行模式
       - RUNMODE=server
-      # 节点名称 (用于证书 -name)
-      - NODE=lighthouse1
-      # 证书文件主机名 (生成 <名>.crt/.key, 默认取 NODE; 用于区分不同节点证书)
-      - CERT_HOSTNAME=lighthouse1
-      # 此节点的 iflygo 内网 IP (必须与证书一致)
-      - IFLYGO_IP=192.168.100.1
-      # 内网子网掩码 (默认 24)
-      - IFLYGO_NETMASK=24
-      # lighthouse 的公网入口 (其他节点用于连接此 server)
-      # 格式: host:port 或 domain:port
-      - LIGHTHOUSE_PUBLIC=your-server-ip:6688
-      # lighthouse 内网 IPv6 (可选, 默认 fd88::ffff:a58:1)
-      # - LIGHTHOUSE_IP_V6=fd88::ffff:a58:1
-
-      # ===== 多 Lighthouse 配置（高可用场景） =====
-      # 服务端在多 lighthouse 集群中也需配置所有 lighthouse 地址(生成 static_host_map)
-      # 配置 LIGHTHOUSE_IP_1 后会自动覆盖上面的单 lighthouse 变量
-      # - LIGHTHOUSE_IP_1=10.88.0.1
-      # - LIGHTHOUSE_PUBLIC_1=shanghai.example.com:6688
-      # - LIGHTHOUSE_IP_1_V6=fd88::ffff:a58:1
-      # - LIGHTHOUSE_IP_2=10.88.0.2
-      # - LIGHTHOUSE_PUBLIC_2=singapore.example.com:6688
-      # - LIGHTHOUSE_IP_2_V6=fd88::ffff:a58:2
-      # ==============================================
-      # 监听端口 (lighthouse 必须固定端口, 默认 6688)
-      - LISTEN_PORT=6688
-      # 日志级别: trace/debug/info/warn/error (默认 info)
-      - LOG_LEVEL=info
-      # 证书签发时的分组(可选, 逗号分隔; 注意: 勿用 GROUPS 与 bash 内置变量冲突)
-      - CERT_GROUPS=lighthouse,admin
-      # TUN 设备名 (默认 iflygo)
-      - TUN_DEV=iflygo
-      # TUN MTU (默认 1300)
-      - TUN_MTU=1300
-      
-      # ===== 高级配置（可选，注释掉则使用默认值） =====
-      # 加密算法（所有节点必须一致）
-      # - CIPHER=chachapoly
-      # 中继服务器列表（逗号分隔内网 IP）
-      # - RELAYS=10.88.0.1,10.88.0.2
-      # - AM_RELAY=true
-      # - USE_RELAYS=false
-      # 本地网络偏好范围（默认: 10.88.0.0/16,fd88::/64）
-      # - PREFERRED_RANGES=10.88.0.0/16,fd88::/64
-      # 不安全路由（server 可配置路由导向网关节点，留空则用模板默认示例）
-      # 示例：单网关
-      # - UNSAFE_ROUTES=route=10.8.1.0/24,via=10.88.1.1,mtu=1300,metric=100
-      # 示例：多网关 ECMP + 多条路由
-      # - UNSAFE_ROUTES=route=10.8.1.0/24,via=10.88.1.1;route=10.0.9.0/24,via=10.88.2.1:10|10.88.2.2:5
-      # 其他高级配置详见 README 完整环境变量列表
-      # ==================================================
-      
+      # 节点名称
+      - NODE=uola-servers-lead-01
+      # 此节点的内网 IP
+      - IFLYGO_IP=10.88.0.1
+      # 内网子网掩码
+      - IFLYGO_NETMASK=16
+      # 此节点的内网 IPv6 地址
+      - IFLYGO_IP_V6=fd88::ffff:a58:1
+      # IPv6 子网掩码
+      - IFLYGO_NETMASK_V6=64
+      ## Lighthouse 内网 IP
+      #- LIGHTHOUSE_IP=10.88.0.1
+      # Lighthouse 公网入口
+      #- LIGHTHOUSE_PUBLIC=shanghai01.connt.xiaonuo.live:6688
+      # ===== 多 Lighthouse 配置（高可用场景，注释掉使用单 lighthouse） =====
+      - LIGHTHOUSE_IP_1=10.88.0.1
+      - LIGHTHOUSE_PUBLIC_1=shanghai01.connt.xiaonuo.live:6688
+      - LIGHTHOUSE_IP_1_V6=fd88::ffff:a58:1
+      - LIGHTHOUSE_IP_2=10.88.0.2
+      - LIGHTHOUSE_PUBLIC_2=shanghai02.connt.xiaonuo.live:6688
+      - LIGHTHOUSE_IP_2_V6=fd88::ffff:a58:2
+      - LIGHTHOUSE_IP_3=10.88.0.3
+      - LIGHTHOUSE_PUBLIC_3=sg01.connt.xiaonuo.live:6688
+      - LIGHTHOUSE_IP_3_V6=fd88::ffff:a58:3
+      # 本地网络偏好范围
+      - PREFERRED_RANGES=10.88.0.0/16,fd88::/64
+      # 中继服务器列表
+      - RELAYS=10.88.0.1,10.88.0.2
+      # 不安全路由
+      - UNSAFE_ROUTES=route=10.8.1.0/24,via=10.88.1.1,mtu=1300,metric=100;route=10.0.9.0/24,via=10.88.2.1:10|10.88.2.2:5;route=10.0.88.0/24,via=10.88.2.1:10|10.88.2.2:5
+    # 数据卷所挂载路径设置
     volumes:
       # 配置与证书持久化
+      # - ./data/server/config/config.yml:/etc/iflygo/config.yml:ro
       - ./data/server/config:/etc/iflygo:rw
       # 日志持久化
       - ./data/server/logs:/var/log/iflygo:rw
-      # 时区同步
-      - /etc/localtime:/etc/localtime:ro
-      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
+      # 同步宿主机时区与时间
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro,cached
+      - /etc/localtime:/etc/localtime:ro,cached
     network_mode: host
     ulimits:
       nproc: 65535
@@ -97,62 +80,58 @@ services:
       - SYS_MODULE
     devices:
       - /dev/net/tun
+    # 环境变量
     environment:
-      # 运行模式: client
+      # 强制用环境变量重新生成配置(改环境变量后生效, 旧配置自动备份)
+      - FORCE_REGEN=true
+      # 运行模式
       - RUNMODE=client
-      # 节点名称 (用于证书 -name)
-      - NODE=client1
-      # 证书文件主机名 (生成 <名>.crt/.key, 默认取 NODE; 用于区分不同节点证书)
-      - CERT_HOSTNAME=client1
-      # 此节点的 iflygo 内网 IP (必须与证书一致, 且与 server 不同)
-      - IFLYGO_IP=192.168.100.2
-      # 内网子网掩码 (默认 24)
-      - IFLYGO_NETMASK=24
-      # lighthouse 的内网 IP (客户端通过此 IP 查询其他节点)
-      - LIGHTHOUSE_IP=192.168.100.1
-      # lighthouse 的公网入口 (必须与 server 的 LIGHTHOUSE_PUBLIC 一致)
-      - LIGHTHOUSE_PUBLIC=your-server-ip:6688
-
+      # 节点名称
+      - NODE=uola-home-gw-01
+      # 证书分组
+      - CERT_GROUPS=home
+      # 此节点的内网 IP
+      - IFLYGO_IP=10.88.1.1
+      # 内网子网掩码
+      - IFLYGO_NETMASK=16
+      # 此节点的内网 IPv6 地址
+      - IFLYGO_IP_V6=fd88::ffff:a58:101
+      # IPv6 子网掩码
+      - IFLYGO_NETMASK_V6=64
+      # 网关证书子网路由
+      - SUBNETS=10.8.1.0/24
+      # Lighthouse 内网 IP
+      - LIGHTHOUSE_IP=10.88.0.1
+      # Lighthouse 内网 IPv6
+      - LIGHTHOUSE_IP_V6=fd88::ffff:a58:1
+      # Lighthouse 公网入口
+      - LIGHTHOUSE_PUBLIC=shanghai01.connt.xiaonuo.live:6688
       # ===== 多 Lighthouse 配置（高可用场景，注释掉使用单 lighthouse） =====
-      # 如果配置了 LIGHTHOUSE_IP_1, 会自动覆盖上面的单 lighthouse 变量
-      # - LIGHTHOUSE_IP_1=10.88.0.1
-      # - LIGHTHOUSE_PUBLIC_1=shanghai.example.com:6688
-      # - LIGHTHOUSE_IP_1_V6=fd88::ffff:a58:1  # 可选 IPv6
-      # - LIGHTHOUSE_IP_2=10.88.0.2
-      # - LIGHTHOUSE_PUBLIC_2=singapore.example.com:6688
-      # - LIGHTHOUSE_IP_2_V6=fd88::ffff:a58:2
-      # - LIGHTHOUSE_IP_3=10.88.0.3
-      # - LIGHTHOUSE_PUBLIC_3=tokyo.example.com:6688
-      # ==============================================================
-
-      # 监听端口 (client 推荐 0, 系统动态分配)
-      - LISTEN_PORT=0
-      # 日志级别: trace/debug/info/warn/error (默认 info)
-      - LOG_LEVEL=info
-      # 证书签发时的分组(可选, 逗号分隔, 用于防火墙规则; 注意: 勿用 GROUPS 与 bash 内置变量冲突)
-      - CERT_GROUPS=laptop,home,ssh
-      # TUN 设备名 (默认 iflygo)
-      - TUN_DEV=iflygo
-      # TUN MTU (默认 1300)
-      - TUN_MTU=1300
-      
-      # ===== 高级配置（可选） =====
-      # 加密算法（必须与 server 一致）
-      # - CIPHER=chachapoly
-      # 中继服务器列表（client 通常需要配置以使用中继）
-      # - RELAYS=10.88.0.1,10.88.0.2
-      # - USE_RELAYS=true
-      # 其他高级配置详见 README 完整环境变量列表
-      # ============================
-      
+      #- LIGHTHOUSE_IP_1=10.88.0.1
+      #- LIGHTHOUSE_PUBLIC_1=shanghai01.connt.xiaonuo.live:6688
+      #- LIGHTHOUSE_IP_1_V6=fd88::ffff:a58:1
+      #- LIGHTHOUSE_IP_2=10.88.0.2
+      #- LIGHTHOUSE_PUBLIC_2=shanghai02.connt.xiaonuo.live:6688
+      #- LIGHTHOUSE_IP_2_V6=fd88::ffff:a58:2
+      #- LIGHTHOUSE_IP_3=10.88.0.3
+      #- LIGHTHOUSE_PUBLIC_3=sg01.connt.xiaonuo.live:6688
+      #- LIGHTHOUSE_IP_3_V6=fd88::ffff:a58:3
+      # 本地网络偏好范围
+      - PREFERRED_RANGES=10.88.0.0/16,fd88::/64
+      # 中继服务器列表
+      - RELAYS=10.88.0.1,10.88.0.2
+      # 不安全路由
+      - UNSAFE_ROUTES=route=10.8.1.0/24,via=10.88.1.1,mtu=1300,metric=100;route=10.0.9.0/24,via=10.88.2.1:10|10.88.2.2:5;route=10.0.88.0/24,via=10.88.2.1:10|10.88.2.2:5
+    # 数据卷所挂载路径设置
     volumes:
       # 配置与证书持久化
+      # - ./data/client/config/config.yml:/etc/iflygo/config.yml:ro
       - ./data/client/config:/etc/iflygo:rw
       # 日志持久化
       - ./data/client/logs:/var/log/iflygo:rw
-      # 时区同步
-      - /etc/localtime:/etc/localtime:ro
-      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
+      # 同步宿主机时区与时间
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro,cached
+      - /etc/localtime:/etc/localtime:ro,cached
     network_mode: host
     ulimits:
       nproc: 65535
