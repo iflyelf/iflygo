@@ -23,7 +23,8 @@ IFLYGO_NETMASK="${IFLYGO_NETMASK:-16}"  # 内网子网掩码(IPv4 CIDR 位数)
 IFLYGO_NETMASK_V6="${IFLYGO_NETMASK_V6:-64}"  # IPv6 子网掩码(CIDR 位数, 默认 64)
 
 # 单 lighthouse 模式变量(向后兼容)
-LIGHTHOUSE_IP="${LIGHTHOUSE_IP:-10.88.0.1}"                   # lighthouse 的内网 IP
+LIGHTHOUSE_IP="${LIGHTHOUSE_IP:-10.88.0.1}"                   # lighthouse 的内网 IPv4
+LIGHTHOUSE_IP_V6="${LIGHTHOUSE_IP_V6:-fd88::ffff:a58:1}"      # lighthouse 的内网 IPv6(可选, 留空则不生成)
 LIGHTHOUSE_PUBLIC="${LIGHTHOUSE_PUBLIC:-127.0.0.1:6688}"      # lighthouse 的公网地址 host:port
 
 LISTEN_HOST="${LISTEN_HOST:-[::]}"      # 监听地址
@@ -191,8 +192,9 @@ done
 if [ "${#LIGHTHOUSE_IPS[@]}" -eq 0 ]; then
     LIGHTHOUSE_IPS=("$LIGHTHOUSE_IP")
     LIGHTHOUSE_PUBLICS=("$LIGHTHOUSE_PUBLIC")
-    LIGHTHOUSE_IPS_V6=("")
+    LIGHTHOUSE_IPS_V6=("$LIGHTHOUSE_IP_V6")
     echo "[iflygo-init] 使用单 lighthouse 模式: ${LIGHTHOUSE_IP} -> ${LIGHTHOUSE_PUBLIC}"
+    [ -n "${LIGHTHOUSE_IP_V6}" ] && echo "  (IPv6: ${LIGHTHOUSE_IP_V6})"
 else
     echo "[iflygo-init] 使用多 lighthouse 模式, 检测到 ${#LIGHTHOUSE_IPS[@]} 个 lighthouse:"
     for j in "${!LIGHTHOUSE_IPS[@]}"; do

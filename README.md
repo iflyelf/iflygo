@@ -203,7 +203,8 @@ docker-compose down
 | `IFLYGO_NETMASK` | IPv4 子网掩码（CIDR 位数） | `16` | `16` / `24` |
 | `IFLYGO_NETMASK_V6` | IPv6 子网掩码（CIDR 位数） | `64` | `64` |
 | **🏠 Lighthouse（单节点）** | | | |
-| `LIGHTHOUSE_IP` | Lighthouse 内网 IP | `10.88.0.1` | `10.88.0.1` |
+| `LIGHTHOUSE_IP` | Lighthouse 内网 IPv4 | `10.88.0.1` | `10.88.0.1` |
+| `LIGHTHOUSE_IP_V6` | Lighthouse 内网 IPv6（留空则不生成） | `fd88::ffff:a58:1` | `fd88::ffff:a58:1` |
 | `LIGHTHOUSE_PUBLIC` | Lighthouse 公网入口 | `127.0.0.1:6688` | `1.2.3.4:6688` |
 | `LIGHTHOUSE_INTERVAL` | 向 lighthouse 报告间隔（秒） | `3` | `60` |
 | **🏘️ Lighthouse（多节点）** | 见下方[多 Lighthouse 章节](#多-lighthouse-环境变量高可用场景) | | |

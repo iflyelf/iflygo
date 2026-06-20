@@ -27,6 +27,19 @@ services:
       # lighthouse 的公网入口 (其他节点用于连接此 server)
       # 格式: host:port 或 domain:port
       - LIGHTHOUSE_PUBLIC=your-server-ip:6688
+      # lighthouse 内网 IPv6 (可选, 默认 fd88::ffff:a58:1)
+      # - LIGHTHOUSE_IP_V6=fd88::ffff:a58:1
+
+      # ===== 多 Lighthouse 配置（高可用场景） =====
+      # 服务端在多 lighthouse 集群中也需配置所有 lighthouse 地址(生成 static_host_map)
+      # 配置 LIGHTHOUSE_IP_1 后会自动覆盖上面的单 lighthouse 变量
+      # - LIGHTHOUSE_IP_1=10.88.0.1
+      # - LIGHTHOUSE_PUBLIC_1=shanghai.example.com:6688
+      # - LIGHTHOUSE_IP_1_V6=fd88::ffff:a58:1
+      # - LIGHTHOUSE_IP_2=10.88.0.2
+      # - LIGHTHOUSE_PUBLIC_2=singapore.example.com:6688
+      # - LIGHTHOUSE_IP_2_V6=fd88::ffff:a58:2
+      # ==============================================
       # 监听端口 (lighthouse 必须固定端口, 默认 6688)
       - LISTEN_PORT=6688
       # 日志级别: trace/debug/info/warn/error (默认 info)
