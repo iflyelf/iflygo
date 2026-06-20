@@ -429,6 +429,69 @@ docker run -d \
 
 > 提示：如果不设置 `CERT_HOSTNAME`，证书文件名默认与 `NODE` 相同（如 `NODE=client1` 则生成 `client1.crt` / `client1.key`）。
 
+### 在服务端签发客户端证书（快捷方式）
+
+使用 `docker compose run --rm` 可以在服务端便捷地为客户端签发证书，无需手动输入 `iflygo-cert` 命令：
+
+```bash
+# 基础用法: 签发 IPv4 单栈证书
+docker compose run --rm iflygo-server sign \
+  -name client2 \
+  -ip 10.88.0.101
+
+# 完整用法: 签发 IPv4+IPv6 双栈 + 分组 + 网关子网路由
+docker compose run --rm iflygo-server sign \
+  -name uola-home-gw-01 \
+  -ip 10.88.1.1 \
+  -ip6 fd88::ffff:a58:101 \
+  -groups home \
+  -subnets 10.8.1.0/24 \
+  -duration 876000h
+
+# 也可用环境变量传参(与命令行等价)
+docker compose run --rm \
+  -e NODE=client3 \
+  -e IFLYGO_IP=10.88.0.102 \
+  -e IFLYGO_IP_V6=fd88::ffff:a58:102 \
+  -e CERT_GROUPS=laptop,ssh \
+  iflygo-server sign
+```
+
+**输出文件**：
+- 证书：`data/server/config/client2.crt`
+- 私钥：`data/server/config/client2.key`
+- CA：`data/server/config/ca.crt`（客户端需要）
+
+**分发到客户端**：
+
+```bash
+# 将 3 个文件复制到客户端的配置目录
+cp data/server/config/ca.crt data/client/config/
+cp data/server/config/client2.crt data/client/config/
+cp data/server/config/client2.key data/client/config/
+
+# 启动客户端时指定证书文件名
+docker compose up -d iflygo-client \
+  -e NODE=client2 \
+  -e CERT_HOSTNAME=client2 \
+  -e IFLYGO_IP=10.88.0.101
+```
+
+**参数说明**：
+
+| 参数 | 必填 | 说明 | 示例 |
+|------|------|------|------|
+| `-name` | ✅ | 节点名称（证书 CN，也是输出文件名前缀） | `client2` |
+| `-ip` / `-ipv4` | ✅ | 节点内网 IPv4 地址 | `10.88.0.101` |
+| `-ip6` / `-ipv6` | ❌ | 节点内网 IPv6 地址（留空则不签发 IPv6） | `fd88::ffff:a58:101` |
+| `-netmask` | ❌ | IPv4 子网掩码（CIDR 位数） | `16`（默认） |
+| `-netmask6` | ❌ | IPv6 子网掩码（CIDR 位数） | `64`（默认） |
+| `-groups` | ❌ | 证书分组（逗号分隔，用于防火墙规则） | `laptop,home,ssh` |
+| `-subnets` | ❌ | 网关子网路由（逗号分隔，用于 unsafe_routes） | `10.8.1.0/24` |
+| `-duration` | ❌ | 证书有效期（留空则跟随 CA 剩余有效期） | `876000h`（100年） |
+
+> ⚠️ **注意**：签发的证书会输出到服务端的挂载卷（`data/server/config/`），如果证书已存在会自动跳过（避免误覆盖）。如需重签，请先删除旧证书。
+
 ### 手动管理
 
 如果需要在多个节点间共享 CA 或预先签发证书：

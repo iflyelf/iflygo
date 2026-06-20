@@ -310,8 +310,9 @@ COPY conf/server/config.yml /opt/iflygo/templates/server.yml
 COPY conf/client/config.yml /opt/iflygo/templates/client.yml
 COPY init.sh        /init.sh
 COPY entrypoint.sh  /entrypoint.sh
+COPY sign-client.sh /sign-client.sh
 RUN set -eux && \
-    chmod +x /init.sh /entrypoint.sh && \
+    chmod +x /init.sh /entrypoint.sh /sign-client.sh && \
     mkdir -p ${IFLYGO_CONF_DIR}/hosts ${IFLYGO_LOG_DIR} ${IFLYGO_DIR}
 
 # ***** TUN 设备 (运行时由 docker 注入 /dev/net/tun) *****

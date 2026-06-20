@@ -1,9 +1,19 @@
 #!/bin/bash
 # ==============================================================================
 # iFlyGo 容器启动入口脚本
-# 先调用 init.sh 初始化配置, 然后启动 iflygo 主进程
+# 默认: 调用 init.sh 初始化配置, 然后启动 iflygo 主进程
+# 子命令:
+#   sign  - 在服务端为客户端签发证书 (调用 sign-client.sh)
+#           用法: docker compose run --rm iflygo-server sign -name c2 -ip 10.88.0.101 ...
 # ==============================================================================
 set -euo pipefail
+
+# 子命令分发: 第一个参数为 sign 时, 走证书签发流程(不启动主进程)
+if [ "${1:-}" = "sign" ]; then
+    shift
+    echo "[entrypoint] 进入证书签发模式..."
+    exec /sign-client.sh "$@"
+fi
 
 # 执行初始化脚本
 echo "[entrypoint] 开始初始化 iFlyGo 配置..."
