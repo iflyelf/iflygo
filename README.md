@@ -117,6 +117,52 @@ docker-compose down
 | `CERT_DURATION` | 节点证书有效期（**留空则自动跟随 CA 剩余有效期**，避免超期报错） | (空，自动跟随) | `26280h` (3年) / `876000h` (100年) |
 | `AUTO_GEN_CA` | 自动生成 CA | `true` | `false` |
 
+### 完整环境变量列表（高级配置）
+
+除上述常用变量外，还支持以下高级配置环境变量（所有字段均可通过环境变量覆盖模板默认值）：
+
+**网络核心**：
+- `CIPHER`：加密算法（`chachapoly` 推荐 / `aes`），默认 `chachapoly`，**所有节点必须一致**
+
+**中继配置（relay）**：
+- `RELAYS`：中继服务器列表（逗号分隔内网 IP，如 `10.88.0.1,10.88.0.2`），默认空（用模板）
+- `AM_RELAY`：是否作为中继节点（`true`/`false`），默认空（server=true, client=false）
+- `USE_RELAYS`：是否使用中继连接（`true`/`false`），默认空（server=false, client=true）
+
+**Lighthouse**：
+- `LIGHTHOUSE_INTERVAL`：向 lighthouse 报告间隔（秒），默认 `3`
+
+**TUN 设备**：
+- `TUN_DISABLED`：是否禁用 TUN（`true`/`false`），默认 `false`
+- `DROP_LOCAL_BROADCAST`：是否转发本地广播（`true`/`false`），默认 `true`
+- `DROP_MULTICAST`：是否转发组播（`true`/`false`），默认 `true`
+- `TX_QUEUE`：传输队列长度，默认 `1500`
+
+**Listen（监听）**：
+- `READ_BUFFER`：UDP 读缓冲区大小（字节），默认 `20000000`
+- `WRITE_BUFFER`：UDP 写缓冲区大小（字节），默认 `20000000`
+- `SEND_RECV_ERROR`：recv_error 数据包（`always`/`never`/`private`），默认 `always`
+
+**Punchy（NAT 打洞）**：
+- `PUNCH`：是否持续打洞（`true`/`false`），默认 `true`
+- `PUNCH_RESPOND`：响应模式（对称NAT穿透，`true`/`false`），默认 `true`
+- `PUNCH_DELAY`：打洞响应延迟，默认 `1s`
+
+**Handshakes（握手）**：
+- `HANDSHAKE_TRY_INTERVAL`：握手重试间隔，默认 `100ms`
+- `HANDSHAKE_RETRIES`：握手超时次数，默认 `10`
+- `HANDSHAKE_TRIGGER_BUFFER`：握手缓冲通道大小，默认 `64`
+
+**Static_map（DNS）**：
+- `STATIC_MAP_CADENCE`：DNS 缓存时间，默认 `30s`
+- `STATIC_MAP_NETWORK`：网络地址类型（`ip4`/`ip6`/`ip`），默认 `ip`
+- `STATIC_MAP_LOOKUP_TIMEOUT`：DNS 查询超时，默认 `250ms`
+
+**PKI（证书）**：
+- `PKI_INITIATING_VERSION`：证书版本（`1`/`2`），默认 `2`（推荐）
+
+> 提示：大部分高级配置保持默认值即可，仅在特殊场景下调整（如高流量需要扩大缓冲区、特定 NAT 环境需要调整打洞参数等）。
+
 #### UNSAFE_ROUTES 环境变量格式
 
 通过环境变量配置不安全路由（无需修改配置文件模板）。格式说明：

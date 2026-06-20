@@ -39,6 +39,12 @@ services:
       - TUN_MTU=1300
       
       # ===== 高级配置（可选，注释掉则使用默认值） =====
+      # 加密算法（所有节点必须一致）
+      # - CIPHER=chachapoly
+      # 中继服务器列表（逗号分隔内网 IP）
+      # - RELAYS=10.88.0.1,10.88.0.2
+      # - AM_RELAY=true
+      # - USE_RELAYS=false
       # 本地网络偏好范围（默认: 10.88.0.0/16,fd88::/64）
       # - PREFERRED_RANGES=10.88.0.0/16,fd88::/64
       # 不安全路由（server 可配置路由导向网关节点，留空则用模板默认示例）
@@ -46,6 +52,7 @@ services:
       # - UNSAFE_ROUTES=route=10.8.1.0/24,via=10.88.1.1,mtu=1300,metric=100
       # 示例：多网关 ECMP + 多条路由
       # - UNSAFE_ROUTES=route=10.8.1.0/24,via=10.88.1.1;route=10.0.9.0/24,via=10.88.2.1:10|10.88.2.2:5
+      # 其他高级配置详见 README 完整环境变量列表
       # ==================================================
       
     volumes:
@@ -115,6 +122,16 @@ services:
       - TUN_DEV=iflygo
       # TUN MTU (默认 1300)
       - TUN_MTU=1300
+      
+      # ===== 高级配置（可选） =====
+      # 加密算法（必须与 server 一致）
+      # - CIPHER=chachapoly
+      # 中继服务器列表（client 通常需要配置以使用中继）
+      # - RELAYS=10.88.0.1,10.88.0.2
+      # - USE_RELAYS=true
+      # 其他高级配置详见 README 完整环境变量列表
+      # ============================
+      
     volumes:
       # 配置与证书持久化
       - ./data/client/config:/etc/iflygo:rw

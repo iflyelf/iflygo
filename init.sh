@@ -54,6 +54,46 @@ UNSAFE_ROUTES="${UNSAFE_ROUTES:-}"
 CERT_DURATION="${CERT_DURATION:-}"
 AUTO_GEN_CA="${AUTO_GEN_CA:-true}"      # 当 ca 不存在时是否自动生成
 
+# ===== 网络核心配置 =====
+CIPHER="${CIPHER:-chachapoly}"          # 加密算法: chachapoly(推荐) / aes (所有节点必须一致)
+
+# 中继配置 (relay)
+RELAYS="${RELAYS:-}"                    # 中继服务器列表(逗号分隔内网IP), 留空则用模板默认
+AM_RELAY="${AM_RELAY:-}"                # 是否作为中继节点(true/false), 留空则用模板默认(server=true,client=false)
+USE_RELAYS="${USE_RELAYS:-}"            # 是否使用中继连接(true/false), 留空则用模板默认(server=false,client=true)
+
+# Lighthouse 配置
+LIGHTHOUSE_INTERVAL="${LIGHTHOUSE_INTERVAL:-3}"  # 向 lighthouse 报告间隔(秒)
+
+# TUN 设备高级配置
+TUN_DISABLED="${TUN_DISABLED:-false}"           # 是否禁用 TUN 设备
+DROP_LOCAL_BROADCAST="${DROP_LOCAL_BROADCAST:-true}"  # 是否转发本地广播
+DROP_MULTICAST="${DROP_MULTICAST:-true}"              # 是否转发组播
+TX_QUEUE="${TX_QUEUE:-1500}"                          # 传输队列长度
+
+# Listen 高级配置
+READ_BUFFER="${READ_BUFFER:-20000000}"          # UDP 读缓冲区大小(字节)
+WRITE_BUFFER="${WRITE_BUFFER:-20000000}"        # UDP 写缓冲区大小(字节)
+SEND_RECV_ERROR="${SEND_RECV_ERROR:-always}"    # recv_error 数据包: always/never/private
+
+# Punchy (NAT 打洞) 配置
+PUNCH="${PUNCH:-true}"                  # 是否持续打洞
+PUNCH_RESPOND="${PUNCH_RESPOND:-true}"  # 响应模式(对称NAT穿透)
+PUNCH_DELAY="${PUNCH_DELAY:-1s}"        # 打洞响应延迟
+
+# Handshakes 配置
+HANDSHAKE_TRY_INTERVAL="${HANDSHAKE_TRY_INTERVAL:-100ms}"  # 握手重试间隔
+HANDSHAKE_RETRIES="${HANDSHAKE_RETRIES:-10}"              # 握手超时次数
+HANDSHAKE_TRIGGER_BUFFER="${HANDSHAKE_TRIGGER_BUFFER:-64}" # 握手缓冲通道大小
+
+# Static_map 配置
+STATIC_MAP_CADENCE="${STATIC_MAP_CADENCE:-30s}"          # DNS 缓存时间
+STATIC_MAP_NETWORK="${STATIC_MAP_NETWORK:-ip}"           # 网络地址类型: ip4/ip6/ip
+STATIC_MAP_LOOKUP_TIMEOUT="${STATIC_MAP_LOOKUP_TIMEOUT:-250ms}"  # DNS 查询超时
+
+# PKI 配置
+PKI_INITIATING_VERSION="${PKI_INITIATING_VERSION:-2}"    # 证书版本: 1/2 (推荐2)
+
 CONF_DIR="${IFLYGO_CONF_DIR:-/etc/iflygo}"
 LOG_DIR="${IFLYGO_LOG_DIR:-/var/log/iflygo}"
 # 模板目录: 放在 /opt/iflygo/templates/ 不会被用户挂载 /etc/iflygo 覆盖
@@ -308,6 +348,59 @@ replace_lighthouse_hosts() {
     mv "$tmp" "$f"
 }
 
+# 替换 relay 块中的 relays/am_relay/use_relays 字段
+replace_relay_block() {
+    local f="$1"
+    local new_relays="$2"    # 生成的 relays 列表 YAML
+    local am_relay="$3"      # true/false/空
+    local use_relays="$4"    # true/false/空
+    
+    local tmp
+    tmp=$(mktemp)
+    awk -v new_relays="$new_relays" -v am_relay="$am_relay" -v use_relays="$use_relays" '
+        BEGIN { in_relay = 0; in_relays_list = 0; printed_relays = 0 }
+        /^relay:/ { in_relay = 1; print; next }
+        # 匹配 relay 内的 relays: 字段
+        in_relay == 1 && /^  relays:/ {
+            in_relays_list = 1
+            if (!printed_relays && new_relays != "") {
+                print new_relays
+                printed_relays = 1
+            } else {
+                print  # 保留原 relays:
+            }
+            next
+        }
+        # 在 relays 列表内: 跳过列表项/注释/空行, 遇到 relay 内下一个 key 结束
+        in_relays_list == 1 {
+            if (/^  [a-zA-Z_]/) { in_relays_list = 0; }
+            else { next }
+        }
+        # 替换 am_relay 字段(如果提供了值)
+        in_relay == 1 && /^  am_relay:/ {
+            if (am_relay != "") {
+                print "  am_relay: " am_relay
+            } else {
+                print
+            }
+            next
+        }
+        # 替换 use_relays 字段(如果提供了值)
+        in_relay == 1 && /^  use_relays:/ {
+            if (use_relays != "") {
+                print "  use_relays: " use_relays
+            } else {
+                print
+            }
+            next
+        }
+        # relay 块结束(遇到顶级 key)
+        in_relay == 1 && /^[a-zA-Z_]/ { in_relay = 0 }
+        { print }
+    ' "$f" > "$tmp"
+    mv "$tmp" "$f"
+}
+
 # 用环境变量替换模板中的简单标量字段
 apply_env_overrides() {
     local f="$1"
@@ -316,16 +409,42 @@ apply_env_overrides() {
     # 节点证书文件名(模板默认 host.crt/host.key, 替换为自定义主机名)
     sed -i "s|host\\.crt|${HOST_CRT}|g" "$f"
     sed -i "s|host\\.key|${HOST_KEY}|g" "$f"
-    # TUN 设备名与 MTU
-    sed -i "s|^  dev: iflygo$|  dev: ${TUN_DEV}|" "$f"
-    sed -i "s|^  mtu: 1300$|  mtu: ${TUN_MTU}|" "$f"
+    # PKI 证书版本
+    sed -i "s|^  initiating_version: 2$|  initiating_version: ${PKI_INITIATING_VERSION}|" "$f"
+    # static_map 配置
+    sed -i "s|^  cadence: 30s$|  cadence: ${STATIC_MAP_CADENCE}|" "$f"
+    sed -i "s|^  network: ip$|  network: ${STATIC_MAP_NETWORK}|" "$f"
+    sed -i "s|^  lookup_timeout: 250ms$|  lookup_timeout: ${STATIC_MAP_LOOKUP_TIMEOUT}|" "$f"
+    # lighthouse 报告间隔
+    sed -i "s|^  interval: 3$|  interval: ${LIGHTHOUSE_INTERVAL}|" "$f"
     # 监听地址与端口(server 模板默认 6688, client 模板默认 0)
     sed -i "s|^  host: \"\\[::\\]\"$|  host: \"${LISTEN_HOST}\"|" "$f"
     sed -i "s|^  port: 6688$|  port: ${LISTEN_PORT}|" "$f"
     sed -i "s|^  port: 0$|  port: ${LISTEN_PORT}|" "$f"
+    # listen 缓冲区与 recv_error
+    sed -i "s|^  read_buffer: 20000000$|  read_buffer: ${READ_BUFFER}|" "$f"
+    sed -i "s|^  write_buffer: 20000000$|  write_buffer: ${WRITE_BUFFER}|" "$f"
+    sed -i "s|^  send_recv_error: always$|  send_recv_error: ${SEND_RECV_ERROR}|" "$f"
+    # punchy (NAT 打洞)
+    sed -i "s|^  punch: true$|  punch: ${PUNCH}|" "$f"
+    sed -i "s|^  respond: true$|  respond: ${PUNCH_RESPOND}|" "$f"
+    sed -i "s|^  delay: 1s$|  delay: ${PUNCH_DELAY}|" "$f"
+    # 加密算法
+    sed -i "s|^cipher: chachapoly$|cipher: ${CIPHER}|" "$f"
+    # TUN 设备配置
+    sed -i "s|^  disabled: false$|  disabled: ${TUN_DISABLED}|" "$f"
+    sed -i "s|^  dev: iflygo$|  dev: ${TUN_DEV}|" "$f"
+    sed -i "s|^  drop_local_broadcast: true$|  drop_local_broadcast: ${DROP_LOCAL_BROADCAST}|" "$f"
+    sed -i "s|^  drop_multicast: true$|  drop_multicast: ${DROP_MULTICAST}|" "$f"
+    sed -i "s|^  tx_queue: 1500$|  tx_queue: ${TX_QUEUE}|" "$f"
+    sed -i "s|^  mtu: 1300$|  mtu: ${TUN_MTU}|" "$f"
     # 日志级别与格式
     sed -i "s|^  level: info$|  level: ${LOG_LEVEL}|" "$f"
     sed -i "s|^  format: text$|  format: ${LOG_FORMAT}|" "$f"
+    # handshakes 配置
+    sed -i "s|^  try_interval: 100ms$|  try_interval: ${HANDSHAKE_TRY_INTERVAL}|" "$f"
+    sed -i "s|^  retries: 10$|  retries: ${HANDSHAKE_RETRIES}|" "$f"
+    sed -i "s|^  trigger_buffer: 64$|  trigger_buffer: ${HANDSHAKE_TRIGGER_BUFFER}|" "$f"
 }
 
 # 生成 preferred_ranges YAML (从环境变量 PREFERRED_RANGES)
@@ -339,6 +458,27 @@ generate_preferred_ranges() {
     # 将逗号替换为 ", " 并加上 ["..."]
     local ranges_json=$(echo "${PREFERRED_RANGES}" | sed 's/,/", "/g')
     echo "preferred_ranges: [\"${ranges_json}\"]"
+}
+
+# 生成 relay.relays 列表 YAML (从环境变量 RELAYS)
+generate_relays() {
+    # 输入: 逗号分隔内网 IP (如 10.88.0.1,10.88.0.2)
+    # 输出:
+    #   relays:
+    #     - 10.88.0.1
+    #     - 10.88.0.2
+    if [ -z "${RELAYS}" ]; then
+        echo "  relays: []"
+        return 0
+    fi
+    echo "  relays:"
+    IFS=',' read -ra relay_ips <<< "${RELAYS}"
+    for ip in "${relay_ips[@]}"; do
+        # 去除首尾空格
+        ip="$(echo "$ip" | xargs)"
+        [ -n "$ip" ] && echo "    - ${ip}"
+    done
+    return 0
 }
 
 # 生成 unsafe_routes YAML (从环境变量 UNSAFE_ROUTES)
@@ -429,6 +569,18 @@ if [ ! -f "${TARGET_CONF}" ]; then
         echo "[iflygo-init] 应用自定义 unsafe_routes"
         new_unsafe_routes=$(generate_unsafe_routes)
         replace_tun_unsafe_routes "${TARGET_CONF}" "${new_unsafe_routes}"
+    fi
+
+    # 替换 relay 块(relays 列表 / am_relay / use_relays)
+    # 仅当至少一个 relay 相关变量非空时才覆盖模板
+    if [ -n "${RELAYS}" ] || [ -n "${AM_RELAY}" ] || [ -n "${USE_RELAYS}" ]; then
+        echo "[iflygo-init] 应用自定义 relay 配置"
+        if [ -n "${RELAYS}" ]; then
+            new_relays=$(generate_relays)
+        else
+            new_relays=""  # 不覆盖 relays 列表, 仅改 am_relay/use_relays
+        fi
+        replace_relay_block "${TARGET_CONF}" "${new_relays}" "${AM_RELAY}" "${USE_RELAYS}"
     fi
 
     # 替换简单标量字段
