@@ -26,7 +26,7 @@ IFLYGO_NETMASK_V6="${IFLYGO_NETMASK_V6:-64}"  # IPv6 子网掩码(CIDR 位数, �
 LIGHTHOUSE_IP="${LIGHTHOUSE_IP:-10.88.0.1}"                   # lighthouse 的内网 IP
 LIGHTHOUSE_PUBLIC="${LIGHTHOUSE_PUBLIC:-127.0.0.1:6688}"      # lighthouse 的公网地址 host:port
 
-LISTEN_HOST="${LISTEN_HOST:-::}"        # 监听地址
+LISTEN_HOST="${LISTEN_HOST:-[::]}"      # 监听地址
 LISTEN_PORT="${LISTEN_PORT:-6688}"      # 监听端口(client 推荐 0)
 TUN_DEV="${TUN_DEV:-iflygo}"            # tun 设备名
 TUN_MTU="${TUN_MTU:-1300}"              # tun MTU
