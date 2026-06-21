@@ -1,0 +1,75 @@
+#=================================================
+# https://github.com/iflyelf/iflygo-docker
+# Lisence: MIT
+# Author: iflyelf
+# Blog: https://www.xiaonuo.live
+#
+# Windows 容器镜像 (用于从容器中提取 Windows 原生二进制)
+# 用户可运行容器后 docker cp 复制 iflygo.exe 到宿主机直接使用
+#=================================================
+
+# escape=`
+ARG WINDOWS_BASE_TAG=ltsc2022
+
+# 使用 Windows Server Core 作为基础镜像
+FROM mcr.microsoft.com/windows/servercore:${WINDOWS_BASE_TAG}
+
+# 作者描述信息
+LABEL org.opencontainers.image.authors="iflyelf" `
+      org.opencontainers.image.vendor="iflyelf" `
+      org.opencontainers.image.title="iflygo-windows" `
+      org.opencontainers.image.description="iFlyGo Windows 原生二进制容器镜像"
+
+# 创建工作目录
+RUN powershell -Command `
+    New-Item -ItemType Directory -Force -Path C:\iflygo\bin; `
+    New-Item -ItemType Directory -Force -Path C:\iflygo\config; `
+    New-Item -ItemType Directory -Force -Path C:\iflygo\logs
+
+# 复制编译好的二进制文件 (由 GitHub Actions 编译后放入 ./bin 目录)
+COPY bin/iflygo.exe C:\iflygo\bin\iflygo.exe
+COPY bin/iflygo-cert.exe C:\iflygo\bin\iflygo-cert.exe
+
+# 将 iflygo 添加到系统路径
+RUN setx /M PATH "%PATH%;C:\iflygo\bin"
+
+# 复制配置文件模板
+COPY conf/server/config.yml C:\iflygo\config\server-config-template.yml
+COPY conf/client/config.yml C:\iflygo\config\client-config-template.yml
+
+# 创建启动脚本
+RUN powershell -Command `
+    $script = @' `
+Write-Host '======================================' `
+Write-Host 'iFlyGo Windows 容器' `
+Write-Host '======================================' `
+Write-Host '' `
+Write-Host '二进制文件位置:' `
+Write-Host '  iflygo.exe       -> C:\iflygo\bin\iflygo.exe' `
+Write-Host '  iflygo-cert.exe  -> C:\iflygo\bin\iflygo-cert.exe' `
+Write-Host '' `
+Write-Host '配置模板位置:' `
+Write-Host '  Server 模板 -> C:\iflygo\config\server-config-template.yml' `
+Write-Host '  Client 模板 -> C:\iflygo\config\client-config-template.yml' `
+Write-Host '' `
+Write-Host '如需提取到 Windows 宿主机, 请在宿主机执行:' `
+Write-Host '  docker cp <容器ID>:C:\iflygo\bin\iflygo.exe C:\iflygo\' `
+Write-Host '  docker cp <容器ID>:C:\iflygo\bin\iflygo-cert.exe C:\iflygo\' `
+Write-Host '' `
+Write-Host '查看版本信息:' `
+C:\iflygo\bin\iflygo.exe -version `
+Write-Host '' `
+Write-Host '======================================' `
+Write-Host '容器保持运行中... 按 Ctrl+C 停止' `
+Write-Host '======================================' `
+Start-Sleep -Seconds 2147483 `
+'@ ; `
+    Set-Content -Path C:\iflygo\entrypoint.ps1 -Value $script
+
+WORKDIR C:\iflygo
+
+# 暴露 UDP 6688 端口 (iflygo 默认端口)
+EXPOSE 6688/udp
+
+# 默认入口点: 显示帮助信息并保持容器运行
+CMD ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:\\iflygo\\entrypoint.ps1"]

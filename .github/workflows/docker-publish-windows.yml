@@ -1,0 +1,237 @@
+#=================================================
+# https://github.com/iflyelf/iflygo-docker
+# Lisence: MIT
+# Author: iflyelf
+# Blog: https://www.xiaonuo.live
+#
+# Windows 平台容器构建 (amd64 + arm64)
+# 镜像内含 Windows 原生 iflygo.exe / iflygo-cert.exe
+# 用户可从容器中复制二进制到 Windows 宿主机直接运行
+#=================================================
+
+name: 自动编译并上传 Windows 镜像
+
+# 设置触发条件
+on:
+  # 编辑文件触发开始编译
+  push:
+    paths:
+      - 'Dockerfile.windows'
+      - '.github/workflows/docker-publish-windows.yml'
+  # 手动触发工作流
+  workflow_dispatch:
+    inputs:
+      build:
+        description: 'build iflygo windows'
+        required: true
+        default: 'build iflygo windows'
+  # 点☆Star触发开始编译
+  watch:
+    types: [started]
+
+# 任务集
+jobs:
+  # ============================================================
+  # 阶段一: 在 Linux 上交叉编译 Windows 二进制 (amd64 + arm64)
+  #         产物上传为 artifact, 供后续 Windows runner 使用
+  # ============================================================
+  build-binaries:
+    name: 交叉编译 Windows 二进制
+    runs-on: ubuntu-latest
+    if: github.event.repository.owner.id == github.event.sender.id
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - GOARCH: amd64
+          - GOARCH: arm64
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: 拉取上游 Nebula 源码并品牌化
+        shell: bash
+        run: |
+          set -eux
+          # 与 Dockerfile 保持一致的上游版本
+          IFLYGO_UPSTREAM_VERSION="${IFLYGO_UPSTREAM_VERSION:-v1.10.3}"
+          IFLYGO_BRAND="iflygo"
+          BRAND_TITLE="iFlyGo"
+
+          git clone --depth=1 -b "${IFLYGO_UPSTREAM_VERSION}" \
+              https://github.com/slackhq/nebula.git /tmp/upstream
+          cd /tmp/upstream
+          git rev-parse HEAD > /tmp/COMMIT
+
+          # 品牌化替换 (与 Dockerfile 保持一致)
+          grep -rln --include="*.go" --exclude-dir=vendor 'nebula1' . | while read -r f; do
+            sed -i 's|nebula1|'"${IFLYGO_BRAND}"'|g' "$f"
+          done || true
+
+          grep -rln --include="*.go" --exclude-dir=vendor -e '/etc/nebula' -e '/var/log/nebula' . | while read -r f; do
+            sed -i \
+              -e 's|/etc/nebula|/etc/'"${IFLYGO_BRAND}"'|g' \
+              -e 's|/var/log/nebula|/var/log/'"${IFLYGO_BRAND}"'|g' "$f"
+          done || true
+
+          grep -rln --include="*.go" --exclude-dir=vendor \
+              -e '"Nebula' -e '"nebula version' -e 'nebula -config' -e 'Usage of nebula' . | while read -r f; do
+            sed -i \
+              -e 's|"Nebula|"'"${BRAND_TITLE}"'|g' \
+              -e 's|"nebula version|"'"${IFLYGO_BRAND}"' version|g' \
+              -e 's|nebula -config|'"${IFLYGO_BRAND}"' -config|g' \
+              -e 's|Usage of nebula|Usage of '"${IFLYGO_BRAND}"'|g' "$f"
+          done || true
+
+          [ -f cmd/nebula/main.go ] && sed -i 's|"nebula"|"'"${IFLYGO_BRAND}"'"|g' cmd/nebula/main.go || true
+          [ -f cmd/nebula-cert/main.go ] && sed -i 's|"nebula-cert"|"'"${IFLYGO_BRAND}"'-cert"|g' cmd/nebula-cert/main.go || true
+
+      - name: 编译 Windows 二进制
+        shell: bash
+        run: |
+          set -eux
+          cd /tmp/upstream
+          BUILD_NUMBER=$(cat /tmp/COMMIT)
+          LDFLAGS="-w -s -X main.Build=${BUILD_NUMBER}"
+          mkdir -p /tmp/out
+
+          CGO_ENABLED=0 GOOS=windows GOARCH=${{ matrix.GOARCH }} \
+              go build -trimpath -ldflags "${LDFLAGS}" \
+              -o /tmp/out/iflygo.exe ./cmd/nebula
+          CGO_ENABLED=0 GOOS=windows GOARCH=${{ matrix.GOARCH }} \
+              go build -trimpath -ldflags "${LDFLAGS}" \
+              -o /tmp/out/iflygo-cert.exe ./cmd/nebula-cert
+          ls -lh /tmp/out
+
+      - name: 上传二进制 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: iflygo-windows-${{ matrix.GOARCH }}
+          path: /tmp/out/
+          retention-days: 1
+
+  # ============================================================
+  # 阶段二: 在 Windows runner 上打包 Windows 容器镜像
+  # ============================================================
+  build-image-amd64:
+    name: 构建 Windows amd64 容器
+    needs: build-binaries
+    runs-on: windows-2022
+    if: github.event.repository.owner.id == github.event.sender.id
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 下载 amd64 二进制
+        uses: actions/download-artifact@v4
+        with:
+          name: iflygo-windows-amd64
+          path: ./bin
+
+      - name: 登录 DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: 构建并发布 Windows amd64 镜像
+        shell: pwsh
+        run: |
+          docker build `
+            -f Dockerfile.windows `
+            --build-arg WINDOWS_BASE_TAG=ltsc2022 `
+            -t ${{ secrets.DOCKER_USERNAME }}/iflygo:windows-amd64 `
+            .
+          docker push ${{ secrets.DOCKER_USERNAME }}/iflygo:windows-amd64
+
+  build-image-arm64:
+    name: 构建 Windows arm64 容器
+    needs: build-binaries
+    runs-on: windows-11-arm
+    if: github.event.repository.owner.id == github.event.sender.id
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 下载 arm64 二进制
+        uses: actions/download-artifact@v4
+        with:
+          name: iflygo-windows-arm64
+          path: ./bin
+
+      - name: 登录 DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: 构建并发布 Windows arm64 镜像
+        shell: pwsh
+        run: |
+          docker build `
+            -f Dockerfile.windows `
+            --build-arg WINDOWS_BASE_TAG=ltsc2022 `
+            -t ${{ secrets.DOCKER_USERNAME }}/iflygo:windows-arm64 `
+            .
+          docker push ${{ secrets.DOCKER_USERNAME }}/iflygo:windows-arm64
+
+  # ============================================================
+  # 阶段三: 合并多架构 manifest list
+  # ============================================================
+  manifest:
+    name: 创建多架构 manifest
+    needs:
+      - build-image-amd64
+      - build-image-arm64
+    runs-on: ubuntu-latest
+    if: github.event.repository.owner.id == github.event.sender.id
+    steps:
+      - name: 登录 DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: 创建并推送 windows-latest manifest
+        shell: bash
+        run: |
+          docker manifest create \
+            ${{ secrets.DOCKER_USERNAME }}/iflygo:windows-latest \
+            --amend ${{ secrets.DOCKER_USERNAME }}/iflygo:windows-amd64 \
+            --amend ${{ secrets.DOCKER_USERNAME }}/iflygo:windows-arm64
+          docker manifest push ${{ secrets.DOCKER_USERNAME }}/iflygo:windows-latest
+
+  # ============================================================
+  # 清理旧的 workflow 记录
+  # ============================================================
+  cleanup:
+    name: 清理旧 workflow
+    needs: manifest
+    runs-on: ubuntu-latest
+    if: github.event.repository.owner.id == github.event.sender.id
+    steps:
+      - name: 删除旧的 GitHub-workflow
+        uses: Mattraks/delete-workflow-runs@main
+        with:
+          repository: ${{ github.repository }}
+          retain_days: 1
+          keep_minimum_runs: 0

@@ -11,11 +11,166 @@
 ## ✨ 特性
 
 - 🛡️ **安全加密**: 基于 Noise Protocol Framework 的相互认证，默认使用 Curve25519 + AES-256-GCM
-- 🌍 **跨平台**: Docker 镜像支持 Linux amd64/arm64，可在云服务器、树莓派、NAS 等设备运行
+- 🌍 **全平台支持**: 
+  - **Linux**: amd64/arm64 容器镜像，支持云服务器、树莓派、NAS
+  - **macOS**: 支持 Apple Silicon (M1/M2/M3)，可从容器提取 ARM64 原生二进制
+  - **Windows**: amd64/arm64 原生二进制容器，支持 x64 和 ARM64 (Copilot+ PC)
 - 🏗️ **多阶段构建**: 从 Go 源码编译，生成精简运行镜像
 - 📦 **即开即用**: 提供 server (lighthouse) / client 两种运行模式，通过环境变量自动生成配置
 - 🔧 **灵活配置**: 支持证书自动签发、防火墙规则、分组、中继等高级特性
 - 📝 **中文注释**: 所有配置模板均包含详尽的中文注释
+
+---
+
+## 🌐 跨平台支持
+
+### Linux (amd64/arm64)
+
+Docker 镜像支持 Linux amd64 和 arm64 平台，可直接使用：
+
+```bash
+docker pull iflyelf/iflygo:latest
+```
+
+Docker 会自动拉取匹配当前系统架构的镜像。
+
+---
+
+### macOS (Apple Silicon / M 系列芯片)
+
+**macOS M1/M2/M3 芯片使用 Linux ARM64 容器**。由于 Docker Desktop for Mac 运行 Linux VM，需要从容器中复制二进制到宿主机直接运行。
+
+#### 方法一：从容器提取二进制（推荐）
+
+```bash
+# 1. 拉取 Linux arm64 镜像
+docker pull --platform linux/arm64 iflyelf/iflygo:latest
+
+# 2. 创建临时容器
+docker create --name iflygo-temp --platform linux/arm64 iflyelf/iflygo:latest
+
+# 3. 复制二进制到 macOS 宿主机
+docker cp iflygo-temp:/usr/local/bin/iflygo /usr/local/bin/iflygo
+docker cp iflygo-temp:/usr/local/bin/iflygo-cert /usr/local/bin/iflygo-cert
+
+# 4. 添加执行权限
+chmod +x /usr/local/bin/iflygo /usr/local/bin/iflygo-cert
+
+# 5. 验证版本
+iflygo -version
+
+# 6. 删除临时容器
+docker rm iflygo-temp
+```
+
+#### 方法二：在容器内运行（需配置网络）
+
+```bash
+# 使用 host 网络模式 (需 Docker Desktop 最新版本)
+docker run -d \
+  --name iflygo-client \
+  --cap-add NET_ADMIN \
+  --device /dev/net/tun \
+  --network host \
+  -e RUNMODE=client \
+  -e NODE=macos-client \
+  -e IFLYGO_IP=192.168.100.100 \
+  -e LIGHTHOUSE_IP=192.168.100.1 \
+  -e LIGHTHOUSE_PUBLIC=your-server-ip:6688 \
+  -v $(pwd)/data/macos/config:/etc/iflygo:rw \
+  iflyelf/iflygo:latest
+```
+
+#### 如何使用 iflygo
+
+复制二进制到宿主机后，参考 [快速开始](#📦-快速开始) 章节：
+
+1. 从 server 节点获取 `ca.crt`
+2. 在 server 上签发 macOS 客户端证书（使用 `sign` 命令）
+3. 创建配置文件 `~/.config/iflygo/config.yml`（参考 `conf/client/config.yml` 模板）
+4. 运行 iflygo：
+
+```bash
+sudo iflygo -config ~/.config/iflygo/config.yml
+```
+
+---
+
+### Windows (amd64/arm64)
+
+**Windows 平台使用 Windows 容器镜像**，包含原生 `iflygo.exe` 和 `iflygo-cert.exe`。
+
+#### 拉取镜像
+
+```bash
+# Windows amd64 (x64 CPU)
+docker pull iflyelf/iflygo:windows-amd64
+
+# Windows arm64 (ARM64 Surface / Copilot+ PC)
+docker pull iflyelf/iflygo:windows-arm64
+
+# 自动选择架构
+docker pull iflyelf/iflygo:windows-latest
+```
+
+#### 方法一：从容器提取二进制（推荐）
+
+```powershell
+# 1. 创建临时容器
+docker create --name iflygo-temp iflyelf/iflygo:windows-latest
+
+# 2. 复制二进制到 Windows 宿主机
+docker cp iflygo-temp:C:\iflygo\bin\iflygo.exe C:\iflygo\
+docker cp iflygo-temp:C:\iflygo\bin\iflygo-cert.exe C:\iflygo\
+
+# 3. 复制配置模板（可选）
+docker cp iflygo-temp:C:\iflygo\config\client-config-template.yml C:\iflygo\config.yml
+
+# 4. 验证版本
+C:\iflygo\iflygo.exe -version
+
+# 5. 删除临时容器
+docker rm iflygo-temp
+```
+
+#### 方法二：在容器内运行（查看帮助）
+
+```powershell
+# 运行容器并查看帮助信息
+docker run --rm iflyelf/iflygo:windows-latest
+```
+
+#### 如何使用 iflygo.exe
+
+提取二进制后，在 PowerShell 或 CMD 中运行：
+
+1. 从 server 节点获取 `ca.crt`
+2. 在 server 上签发 Windows 客户端证书（使用 `sign` 命令）
+3. 创建配置文件 `C:\iflygo\config.yml`（参考 `conf/client/config.yml` 模板）
+4. 管理员权限运行 iflygo：
+
+```powershell
+# 以管理员权限打开 PowerShell
+C:\iflygo\iflygo.exe -config C:\iflygo\config.yml
+```
+
+**注意事项**：
+
+- Windows 需要创建 TUN/TAP 虚拟网卡，首次运行需安装 [Wintun](https://www.wintun.net/) 驱动
+- 需要管理员权限运行 iflygo.exe
+- 防火墙可能拦截 UDP 6688 端口，需手动添加入站规则
+
+---
+
+### 架构对比表
+
+| 平台 | 架构 | Docker 镜像 Tag | 原生运行 | 推荐方式 |
+|------|------|-----------------|----------|----------|
+| **Linux** | amd64 | `iflyelf/iflygo:latest` | ✅ 容器内直接运行 | 容器部署 |
+| **Linux** | arm64 | `iflyelf/iflygo:latest` | ✅ 容器内直接运行 | 容器部署 |
+| **macOS** | Apple Silicon (M1/M2/M3) | `--platform linux/arm64` | ✅ 复制二进制到宿主机 | 提取二进制 |
+| **Windows** | amd64 (x64) | `iflyelf/iflygo:windows-amd64` | ✅ 复制二进制到宿主机 | 提取二进制 |
+| **Windows** | arm64 (ARM) | `iflyelf/iflygo:windows-arm64` | ✅ 复制二进制到宿主机 | 提取二进制 |
 
 ---
 
@@ -120,9 +275,12 @@ iFlyGo 是一个基于 [Noise Protocol Framework](https://noiseprotocol.org/) �
 
 ## 📦 快速开始
 
+> **💡 跨平台提示**：本章节适用于 **Linux 平台**容器部署。macOS / Windows 用户请先查看 [🌐 跨平台支持](#🌐-跨平台支持) 章节了解如何提取原生二进制。
+
 ### 1. 拉取镜像
 
 ```bash
+# Linux 平台 (自动选择 amd64 或 arm64)
 docker pull iflyelf/iflygo:latest
 ```
 
@@ -349,17 +507,20 @@ environment:
 
 ```
 iflygo-docker/
-├── Dockerfile                 # 多阶段构建(Go 源码编译 + 运行镜像)
+├── Dockerfile                 # 多阶段构建(Linux: Go 源码编译 + 运行镜像)
+├── Dockerfile.windows         # Windows 容器镜像(打包原生 iflygo.exe)
 ├── docker-compose.yml         # Docker Compose 编排文件
 ├── init.sh                    # 配置初始化脚本(自动生成证书与配置)
 ├── entrypoint.sh              # 容器入口脚本
+├── sign-client.sh             # 客户端证书签发脚本
 ├── conf/
 │   ├── server/
 │   │   └── config.yml         # Server 配置模板(含中文注释)
 │   └── client/
 │       └── config.yml         # Client 配置模板(含中文注释)
 ├── .github/workflows/
-│   └── docker-publish.yml     # GitHub Actions 自动构建工作流
+│   ├── docker-publish.yml          # Linux 多架构(amd64/arm64)自动构建
+│   └── docker-publish-windows.yml  # Windows 多架构(amd64/arm64)自动构建
 ├── .gitignore
 └── README.md
 ```
