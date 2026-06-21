@@ -78,7 +78,7 @@ sudo ln -sf /usr/local/iflygo/iflygo-cert /usr/local/bin/iflygo-cert
 iflygo -version
 ```
 
-> 💡 macOS 上的二进制在 Docker Desktop VM 中运行（兼容 Linux ARM64），不直接运行在 macOS 内核。如需 macOS 原生 darwin 二进制，可参考 [Nebula 上游项目](https://github.com/slackhq/nebula/releases) 自行编译。
+> 💡 macOS 上的二进制在 Docker Desktop VM 中运行（兼容 Linux ARM64），不直接运行在 macOS 内核。如需 macOS 原生 darwin 二进制，需从源码自行编译。
 
 #### 方式二：从容器提取二进制
 
