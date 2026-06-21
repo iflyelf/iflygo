@@ -98,79 +98,85 @@ sudo iflygo -config ~/.config/iflygo/config.yml
 
 ### Windows (amd64/arm64)
 
-**Windows 平台使用 Windows 容器镜像**，包含原生 `iflygo.exe` 和 `iflygo-cert.exe`。
+**Windows 平台提供两种方式**：
 
-#### 拉取镜像
+1. **推荐**：下载原生二进制 zip（amd64 + arm64）
+2. Docker 容器镜像（仅 amd64，需 Windows Server）
 
-```bash
-# Windows amd64 (x64 CPU)
-docker pull iflyelf/iflygo:windows-amd64
+#### 方式一：下载原生二进制 zip（推荐）
 
-# Windows arm64 (ARM64 Surface / Copilot+ PC)
-docker pull iflyelf/iflygo:windows-arm64
+从 GitHub Release 下载对应架构的 zip 包：
 
-# 自动选择架构
-docker pull iflyelf/iflygo:windows-latest
-```
+- **amd64 (x64)**: [iflygo-windows-amd64.zip](https://github.com/iflyelf/iflygo-docker/releases/download/windows-latest/iflygo-windows-amd64.zip)
+- **arm64 (ARM)**: [iflygo-windows-arm64.zip](https://github.com/iflyelf/iflygo-docker/releases/download/windows-latest/iflygo-windows-arm64.zip)
 
-#### 方法一：从容器提取二进制（推荐）
+或通过命令下载：
 
 ```powershell
-# 1. 创建临时容器
-docker create --name iflygo-temp iflyelf/iflygo:windows-latest
+# 下载 amd64 版本
+Invoke-WebRequest -Uri "https://github.com/iflyelf/iflygo-docker/releases/download/windows-latest/iflygo-windows-amd64.zip" -OutFile "iflygo-windows-amd64.zip"
 
-# 2. 复制二进制到 Windows 宿主机
-docker cp iflygo-temp:C:\iflygo\bin\iflygo.exe C:\iflygo\
-docker cp iflygo-temp:C:\iflygo\bin\iflygo-cert.exe C:\iflygo\
+# 解压到 C:\iflygo
+Expand-Archive -Path iflygo-windows-amd64.zip -DestinationPath C:\iflygo -Force
+```
 
-# 3. 复制配置模板（可选）
-docker cp iflygo-temp:C:\iflygo\config\client-config-template.yml C:\iflygo\config.yml
+安装与使用：
 
-# 4. 验证版本
+```powershell
+# 1. 解压后验证版本
 C:\iflygo\iflygo.exe -version
 
-# 5. 删除临时容器
-docker rm iflygo-temp
-```
+# 2. 从 server 节点获取 ca.crt 并签发客户端证书
+#    (在 Linux server 上执行 sign 命令, 然后将证书文件复制到 Windows)
 
-#### 方法二：在容器内运行（查看帮助）
+# 3. 创建配置文件 C:\iflygo\config.yml
+#    参考解压包内的 client-config-template.yml
 
-```powershell
-# 运行容器并查看帮助信息
-docker run --rm iflyelf/iflygo:windows-latest
-```
+# 4. 安装 Wintun 驱动 (首次运行必须)
+#    下载: https://www.wintun.net/
+#    解压后将 wintun.dll 放到 C:\iflygo\ 或系统 PATH 目录
 
-#### 如何使用 iflygo.exe
-
-提取二进制后，在 PowerShell 或 CMD 中运行：
-
-1. 从 server 节点获取 `ca.crt`
-2. 在 server 上签发 Windows 客户端证书（使用 `sign` 命令）
-3. 创建配置文件 `C:\iflygo\config.yml`（参考 `conf/client/config.yml` 模板）
-4. 管理员权限运行 iflygo：
-
-```powershell
-# 以管理员权限打开 PowerShell
+# 5. 以管理员权限运行 iflygo
+#    右键 PowerShell → 以管理员身份运行
 C:\iflygo\iflygo.exe -config C:\iflygo\config.yml
 ```
 
 **注意事项**：
 
-- Windows 需要创建 TUN/TAP 虚拟网卡，首次运行需安装 [Wintun](https://www.wintun.net/) 驱动
-- 需要管理员权限运行 iflygo.exe
-- 防火墙可能拦截 UDP 6688 端口，需手动添加入站规则
+- 必须安装 [Wintun](https://www.wintun.net/) 驱动（用于创建 TUN 虚拟网卡）
+- 必须以管理员权限运行 `iflygo.exe`
+- 防火墙需放行 UDP 6688 端口（入站规则）
+- 配置模板和详细说明见解压包内的 `README-windows.txt`
+
+#### 方式二：Docker 容器镜像（仅 amd64）
+
+> ⚠️ **注意**：Windows 容器需要 Windows Server 主机，仅支持 amd64 架构。
+
+```powershell
+# 拉取 Windows 容器镜像 (仅 amd64)
+docker pull iflyelf/iflygo:windows-amd64
+
+# 从容器提取二进制到宿主机
+docker create --name iflygo-temp iflyelf/iflygo:windows-amd64
+docker cp iflygo-temp:C:\iflygo\bin\iflygo.exe C:\iflygo\
+docker cp iflygo-temp:C:\iflygo\bin\iflygo-cert.exe C:\iflygo\
+docker rm iflygo-temp
+
+# 验证版本
+C:\iflygo\iflygo.exe -version
+```
 
 ---
 
 ### 架构对比表
 
-| 平台 | 架构 | Docker 镜像 Tag | 原生运行 | 推荐方式 |
-|------|------|-----------------|----------|----------|
-| **Linux** | amd64 | `iflyelf/iflygo:latest` | ✅ 容器内直接运行 | 容器部署 |
-| **Linux** | arm64 | `iflyelf/iflygo:latest` | ✅ 容器内直接运行 | 容器部署 |
-| **macOS** | Apple Silicon (M1/M2/M3) | `--platform linux/arm64` | ✅ 复制二进制到宿主机 | 提取二进制 |
-| **Windows** | amd64 (x64) | `iflyelf/iflygo:windows-amd64` | ✅ 复制二进制到宿主机 | 提取二进制 |
-| **Windows** | arm64 (ARM) | `iflyelf/iflygo:windows-arm64` | ✅ 复制二进制到宿主机 | 提取二进制 |
+| 平台 | 架构 | 获取方式 | 推荐方式 |
+|------|------|----------|----------|
+| **Linux** | amd64 | `docker pull iflyelf/iflygo:latest` | 容器部署 |
+| **Linux** | arm64 | `docker pull iflyelf/iflygo:latest` | 容器部署 |
+| **macOS** | Apple Silicon (M1/M2/M3) | 从 `linux/arm64` 容器提取二进制 | 提取二进制 |
+| **Windows** | amd64 (x64) | Docker: `iflyelf/iflygo:windows-amd64` 或 [下载 zip](https://github.com/iflyelf/iflygo-docker/releases/download/windows-latest/iflygo-windows-amd64.zip) | 下载 zip |
+| **Windows** | arm64 (ARM) | [下载 zip](https://github.com/iflyelf/iflygo-docker/releases/download/windows-latest/iflygo-windows-arm64.zip) | 下载 zip |
 
 ---
 
@@ -507,20 +513,20 @@ environment:
 
 ```
 iflygo-docker/
-├── Dockerfile                 # 多阶段构建(Linux: Go 源码编译 + 运行镜像)
-├── Dockerfile.windows         # Windows 容器镜像(打包原生 iflygo.exe)
-├── docker-compose.yml         # Docker Compose 编排文件
-├── init.sh                    # 配置初始化脚本(自动生成证书与配置)
-├── entrypoint.sh              # 容器入口脚本
-├── sign-client.sh             # 客户端证书签发脚本
+├── Dockerfile                          # Linux 多阶段构建(Go 源码编译 + 运行镜像)
+├── Dockerfile.windows                  # Windows 容器镜像(打包原生 iflygo.exe)
+├── docker-compose.yml                  # Docker Compose 编排文件
+├── init.sh                             # 配置初始化脚本(自动生成证书与配置)
+├── entrypoint.sh                       # 容器入口脚本
+├── sign-client.sh                      # 客户端证书签发脚本
 ├── conf/
 │   ├── server/
-│   │   └── config.yml         # Server 配置模板(含中文注释)
+│   │   └── config.yml                  # Server 配置模板(含中文注释)
 │   └── client/
-│       └── config.yml         # Client 配置模板(含中文注释)
+│       └── config.yml                  # Client 配置模板(含中文注释)
 ├── .github/workflows/
 │   ├── docker-publish-linux.yml        # Linux 多架构(amd64/arm64)自动构建
-│   └── docker-publish-windows.yml      # Windows 多架构(amd64/arm64)自动构建
+│   └── docker-publish-windows.yml      # Windows 二进制编译与容器构建
 ├── .gitignore
 └── README.md
 ```

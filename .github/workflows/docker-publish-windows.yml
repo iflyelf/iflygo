@@ -4,18 +4,23 @@
 # Author: iflyelf
 # Blog: https://www.xiaonuo.live
 #
-# Windows 平台容器构建 (amd64 + arm64)
-# 镜像内含 Windows 原生 iflygo.exe / iflygo-cert.exe
-# 用户可从容器中复制二进制到 Windows 宿主机直接运行
+# Windows 平台构建 (amd64 + arm64)
+#   1. 在 Linux 上交叉编译 Windows 二进制 (amd64 + arm64)
+#   2. 打包二进制 zip 并发布到 GitHub Release
+#   3. 在 windows-2022 runner 上构建 Windows amd64 容器镜像并推送
+#
+# 注: Windows arm64 容器镜像需要 windows-11-arm runner + Docker,
+#     该 runner 默认未预装 Docker, 故 arm64 仅发布二进制 zip
 #=================================================
 
-name: 自动编译并上传 Windows 镜像
+name: 自动编译并发布 Windows 二进制和镜像
 
 # 设置触发条件
 on:
   # 编辑文件触发开始编译
   push:
     paths:
+      - 'Dockerfile'
       - 'Dockerfile.windows'
       - '.github/workflows/docker-publish-windows.yml'
   # 手动触发工作流
@@ -33,10 +38,9 @@ on:
 jobs:
   # ============================================================
   # 阶段一: 在 Linux 上交叉编译 Windows 二进制 (amd64 + arm64)
-  #         产物上传为 artifact, 供后续 Windows runner 使用
   # ============================================================
-  build-binaries:
-    name: 交叉编译 Windows 二进制
+  build-windows-binaries:
+    name: 编译 Windows 二进制 (${{ matrix.GOARCH }})
     runs-on: ubuntu-latest
     if: github.event.repository.owner.id == github.event.sender.id
     strategy:
@@ -44,7 +48,9 @@ jobs:
       matrix:
         include:
           - GOARCH: amd64
+            DISPLAY_NAME: x64
           - GOARCH: arm64
+            DISPLAY_NAME: ARM64
     permissions:
       actions: write
       contents: read
@@ -64,7 +70,6 @@ jobs:
         shell: bash
         run: |
           set -eux
-          # 与 Dockerfile 保持一致的上游版本
           IFLYGO_UPSTREAM_VERSION="${IFLYGO_UPSTREAM_VERSION:-v1.10.3}"
           IFLYGO_BRAND="iflygo"
           BRAND_TITLE="iFlyGo"
@@ -104,29 +109,78 @@ jobs:
           cd /tmp/upstream
           BUILD_NUMBER=$(cat /tmp/COMMIT)
           LDFLAGS="-w -s -X main.Build=${BUILD_NUMBER}"
-          mkdir -p /tmp/out
+          OUT_DIR="/tmp/iflygo-windows-${{ matrix.GOARCH }}"
+          mkdir -p "${OUT_DIR}"
 
           CGO_ENABLED=0 GOOS=windows GOARCH=${{ matrix.GOARCH }} \
               go build -trimpath -ldflags "${LDFLAGS}" \
-              -o /tmp/out/iflygo.exe ./cmd/nebula
+              -o "${OUT_DIR}/iflygo.exe" ./cmd/nebula
           CGO_ENABLED=0 GOOS=windows GOARCH=${{ matrix.GOARCH }} \
               go build -trimpath -ldflags "${LDFLAGS}" \
-              -o /tmp/out/iflygo-cert.exe ./cmd/nebula-cert
-          ls -lh /tmp/out
+              -o "${OUT_DIR}/iflygo-cert.exe" ./cmd/nebula-cert
+          ls -lh "${OUT_DIR}"
 
-      - name: 上传二进制 artifact
+      - name: 拷贝配置模板与说明
+        shell: bash
+        run: |
+          set -eux
+          OUT_DIR="/tmp/iflygo-windows-${{ matrix.GOARCH }}"
+          cp "${GITHUB_WORKSPACE}/conf/server/config.yml" "${OUT_DIR}/server-config-template.yml"
+          cp "${GITHUB_WORKSPACE}/conf/client/config.yml" "${OUT_DIR}/client-config-template.yml"
+          cat > "${OUT_DIR}/README-windows.txt" <<EOF
+          iFlyGo Windows 原生二进制 (${{ matrix.DISPLAY_NAME }})
+          =====================================================
+          GitHub: https://github.com/iflyelf/iflygo-docker
+
+          文件说明:
+            iflygo.exe                    主程序
+            iflygo-cert.exe               证书工具
+            server-config-template.yml    Server 配置模板
+            client-config-template.yml    Client 配置模板
+
+          使用方法:
+            1. 将 iflygo.exe / iflygo-cert.exe 解压到 C:\\iflygo\\
+            2. 安装 Wintun 驱动 (https://www.wintun.net/)
+               将 wintun.dll 放到 C:\\iflygo\\ 或系统 PATH 目录
+            3. 从 server 获取 ca.crt, 并签发本机客户端证书
+            4. 参考 client-config-template.yml 创建 C:\\iflygo\\config.yml
+            5. 以管理员权限运行:
+                 C:\\iflygo\\iflygo.exe -config C:\\iflygo\\config.yml
+
+          注意:
+            - 需要管理员权限创建 TUN 虚拟网卡
+            - 防火墙需放行 UDP 6688 端口 (入站规则)
+          EOF
+          ls -lh "${OUT_DIR}"
+
+      - name: 打包 zip
+        shell: bash
+        run: |
+          set -eux
+          cd /tmp
+          zip -r -j "iflygo-windows-${{ matrix.GOARCH }}.zip" "iflygo-windows-${{ matrix.GOARCH }}"
+          ls -lh /tmp/iflygo-windows-${{ matrix.GOARCH }}.zip
+
+      - name: 上传二进制 artifact (zip)
         uses: actions/upload-artifact@v4
         with:
-          name: iflygo-windows-${{ matrix.GOARCH }}
-          path: /tmp/out/
+          name: iflygo-windows-${{ matrix.GOARCH }}-zip
+          path: /tmp/iflygo-windows-${{ matrix.GOARCH }}.zip
+          retention-days: 30
+
+      - name: 上传裸二进制 artifact (供后续构建容器使用)
+        uses: actions/upload-artifact@v4
+        with:
+          name: iflygo-windows-${{ matrix.GOARCH }}-bin
+          path: /tmp/iflygo-windows-${{ matrix.GOARCH }}/*.exe
           retention-days: 1
 
   # ============================================================
-  # 阶段二: 在 Windows runner 上打包 Windows 容器镜像
+  # 阶段二: 在 windows-2022 runner 上构建 Windows amd64 容器镜像
   # ============================================================
   build-image-amd64:
-    name: 构建 Windows amd64 容器
-    needs: build-binaries
+    name: 构建 Windows amd64 容器镜像
+    needs: build-windows-binaries
     runs-on: windows-2022
     if: github.event.repository.owner.id == github.event.sender.id
     permissions:
@@ -140,8 +194,13 @@ jobs:
       - name: 下载 amd64 二进制
         uses: actions/download-artifact@v4
         with:
-          name: iflygo-windows-amd64
+          name: iflygo-windows-amd64-bin
           path: ./bin
+
+      - name: 列出二进制文件
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path ./bin -Recurse
 
       - name: 登录 DockerHub
         uses: docker/login-action@v3
@@ -149,83 +208,74 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: 构建并发布 Windows amd64 镜像
+      - name: 构建并推送 Windows amd64 镜像
         shell: pwsh
         run: |
           docker build `
             -f Dockerfile.windows `
             --build-arg WINDOWS_BASE_TAG=ltsc2022 `
             -t ${{ secrets.DOCKER_USERNAME }}/iflygo:windows-amd64 `
+            -t ${{ secrets.DOCKER_USERNAME }}/iflygo:windows-latest `
             .
           docker push ${{ secrets.DOCKER_USERNAME }}/iflygo:windows-amd64
+          docker push ${{ secrets.DOCKER_USERNAME }}/iflygo:windows-latest
 
-  build-image-arm64:
-    name: 构建 Windows arm64 容器
-    needs: build-binaries
-    runs-on: windows-11-arm
+  # ============================================================
+  # 阶段三: 汇总所有 zip, 发布到 GitHub Release
+  # ============================================================
+  release:
+    name: 发布 Windows 二进制到 GitHub Release
+    needs: build-windows-binaries
+    runs-on: ubuntu-latest
     if: github.event.repository.owner.id == github.event.sender.id
     permissions:
       actions: write
-      contents: read
+      contents: write
 
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-
-      - name: 下载 arm64 二进制
+      - name: 下载所有 zip artifact
         uses: actions/download-artifact@v4
         with:
-          name: iflygo-windows-arm64
-          path: ./bin
+          path: ./dist
+          pattern: iflygo-windows-*-zip
+          merge-multiple: true
 
-      - name: 登录 DockerHub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      - name: 构建并发布 Windows arm64 镜像
-        shell: pwsh
-        run: |
-          docker build `
-            -f Dockerfile.windows `
-            --build-arg WINDOWS_BASE_TAG=ltsc2022 `
-            -t ${{ secrets.DOCKER_USERNAME }}/iflygo:windows-arm64 `
-            .
-          docker push ${{ secrets.DOCKER_USERNAME }}/iflygo:windows-arm64
-
-  # ============================================================
-  # 阶段三: 合并多架构 manifest list
-  # ============================================================
-  manifest:
-    name: 创建多架构 manifest
-    needs:
-      - build-image-amd64
-      - build-image-arm64
-    runs-on: ubuntu-latest
-    if: github.event.repository.owner.id == github.event.sender.id
-    steps:
-      - name: 登录 DockerHub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      - name: 创建并推送 windows-latest manifest
+      - name: 查看待发布文件
         shell: bash
-        run: |
-          docker manifest create \
-            ${{ secrets.DOCKER_USERNAME }}/iflygo:windows-latest \
-            --amend ${{ secrets.DOCKER_USERNAME }}/iflygo:windows-amd64 \
-            --amend ${{ secrets.DOCKER_USERNAME }}/iflygo:windows-arm64
-          docker manifest push ${{ secrets.DOCKER_USERNAME }}/iflygo:windows-latest
+        run: ls -lhR ./dist
+
+      - name: 发布到 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: windows-latest
+          name: iFlyGo Windows 二进制 (最新)
+          body: |
+            iFlyGo Windows 原生二进制 (amd64 / arm64)
+
+            - `iflygo-windows-amd64.zip` - 适用于 x64 CPU 的 Windows
+            - `iflygo-windows-arm64.zip` - 适用于 ARM64 CPU 的 Windows (Copilot+ PC)
+
+            解压后参考压缩包内 `README-windows.txt` 使用。
+
+            ---
+
+            **Windows 容器镜像** (仅 amd64):
+            ```
+            docker pull ${{ secrets.DOCKER_USERNAME }}/iflygo:windows-amd64
+            ```
+          files: ./dist/*.zip
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ============================================================
   # 清理旧的 workflow 记录
   # ============================================================
   cleanup:
     name: 清理旧 workflow
-    needs: manifest
+    needs:
+      - build-image-amd64
+      - release
     runs-on: ubuntu-latest
     if: github.event.repository.owner.id == github.event.sender.id
     steps:
