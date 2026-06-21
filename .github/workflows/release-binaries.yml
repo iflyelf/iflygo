@@ -1,0 +1,272 @@
+#=================================================
+# https://github.com/iflyelf/iflygo-docker
+# Lisence: MIT
+# Author: iflyelf
+# Blog: https://www.xiaonuo.live
+#
+# 统一发布工作流: 汇总所有平台二进制发布到 GitHub Release
+#   - Linux: amd64 + arm64
+#   - Windows: amd64 + arm64
+#
+# 本 workflow 可手动触发, 或由其他 workflow 通过 workflow_call 调用
+#=================================================
+
+name: 发布全平台二进制到 GitHub Release
+
+# 设置触发条件
+on:
+  # 手动触发
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag name'
+        required: false
+        default: 'latest'
+  # 可被其他 workflow 调用
+  workflow_call:
+    inputs:
+      release_tag:
+        description: 'Release tag name'
+        required: false
+        type: string
+        default: 'latest'
+
+# 任务集
+jobs:
+  # ============================================================
+  # 阶段一: 编译所有平台二进制
+  # ============================================================
+  build-all-platforms:
+    name: 编译 ${{ matrix.GOOS}}/${{ matrix.GOARCH }} 二进制
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - GOOS: linux
+            GOARCH: amd64
+            DISPLAY_NAME: Linux x64
+          - GOOS: linux
+            GOARCH: arm64
+            DISPLAY_NAME: Linux ARM64
+          - GOOS: windows
+            GOARCH: amd64
+            DISPLAY_NAME: Windows x64
+          - GOOS: windows
+            GOARCH: arm64
+            DISPLAY_NAME: Windows ARM64
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 从 Dockerfile 提取构建变量
+        id: extract_vars
+        shell: bash
+        run: |
+          set -eux
+          # 优先从 Dockerfile (Linux) 读取
+          DOCKERFILE="Dockerfile"
+          [ ! -f "${DOCKERFILE}" ] && DOCKERFILE="Dockerfile.windows"
+          
+          IFLYGO_UPSTREAM_REPO=$(grep '^ARG IFLYGO_UPSTREAM_REPO=' "${DOCKERFILE}" | cut -d'=' -f2)
+          IFLYGO_UPSTREAM_VERSION=$(grep '^ARG IFLYGO_UPSTREAM_VERSION=' "${DOCKERFILE}" | cut -d'=' -f2)
+          IFLYGO_BRAND=$(grep '^ARG IFLYGO_BRAND=' "${DOCKERFILE}" | head -1 | cut -d'=' -f2)
+          GO_VERSION=$(grep '^ARG GO_VERSION=' "${DOCKERFILE}" | cut -d'=' -f2)
+          
+          # 处理 BRAND_TITLE
+          IFLYGO_BRAND_TITLE=$(grep '^ARG IFLYGO_BRAND_TITLE=' "${DOCKERFILE}" 2>/dev/null | cut -d'=' -f2 || echo "iFlyGo")
+          
+          echo "IFLYGO_UPSTREAM_REPO=${IFLYGO_UPSTREAM_REPO}" >> $GITHUB_OUTPUT
+          echo "IFLYGO_UPSTREAM_VERSION=${IFLYGO_UPSTREAM_VERSION}" >> $GITHUB_OUTPUT
+          echo "IFLYGO_BRAND=${IFLYGO_BRAND}" >> $GITHUB_OUTPUT
+          echo "IFLYGO_BRAND_TITLE=${IFLYGO_BRAND_TITLE}" >> $GITHUB_OUTPUT
+          echo "GO_VERSION=${GO_VERSION}" >> $GITHUB_OUTPUT
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ steps.extract_vars.outputs.GO_VERSION }}
+
+      - name: 拉取上游 Nebula 源码并品牌化
+        shell: bash
+        env:
+          IFLYGO_UPSTREAM_REPO: ${{ steps.extract_vars.outputs.IFLYGO_UPSTREAM_REPO }}
+          IFLYGO_UPSTREAM_VERSION: ${{ steps.extract_vars.outputs.IFLYGO_UPSTREAM_VERSION }}
+          IFLYGO_BRAND: ${{ steps.extract_vars.outputs.IFLYGO_BRAND }}
+          BRAND_TITLE: ${{ steps.extract_vars.outputs.IFLYGO_BRAND_TITLE }}
+        run: |
+          set -eux
+          git clone --depth=1 -b "${IFLYGO_UPSTREAM_VERSION}" \
+              "${IFLYGO_UPSTREAM_REPO}" /tmp/upstream
+          cd /tmp/upstream
+          git rev-parse HEAD > /tmp/COMMIT
+
+          # 品牌化替换
+          grep -rln --include="*.go" --exclude-dir=vendor 'nebula1' . | while read -r f; do
+            sed -i 's|nebula1|'"${IFLYGO_BRAND}"'|g' "$f"
+          done || true
+
+          grep -rln --include="*.go" --exclude-dir=vendor -e '/etc/nebula' -e '/var/log/nebula' . | while read -r f; do
+            sed -i \
+              -e 's|/etc/nebula|/etc/'"${IFLYGO_BRAND}"'|g' \
+              -e 's|/var/log/nebula|/var/log/'"${IFLYGO_BRAND}"'|g' "$f"
+          done || true
+
+          grep -rln --include="*.go" --exclude-dir=vendor \
+              -e '"Nebula' -e '"nebula version' -e 'nebula -config' -e 'Usage of nebula' . | while read -r f; do
+            sed -i \
+              -e 's|"Nebula|"'"${BRAND_TITLE}"'|g' \
+              -e 's|"nebula version|"'"${IFLYGO_BRAND}"' version|g' \
+              -e 's|nebula -config|'"${IFLYGO_BRAND}"' -config|g' \
+              -e 's|Usage of nebula|Usage of '"${IFLYGO_BRAND}"'|g' "$f"
+          done || true
+
+          [ -f cmd/nebula/main.go ] && sed -i 's|"nebula"|"'"${IFLYGO_BRAND}"'"|g' cmd/nebula/main.go || true
+          [ -f cmd/nebula-cert/main.go ] && sed -i 's|"nebula-cert"|"'"${IFLYGO_BRAND}"'-cert"|g' cmd/nebula-cert/main.go || true
+
+      - name: 编译二进制
+        shell: bash
+        run: |
+          set -eux
+          cd /tmp/upstream
+          BUILD_NUMBER=$(cat /tmp/COMMIT)
+          LDFLAGS="-w -s -X main.Build=${BUILD_NUMBER}"
+          OUT_DIR="/tmp/iflygo-${{ matrix.GOOS }}-${{ matrix.GOARCH }}"
+          mkdir -p "${OUT_DIR}"
+
+          EXT=""
+          [ "${{ matrix.GOOS }}" = "windows" ] && EXT=".exe"
+
+          CGO_ENABLED=0 GOOS=${{ matrix.GOOS }} GOARCH=${{ matrix.GOARCH }} \
+              go build -trimpath -ldflags "${LDFLAGS}" \
+              -o "${OUT_DIR}/iflygo${EXT}" ./cmd/nebula
+          CGO_ENABLED=0 GOOS=${{ matrix.GOOS }} GOARCH=${{ matrix.GOARCH }} \
+              go build -trimpath -ldflags "${LDFLAGS}" \
+              -o "${OUT_DIR}/iflygo-cert${EXT}" ./cmd/nebula-cert
+          ls -lh "${OUT_DIR}"
+
+      - name: 拷贝配置模板与说明
+        shell: bash
+        run: |
+          set -eux
+          OUT_DIR="/tmp/iflygo-${{ matrix.GOOS }}-${{ matrix.GOARCH }}"
+          cp "${GITHUB_WORKSPACE}/conf/server/config.yml" "${OUT_DIR}/server-config-template.yml"
+          cp "${GITHUB_WORKSPACE}/conf/client/config.yml" "${OUT_DIR}/client-config-template.yml"
+          
+          if [ "${{ matrix.GOOS }}" = "windows" ]; then
+            cat > "${OUT_DIR}/README.txt" <<'EOF'
+iFlyGo ${{ matrix.DISPLAY_NAME }} 原生二进制
+=====================================================
+GitHub: https://github.com/iflyelf/iflygo-docker
+
+使用方法:
+  1. 安装 Wintun 驱动 (https://www.wintun.net/)
+  2. 以管理员权限运行 iflygo.exe
+  3. 参考 client-config-template.yml 配置
+EOF
+          else
+            cat > "${OUT_DIR}/README.txt" <<'EOF'
+iFlyGo ${{ matrix.DISPLAY_NAME }} 原生二进制
+=====================================================
+GitHub: https://github.com/iflyelf/iflygo-docker
+
+使用方法:
+  1. chmod +x iflygo iflygo-cert
+  2. sudo ./iflygo -config config.yml
+  3. 参考 client-config-template.yml 配置
+EOF
+          fi
+
+      - name: 打包 zip/tar.gz
+        shell: bash
+        run: |
+          set -eux
+          cd /tmp
+          if [ "${{ matrix.GOOS }}" = "windows" ]; then
+            zip -r -j "iflygo-${{ matrix.GOOS }}-${{ matrix.GOARCH }}.zip" "iflygo-${{ matrix.GOOS }}-${{ matrix.GOARCH }}"
+            ls -lh /tmp/iflygo-${{ matrix.GOOS }}-${{ matrix.GOARCH }}.zip
+          else
+            tar czf "iflygo-${{ matrix.GOOS }}-${{ matrix.GOARCH }}.tar.gz" -C "iflygo-${{ matrix.GOOS }}-${{ matrix.GOARCH }}" .
+            ls -lh /tmp/iflygo-${{ matrix.GOOS }}-${{ matrix.GOARCH }}.tar.gz
+          fi
+
+      - name: 上传二进制 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: iflygo-${{ matrix.GOOS }}-${{ matrix.GOARCH }}
+          path: /tmp/iflygo-${{ matrix.GOOS }}-${{ matrix.GOARCH }}.*
+          retention-days: 7
+
+  # ============================================================
+  # 阶段二: 汇总所有平台二进制, 发布到 GitHub Release
+  # ============================================================
+  release:
+    name: 发布全平台二进制到 GitHub Release
+    needs: build-all-platforms
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+
+    steps:
+      - name: 下载所有平台 artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: ./dist
+          merge-multiple: true
+
+      - name: 查看待发布文件
+        shell: bash
+        run: ls -lhR ./dist
+
+      - name: 发布到 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag || 'latest' }}
+          name: iFlyGo 全平台二进制 (${{ inputs.release_tag || 'latest' }})
+          body: |
+            iFlyGo 全平台原生二进制
+
+            ## Linux
+            - `iflygo-linux-amd64.tar.gz` - Linux x64
+            - `iflygo-linux-arm64.tar.gz` - Linux ARM64 (树莓派/NAS/Apple Silicon Mac)
+
+            ## Windows
+            - `iflygo-windows-amd64.zip` - Windows x64
+            - `iflygo-windows-arm64.zip` - Windows ARM64 (Copilot+ PC)
+
+            解压后参考压缩包内 `README.txt` 使用。
+
+            ---
+
+            **Docker 镜像** (推荐 Linux 用户):
+            ```bash
+            # Linux 容器 (amd64/arm64 自动选择)
+            docker pull iflyelf/iflygo:latest
+
+            # Windows 容器 (仅 amd64)
+            docker pull iflyelf/iflygo:windows-latest
+            ```
+          files: ./dist/*
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ============================================================
+  # 清理旧的 workflow 记录
+  # ============================================================
+  cleanup:
+    name: 清理旧 workflow
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: 删除旧的 GitHub-workflow
+        uses: Mattraks/delete-workflow-runs@main
+        with:
+          repository: ${{ github.repository }}
+          retain_days: 1
+          keep_minimum_runs: 0

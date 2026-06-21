@@ -4,16 +4,15 @@
 # Author: iflyelf
 # Blog: https://www.xiaonuo.live
 #
-# Windows 平台构建 (amd64 + arm64)
-#   1. 在 Linux 上交叉编译 Windows 二进制 (amd64 + arm64)
-#   2. 打包二进制 zip 并发布到 GitHub Release
-#   3. 在 windows-2022 runner 上构建 Windows amd64 容器镜像并推送
+# Windows amd64 容器镜像构建
+#   1. 在 Linux 上交叉编译 Windows amd64 二进制
+#   2. 在 windows-2022 runner 上构建并推送 amd64 镜像
 #
-# 注: Windows arm64 容器镜像需要 windows-11-arm runner + Docker,
-#     该 runner 默认未预装 Docker, 故 arm64 仅发布二进制 zip
+# 注: Windows arm64 容器镜像因 GitHub runner 限制无法构建
+#     ARM64 二进制通过 release-binaries.yml 工作流发布
 #=================================================
 
-name: 自动编译并发布 Windows 二进制和镜像
+name: 自动编译并发布 Windows 镜像
 
 # 设置触发条件
 on:
@@ -22,6 +21,7 @@ on:
     paths:
       - 'Dockerfile'
       - 'Dockerfile.windows'
+      - 'entrypoint.ps1'
       - '.github/workflows/docker-publish-windows.yml'
   # 手动触发工作流
   workflow_dispatch:
@@ -37,20 +37,12 @@ on:
 # 任务集
 jobs:
   # ============================================================
-  # 阶段一: 在 Linux 上交叉编译 Windows 二进制 (amd64 + arm64)
+  # 阶段一: 在 Linux 上交叉编译 Windows amd64 二进制
   # ============================================================
-  build-windows-binaries:
-    name: 编译 Windows 二进制 (${{ matrix.GOARCH }})
+  build-windows-amd64-bin:
+    name: 编译 Windows amd64 二进制
     runs-on: ubuntu-latest
     if: github.event.repository.owner.id == github.event.sender.id
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - GOARCH: amd64
-            DISPLAY_NAME: x64
-          - GOARCH: arm64
-            DISPLAY_NAME: ARM64
     permissions:
       actions: write
       contents: read
@@ -61,25 +53,43 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: 安装 Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
-
-      - name: 拉取上游 Nebula 源码并品牌化
+      - name: 从 Dockerfile.windows 提取构建变量
+        id: extract_vars
         shell: bash
         run: |
           set -eux
-          IFLYGO_UPSTREAM_VERSION="${IFLYGO_UPSTREAM_VERSION:-v1.10.3}"
-          IFLYGO_BRAND="iflygo"
-          BRAND_TITLE="iFlyGo"
+          IFLYGO_UPSTREAM_REPO=$(grep '^ARG IFLYGO_UPSTREAM_REPO=' Dockerfile.windows | cut -d'=' -f2)
+          IFLYGO_UPSTREAM_VERSION=$(grep '^ARG IFLYGO_UPSTREAM_VERSION=' Dockerfile.windows | cut -d'=' -f2)
+          IFLYGO_BRAND=$(grep '^ARG IFLYGO_BRAND=' Dockerfile.windows | head -1 | cut -d'=' -f2)
+          IFLYGO_BRAND_TITLE=$(grep '^ARG IFLYGO_BRAND_TITLE=' Dockerfile.windows | cut -d'=' -f2)
+          GO_VERSION=$(grep '^ARG GO_VERSION=' Dockerfile.windows | cut -d'=' -f2)
+          
+          echo "IFLYGO_UPSTREAM_REPO=${IFLYGO_UPSTREAM_REPO}" >> $GITHUB_OUTPUT
+          echo "IFLYGO_UPSTREAM_VERSION=${IFLYGO_UPSTREAM_VERSION}" >> $GITHUB_OUTPUT
+          echo "IFLYGO_BRAND=${IFLYGO_BRAND}" >> $GITHUB_OUTPUT
+          echo "IFLYGO_BRAND_TITLE=${IFLYGO_BRAND_TITLE}" >> $GITHUB_OUTPUT
+          echo "GO_VERSION=${GO_VERSION}" >> $GITHUB_OUTPUT
 
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ steps.extract_vars.outputs.GO_VERSION }}
+
+      - name: 拉取上游 Nebula 源码并品牌化
+        shell: bash
+        env:
+          IFLYGO_UPSTREAM_REPO: ${{ steps.extract_vars.outputs.IFLYGO_UPSTREAM_REPO }}
+          IFLYGO_UPSTREAM_VERSION: ${{ steps.extract_vars.outputs.IFLYGO_UPSTREAM_VERSION }}
+          IFLYGO_BRAND: ${{ steps.extract_vars.outputs.IFLYGO_BRAND }}
+          BRAND_TITLE: ${{ steps.extract_vars.outputs.IFLYGO_BRAND_TITLE }}
+        run: |
+          set -eux
           git clone --depth=1 -b "${IFLYGO_UPSTREAM_VERSION}" \
-              https://github.com/slackhq/nebula.git /tmp/upstream
+              "${IFLYGO_UPSTREAM_REPO}" /tmp/upstream
           cd /tmp/upstream
           git rev-parse HEAD > /tmp/COMMIT
 
-          # 品牌化替换 (与 Dockerfile 保持一致)
+          # 品牌化替换
           grep -rln --include="*.go" --exclude-dir=vendor 'nebula1' . | while read -r f; do
             sed -i 's|nebula1|'"${IFLYGO_BRAND}"'|g' "$f"
           done || true
@@ -102,77 +112,28 @@ jobs:
           [ -f cmd/nebula/main.go ] && sed -i 's|"nebula"|"'"${IFLYGO_BRAND}"'"|g' cmd/nebula/main.go || true
           [ -f cmd/nebula-cert/main.go ] && sed -i 's|"nebula-cert"|"'"${IFLYGO_BRAND}"'-cert"|g' cmd/nebula-cert/main.go || true
 
-      - name: 编译 Windows 二进制
+      - name: 编译 Windows amd64 二进制
         shell: bash
         run: |
           set -eux
           cd /tmp/upstream
           BUILD_NUMBER=$(cat /tmp/COMMIT)
           LDFLAGS="-w -s -X main.Build=${BUILD_NUMBER}"
-          OUT_DIR="/tmp/iflygo-windows-${{ matrix.GOARCH }}"
-          mkdir -p "${OUT_DIR}"
+          mkdir -p /tmp/out
 
-          CGO_ENABLED=0 GOOS=windows GOARCH=${{ matrix.GOARCH }} \
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
               go build -trimpath -ldflags "${LDFLAGS}" \
-              -o "${OUT_DIR}/iflygo.exe" ./cmd/nebula
-          CGO_ENABLED=0 GOOS=windows GOARCH=${{ matrix.GOARCH }} \
+              -o /tmp/out/iflygo.exe ./cmd/nebula
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
               go build -trimpath -ldflags "${LDFLAGS}" \
-              -o "${OUT_DIR}/iflygo-cert.exe" ./cmd/nebula-cert
-          ls -lh "${OUT_DIR}"
+              -o /tmp/out/iflygo-cert.exe ./cmd/nebula-cert
+          ls -lh /tmp/out
 
-      - name: 拷贝配置模板与说明
-        shell: bash
-        run: |
-          set -eux
-          OUT_DIR="/tmp/iflygo-windows-${{ matrix.GOARCH }}"
-          cp "${GITHUB_WORKSPACE}/conf/server/config.yml" "${OUT_DIR}/server-config-template.yml"
-          cp "${GITHUB_WORKSPACE}/conf/client/config.yml" "${OUT_DIR}/client-config-template.yml"
-          cat > "${OUT_DIR}/README-windows.txt" <<EOF
-          iFlyGo Windows 原生二进制 (${{ matrix.DISPLAY_NAME }})
-          =====================================================
-          GitHub: https://github.com/iflyelf/iflygo-docker
-
-          文件说明:
-            iflygo.exe                    主程序
-            iflygo-cert.exe               证书工具
-            server-config-template.yml    Server 配置模板
-            client-config-template.yml    Client 配置模板
-
-          使用方法:
-            1. 将 iflygo.exe / iflygo-cert.exe 解压到 C:\\iflygo\\
-            2. 安装 Wintun 驱动 (https://www.wintun.net/)
-               将 wintun.dll 放到 C:\\iflygo\\ 或系统 PATH 目录
-            3. 从 server 获取 ca.crt, 并签发本机客户端证书
-            4. 参考 client-config-template.yml 创建 C:\\iflygo\\config.yml
-            5. 以管理员权限运行:
-                 C:\\iflygo\\iflygo.exe -config C:\\iflygo\\config.yml
-
-          注意:
-            - 需要管理员权限创建 TUN 虚拟网卡
-            - 防火墙需放行 UDP 6688 端口 (入站规则)
-          EOF
-          ls -lh "${OUT_DIR}"
-
-      - name: 打包 zip
-        shell: bash
-        run: |
-          set -eux
-          cd /tmp
-          zip -r -j "iflygo-windows-${{ matrix.GOARCH }}.zip" "iflygo-windows-${{ matrix.GOARCH }}"
-          ls -lh /tmp/iflygo-windows-${{ matrix.GOARCH }}.zip
-
-      - name: 上传二进制 artifact (zip)
+      - name: 上传二进制 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: iflygo-windows-${{ matrix.GOARCH }}-zip
-          path: /tmp/iflygo-windows-${{ matrix.GOARCH }}.zip
-          retention-days: 30
-
-      - name: 上传裸二进制 artifact (供后续构建容器使用)
-        uses: actions/upload-artifact@v4
-        with:
-          name: iflygo-windows-${{ matrix.GOARCH }}-bin
-          path: /tmp/iflygo-windows-${{ matrix.GOARCH }}/*.exe
+          name: iflygo-windows-amd64-bin
+          path: /tmp/out/*.exe
           retention-days: 1
 
   # ============================================================
@@ -180,7 +141,7 @@ jobs:
   # ============================================================
   build-image-amd64:
     name: 构建 Windows amd64 容器镜像
-    needs: build-windows-binaries
+    needs: build-windows-amd64-bin
     runs-on: windows-2022
     if: github.event.repository.owner.id == github.event.sender.id
     permissions:
@@ -221,61 +182,11 @@ jobs:
           docker push ${{ secrets.DOCKER_USERNAME }}/iflygo:windows-latest
 
   # ============================================================
-  # 阶段三: 汇总所有 zip, 发布到 GitHub Release
-  # ============================================================
-  release:
-    name: 发布 Windows 二进制到 GitHub Release
-    needs: build-windows-binaries
-    runs-on: ubuntu-latest
-    if: github.event.repository.owner.id == github.event.sender.id
-    permissions:
-      actions: write
-      contents: write
-
-    steps:
-      - name: 下载所有 zip artifact
-        uses: actions/download-artifact@v4
-        with:
-          path: ./dist
-          pattern: iflygo-windows-*-zip
-          merge-multiple: true
-
-      - name: 查看待发布文件
-        shell: bash
-        run: ls -lhR ./dist
-
-      - name: 发布到 GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: windows-latest
-          name: iFlyGo Windows 二进制 (最新)
-          body: |
-            iFlyGo Windows 原生二进制 (amd64 / arm64)
-
-            - `iflygo-windows-amd64.zip` - 适用于 x64 CPU 的 Windows
-            - `iflygo-windows-arm64.zip` - 适用于 ARM64 CPU 的 Windows (Copilot+ PC)
-
-            解压后参考压缩包内 `README-windows.txt` 使用。
-
-            ---
-
-            **Windows 容器镜像** (仅 amd64):
-            ```
-            docker pull ${{ secrets.DOCKER_USERNAME }}/iflygo:windows-amd64
-            ```
-          files: ./dist/*.zip
-          fail_on_unmatched_files: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # ============================================================
   # 清理旧的 workflow 记录
   # ============================================================
   cleanup:
     name: 清理旧 workflow
-    needs:
-      - build-image-amd64
-      - release
+    needs: build-image-amd64
     runs-on: ubuntu-latest
     if: github.event.repository.owner.id == github.event.sender.id
     steps:

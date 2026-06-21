@@ -107,14 +107,14 @@ sudo iflygo -config ~/.config/iflygo/config.yml
 
 从 GitHub Release 下载对应架构的 zip 包：
 
-- **amd64 (x64)**: [iflygo-windows-amd64.zip](https://github.com/iflyelf/iflygo-docker/releases/download/windows-latest/iflygo-windows-amd64.zip)
-- **arm64 (ARM)**: [iflygo-windows-arm64.zip](https://github.com/iflyelf/iflygo-docker/releases/download/windows-latest/iflygo-windows-arm64.zip)
+- **amd64 (x64)**: [iflygo-windows-amd64.zip](https://github.com/iflyelf/iflygo-docker/releases/download/latest/iflygo-windows-amd64.zip)
+- **arm64 (ARM)**: [iflygo-windows-arm64.zip](https://github.com/iflyelf/iflygo-docker/releases/download/latest/iflygo-windows-arm64.zip)
 
 或通过命令下载：
 
 ```powershell
 # 下载 amd64 版本
-Invoke-WebRequest -Uri "https://github.com/iflyelf/iflygo-docker/releases/download/windows-latest/iflygo-windows-amd64.zip" -OutFile "iflygo-windows-amd64.zip"
+Invoke-WebRequest -Uri "https://github.com/iflyelf/iflygo-docker/releases/download/latest/iflygo-windows-amd64.zip" -OutFile "iflygo-windows-amd64.zip"
 
 # 解压到 C:\iflygo
 Expand-Archive -Path iflygo-windows-amd64.zip -DestinationPath C:\iflygo -Force
@@ -175,8 +175,8 @@ C:\iflygo\iflygo.exe -version
 | **Linux** | amd64 | `docker pull iflyelf/iflygo:latest` | 容器部署 |
 | **Linux** | arm64 | `docker pull iflyelf/iflygo:latest` | 容器部署 |
 | **macOS** | Apple Silicon (M1/M2/M3) | 从 `linux/arm64` 容器提取二进制 | 提取二进制 |
-| **Windows** | amd64 (x64) | Docker: `iflyelf/iflygo:windows-amd64` 或 [下载 zip](https://github.com/iflyelf/iflygo-docker/releases/download/windows-latest/iflygo-windows-amd64.zip) | 下载 zip |
-| **Windows** | arm64 (ARM) | [下载 zip](https://github.com/iflyelf/iflygo-docker/releases/download/windows-latest/iflygo-windows-arm64.zip) | 下载 zip |
+| **Windows** | amd64 (x64) | Docker: `iflyelf/iflygo:windows-amd64` 或 [下载 zip](https://github.com/iflyelf/iflygo-docker/releases/download/latest/iflygo-windows-amd64.zip) | 下载 zip |
+| **Windows** | arm64 (ARM) | [下载 zip](https://github.com/iflyelf/iflygo-docker/releases/download/latest/iflygo-windows-arm64.zip) | 下载 zip |
 
 ---
 
@@ -517,7 +517,8 @@ iflygo-docker/
 ├── Dockerfile.windows                  # Windows 容器镜像(打包原生 iflygo.exe)
 ├── docker-compose.yml                  # Docker Compose 编排文件
 ├── init.sh                             # 配置初始化脚本(自动生成证书与配置)
-├── entrypoint.sh                       # 容器入口脚本
+├── entrypoint.sh                       # Linux 容器入口脚本
+├── entrypoint.ps1                      # Windows 容器入口脚本
 ├── sign-client.sh                      # 客户端证书签发脚本
 ├── conf/
 │   ├── server/
@@ -525,8 +526,9 @@ iflygo-docker/
 │   └── client/
 │       └── config.yml                  # Client 配置模板(含中文注释)
 ├── .github/workflows/
-│   ├── docker-publish-linux.yml        # Linux 多架构(amd64/arm64)自动构建
-│   └── docker-publish-windows.yml      # Windows 二进制编译与容器构建
+│   ├── docker-publish-linux.yml        # Linux 多架构(amd64/arm64)镜像构建
+│   ├── docker-publish-windows.yml      # Windows amd64 镜像构建
+│   └── release-binaries.yml            # 全平台二进制汇总发布到 Release
 ├── .gitignore
 └── README.md
 ```

@@ -12,6 +12,21 @@
 #   2. 提取二进制: docker cp 复制 iflygo.exe 到宿主机使用
 #=================================================
 
+# ##############################################################################
+# ***** 设置 iFlyGo 构建变量 (与 Dockerfile 保持一致的单一来源) *****
+# 上游源码仓库(用于源码构建)
+ARG IFLYGO_UPSTREAM_REPO=https://github.com/slackhq/nebula.git
+# 上游版本(可在构建时通过 --build-arg IFLYGO_UPSTREAM_VERSION=vX.Y.Z 覆盖)
+ARG IFLYGO_UPSTREAM_VERSION=v1.10.3
+# 项目品牌(替换文本标识时使用)
+ARG IFLYGO_BRAND=iflygo
+# 项目品牌标题(用于显示)
+ARG IFLYGO_BRAND_TITLE=iFlyGo
+# GO 版本
+ARG GO_VERSION=1.22
+# 仓库地址
+ARG REPO_URL=https://github.com/iflyelf/iflygo-docker
+
 ARG WINDOWS_BASE_TAG=ltsc2022
 
 # 使用 Windows Server Core 作为基础镜像
@@ -43,38 +58,8 @@ RUN setx /M PATH "%PATH%;C:\iflygo\bin"
 COPY conf/server/config.yml C:\iflygo\config\server-config-template.yml
 COPY conf/client/config.yml C:\iflygo\config\client-config-template.yml
 
-# 创建启动脚本
-RUN powershell -Command `
-    $script = @' `
-Write-Host '========================================' `
-Write-Host 'iFlyGo Windows 容器' `
-Write-Host 'GitHub: https://github.com/iflyelf/iflygo-docker' `
-Write-Host '========================================' `
-Write-Host '' `
-Write-Host '二进制文件位置:' `
-Write-Host '  iflygo.exe       -> C:\iflygo\bin\iflygo.exe' `
-Write-Host '  iflygo-cert.exe  -> C:\iflygo\bin\iflygo-cert.exe' `
-Write-Host '' `
-Write-Host '配置模板位置:' `
-Write-Host '  Server 模板 -> C:\iflygo\config\server-config-template.yml' `
-Write-Host '  Client 模板 -> C:\iflygo\config\client-config-template.yml' `
-Write-Host '' `
-Write-Host '提取到 Windows 宿主机:' `
-Write-Host '  docker cp <容器ID>:C:\iflygo\bin\iflygo.exe C:\iflygo\' `
-Write-Host '  docker cp <容器ID>:C:\iflygo\bin\iflygo-cert.exe C:\iflygo\' `
-Write-Host '' `
-Write-Host '或直接下载 GitHub Release:' `
-Write-Host '  https://github.com/iflyelf/iflygo-docker/releases/latest' `
-Write-Host '' `
-Write-Host '查看版本信息:' `
-C:\iflygo\bin\iflygo.exe -version `
-Write-Host '' `
-Write-Host '========================================' `
-Write-Host '容器保持运行中... 按 Ctrl+C 停止' `
-Write-Host '========================================' `
-Start-Sleep -Seconds 2147483 `
-'@ ; `
-    Set-Content -Path C:\iflygo\entrypoint.ps1 -Value $script
+# 复制启动脚本
+COPY entrypoint.ps1 C:\iflygo\entrypoint.ps1
 
 WORKDIR C:\iflygo
 
