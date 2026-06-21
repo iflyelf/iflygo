@@ -191,6 +191,7 @@ jobs:
     if: github.event.repository.owner.id == github.event.sender.id
     permissions:
       actions: write
+      contents: read
     steps:
       - name: 删除旧的 GitHub-workflow
         uses: Mattraks/delete-workflow-runs@main
