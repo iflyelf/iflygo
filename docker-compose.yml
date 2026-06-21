@@ -31,6 +31,8 @@ services:
       - IFLYGO_NETMASK_V6=64
       ## Lighthouse 内网 IP
       #- LIGHTHOUSE_IP=10.88.0.1
+      # Lighthouse 内网 IPv6
+      #- LIGHTHOUSE_IP_V6=fd88::ffff:a58:1
       # Lighthouse 公网入口
       #- LIGHTHOUSE_PUBLIC=shanghai01.connt.xiaonuo.live:6688
       # ===== 多 Lighthouse 配置（高可用场景，注释掉使用单 lighthouse） =====
