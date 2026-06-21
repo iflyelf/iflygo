@@ -57,7 +57,7 @@ chmod +x /opt/iflygo/iflygo /opt/iflygo/iflygo-cert
 
 ### macOS (Apple Silicon / M 系列芯片)
 
-**macOS M1/M2/M3 芯片使用 Linux ARM64 二进制**。Docker Desktop for Mac 运行 Linux VM，提供两种获取方式：
+**macOS M1/M2/M3 芯片使用 Linux ARM64 二进制**。Docker Desktop for Mac 运行 Linux VM，提供三种获取方式。
 
 #### 方式一：直接下载 Linux ARM64 二进制（推荐，最简单）
 
@@ -121,18 +121,41 @@ docker run -d \
   iflyelf/iflygo:latest
 ```
 
-#### 如何使用 iflygo
+#### 安装与使用
 
-复制二进制到宿主机后，参考 [快速开始](#📦-快速开始) 章节：
-
-1. 从 server 节点获取 `ca.crt`
-2. 在 server 上签发 macOS 客户端证书（使用 `sign` 命令）
-3. 创建配置文件 `~/.config/iflygo/config.yml`（参考 `conf/client/config.yml` 模板）
-4. 运行 iflygo：
+提取或下载二进制后的配置步骤：
 
 ```bash
+# 1. 验证二进制版本
+iflygo -version
+
+# 2. 从 server 节点获取 ca.crt 并签发客户端证书
+#    在 Linux server 上执行:
+#    docker exec iflygo-server iflygo-cert sign \
+#      -name macos-client -networks "192.168.100.100/24" -groups "laptop"
+#    然后将 ca.crt, macos-client.crt, macos-client.key 复制到 macOS
+
+# 3. 创建配置目录和配置文件
+mkdir -p ~/.config/iflygo
+cd ~/.config/iflygo
+
+# 将证书文件放到此目录
+# cp /path/to/ca.crt .
+# cp /path/to/macos-client.crt .
+# cp /path/to/macos-client.key .
+
+# 4. 创建配置文件 config.yml (参考 Linux 部分的快速开始)
+#    或从解压包的 client-config-template.yml 修改
+
+# 5. 运行 iflygo (需要 sudo 权限创建 TUN 设备)
 sudo iflygo -config ~/.config/iflygo/config.yml
 ```
+
+**注意事项**：
+
+- macOS 需要 sudo 权限创建 TUN 虚拟网卡
+- 首次运行可能需允许「系统偏好设置 → 安全性与隐私」中的网络扩展权限
+- 配置模板参考 [快速开始](#📦-快速开始) 章节或解压包内的 `client-config-template.yml`
 
 ---
 
