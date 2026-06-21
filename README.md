@@ -40,12 +40,12 @@ Docker 会自动拉取匹配当前系统架构的镜像。
 
 从 GitHub Release 下载对应架构的 tar.gz：
 
-- **amd64 (x64)**: [iflygo-linux-amd64.tar.gz](https://github.com/iflyelf/iflygo-docker/releases/download/latest/iflygo-linux-amd64.tar.gz)
-- **arm64 (ARM)**: [iflygo-linux-arm64.tar.gz](https://github.com/iflyelf/iflygo-docker/releases/download/latest/iflygo-linux-arm64.tar.gz)
+- **amd64 (x64)**: [iflygo-linux-amd64.tar.gz](https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-linux-amd64.tar.gz)
+- **arm64 (ARM)**: [iflygo-linux-arm64.tar.gz](https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-linux-arm64.tar.gz)
 
 ```bash
 # 下载并解压 (以 amd64 为例)
-curl -L https://github.com/iflyelf/iflygo-docker/releases/download/latest/iflygo-linux-amd64.tar.gz -o iflygo.tar.gz
+curl -L https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-linux-amd64.tar.gz -o iflygo.tar.gz
 mkdir -p /opt/iflygo && tar xzf iflygo.tar.gz -C /opt/iflygo
 chmod +x /opt/iflygo/iflygo /opt/iflygo/iflygo-cert
 
@@ -65,7 +65,7 @@ chmod +x /opt/iflygo/iflygo /opt/iflygo/iflygo-cert
 
 ```bash
 # 下载 ARM64 二进制并解压
-curl -L https://github.com/iflyelf/iflygo-docker/releases/download/latest/iflygo-linux-arm64.tar.gz -o iflygo.tar.gz
+curl -L https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-linux-arm64.tar.gz -o iflygo.tar.gz
 sudo mkdir -p /usr/local/iflygo
 sudo tar xzf iflygo.tar.gz -C /usr/local/iflygo
 sudo chmod +x /usr/local/iflygo/iflygo /usr/local/iflygo/iflygo-cert
@@ -170,14 +170,14 @@ sudo iflygo -config ~/.config/iflygo/config.yml
 
 从 GitHub Release 下载对应架构的 zip 包：
 
-- **amd64 (x64)**: [iflygo-windows-amd64.zip](https://github.com/iflyelf/iflygo-docker/releases/download/latest/iflygo-windows-amd64.zip)
-- **arm64 (ARM)**: [iflygo-windows-arm64.zip](https://github.com/iflyelf/iflygo-docker/releases/download/latest/iflygo-windows-arm64.zip)
+- **amd64 (x64)**: [iflygo-windows-amd64.zip](https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-windows-amd64.zip)
+- **arm64 (ARM)**: [iflygo-windows-arm64.zip](https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-windows-arm64.zip)
 
 或通过命令下载：
 
 ```powershell
 # 下载 amd64 版本
-Invoke-WebRequest -Uri "https://github.com/iflyelf/iflygo-docker/releases/download/latest/iflygo-windows-amd64.zip" -OutFile "iflygo-windows-amd64.zip"
+Invoke-WebRequest -Uri "https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-windows-amd64.zip" -OutFile "iflygo-windows-amd64.zip"
 
 # 解压到 C:\iflygo
 Expand-Archive -Path iflygo-windows-amd64.zip -DestinationPath C:\iflygo -Force
@@ -235,11 +235,11 @@ C:\iflygo\iflygo.exe -version
 
 | 平台 | 架构 | 获取方式 | 推荐方式 |
 |------|------|----------|----------|
-| **Linux** | amd64 | Docker: `iflyelf/iflygo:latest` 或 [下载 tar.gz](https://github.com/iflyelf/iflygo-docker/releases/download/latest/iflygo-linux-amd64.tar.gz) | 容器部署 |
-| **Linux** | arm64 | Docker: `iflyelf/iflygo:latest` 或 [下载 tar.gz](https://github.com/iflyelf/iflygo-docker/releases/download/latest/iflygo-linux-arm64.tar.gz) | 容器部署 |
-| **macOS** | Apple Silicon (M1/M2/M3) | [下载 tar.gz](https://github.com/iflyelf/iflygo-docker/releases/download/latest/iflygo-linux-arm64.tar.gz) 或从容器提取 | 下载 tar.gz |
-| **Windows** | amd64 (x64) | Docker: `iflyelf/iflygo:windows-amd64` 或 [下载 zip](https://github.com/iflyelf/iflygo-docker/releases/download/latest/iflygo-windows-amd64.zip) | 下载 zip |
-| **Windows** | arm64 (ARM) | [下载 zip](https://github.com/iflyelf/iflygo-docker/releases/download/latest/iflygo-windows-arm64.zip) | 下载 zip |
+| **Linux** | amd64 | Docker: `iflyelf/iflygo:latest` 或 [下载 tar.gz](https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-linux-amd64.tar.gz) | 容器部署 |
+| **Linux** | arm64 | Docker: `iflyelf/iflygo:latest` 或 [下载 tar.gz](https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-linux-arm64.tar.gz) | 容器部署 |
+| **macOS** | Apple Silicon (M1/M2/M3) | [下载 tar.gz](https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-linux-arm64.tar.gz) 或从容器提取 | 下载 tar.gz |
+| **Windows** | amd64 (x64) | Docker: `iflyelf/iflygo:windows-amd64` 或 [下载 zip](https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-windows-amd64.zip) | 下载 zip |
+| **Windows** | arm64 (ARM) | [下载 zip](https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-windows-arm64.zip) | 下载 zip |
 
 ---
 
@@ -575,7 +575,7 @@ environment:
 ## 🏗️ 项目结构
 
 ```
-iflygo-docker/
+iflygo/
 ├── Dockerfile                          # Linux 多阶段构建(Go 源码编译 + 运行镜像)
 ├── Dockerfile.windows                  # Windows 容器镜像(打包原生 iflygo.exe)
 ├── docker-compose.yml                  # Docker Compose 编排文件
@@ -866,8 +866,8 @@ iflygo-cert sign -name client1 -networks "192.168.100.2/24" -groups "laptop,home
 
 ```bash
 # 1. 克隆仓库并修改配置模板
-git clone https://github.com/iflyelf/iflygo-docker.git
-cd iflygo-docker
+git clone https://github.com/iflyelf/iflygo.git
+cd iflygo
 
 # 2. 编辑配置模板（以 server 为例）
 vim conf/server/config.yml
@@ -1113,4 +1113,4 @@ MIT License - 详见 [LICENSE](LICENSE)
 
 - 作者: iflyelf
 - 博客: [https://www.xiaonuo.live](https://www.xiaonuo.live)
-- Issues: [https://github.com/iflyelf/iflygo-docker/issues](https://github.com/iflyelf/iflygo-docker/issues)
+- Issues: [https://github.com/iflyelf/iflygo/issues](https://github.com/iflyelf/iflygo/issues)

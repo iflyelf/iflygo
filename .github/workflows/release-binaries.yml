@@ -1,5 +1,5 @@
 #=================================================
-# https://github.com/iflyelf/iflygo-docker
+# https://github.com/iflyelf/iflygo
 # Lisence: MIT
 # Author: iflyelf
 # Blog: https://www.xiaonuo.live
@@ -165,7 +165,7 @@ jobs:
           {
             echo "iFlyGo ${DISPLAY_NAME} 原生二进制"
             echo "====================================================="
-            echo "GitHub: https://github.com/iflyelf/iflygo-docker"
+            echo "GitHub: https://github.com/iflyelf/iflygo"
             echo ""
             echo "使用方法:"
             if [ "${GOOS}" = "windows" ]; then

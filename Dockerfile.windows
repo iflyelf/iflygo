@@ -1,6 +1,6 @@
 # escape=`
 #=================================================
-# https://github.com/iflyelf/iflygo-docker
+# https://github.com/iflyelf/iflygo
 # Lisence: MIT
 # Author: iflyelf
 # Blog: https://www.xiaonuo.live
@@ -25,7 +25,7 @@ ARG IFLYGO_BRAND_TITLE=iFlyGo
 # GO 版本
 ARG GO_VERSION=1.22
 # 仓库地址
-ARG REPO_URL=https://github.com/iflyelf/iflygo-docker
+ARG REPO_URL=https://github.com/iflyelf/iflygo
 
 ARG WINDOWS_BASE_TAG=ltsc2022
 
@@ -37,9 +37,9 @@ LABEL org.opencontainers.image.authors="iflyelf" `
       org.opencontainers.image.vendor="iflyelf" `
       org.opencontainers.image.title="iflygo-windows" `
       org.opencontainers.image.description="iFlyGo Windows 原生二进制容器镜像" `
-      org.opencontainers.image.url="https://github.com/iflyelf/iflygo-docker" `
-      org.opencontainers.image.source="https://github.com/iflyelf/iflygo-docker" `
-      org.opencontainers.image.documentation="https://github.com/iflyelf/iflygo-docker/blob/main/README.md"
+      org.opencontainers.image.url="https://github.com/iflyelf/iflygo" `
+      org.opencontainers.image.source="https://github.com/iflyelf/iflygo" `
+      org.opencontainers.image.documentation="https://github.com/iflyelf/iflygo/blob/main/README.md"
 
 # 创建工作目录
 RUN powershell -Command `
