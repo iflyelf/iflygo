@@ -163,12 +163,6 @@ jobs:
         run: |
           Get-ChildItem -Path ./bin -Recurse
 
-      - name: 验证 Docker 状态
-        shell: pwsh
-        run: |
-          docker version
-          docker info
-
       - name: 登录 DockerHub
         uses: docker/login-action@v3
         with:
