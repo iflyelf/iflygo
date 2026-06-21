@@ -130,68 +130,70 @@ jobs:
 
       - name: 编译二进制
         shell: bash
+        env:
+          GOOS: ${{ matrix.GOOS }}
+          GOARCH: ${{ matrix.GOARCH }}
         run: |
           set -eux
           cd /tmp/upstream
           BUILD_NUMBER=$(cat /tmp/COMMIT)
           LDFLAGS="-w -s -X main.Build=${BUILD_NUMBER}"
-          OUT_DIR="/tmp/iflygo-${{ matrix.GOOS }}-${{ matrix.GOARCH }}"
+          OUT_DIR="/tmp/iflygo-${GOOS}-${GOARCH}"
           mkdir -p "${OUT_DIR}"
 
           EXT=""
-          [ "${{ matrix.GOOS }}" = "windows" ] && EXT=".exe"
+          [ "${GOOS}" = "windows" ] && EXT=".exe"
 
-          CGO_ENABLED=0 GOOS=${{ matrix.GOOS }} GOARCH=${{ matrix.GOARCH }} \
-              go build -trimpath -ldflags "${LDFLAGS}" \
+          CGO_ENABLED=0 go build -trimpath -ldflags "${LDFLAGS}" \
               -o "${OUT_DIR}/iflygo${EXT}" ./cmd/nebula
-          CGO_ENABLED=0 GOOS=${{ matrix.GOOS }} GOARCH=${{ matrix.GOARCH }} \
-              go build -trimpath -ldflags "${LDFLAGS}" \
+          CGO_ENABLED=0 go build -trimpath -ldflags "${LDFLAGS}" \
               -o "${OUT_DIR}/iflygo-cert${EXT}" ./cmd/nebula-cert
           ls -lh "${OUT_DIR}"
 
       - name: 拷贝配置模板与说明
         shell: bash
+        env:
+          DISPLAY_NAME: ${{ matrix.DISPLAY_NAME }}
+          GOOS: ${{ matrix.GOOS }}
+          GOARCH: ${{ matrix.GOARCH }}
         run: |
           set -eux
-          OUT_DIR="/tmp/iflygo-${{ matrix.GOOS }}-${{ matrix.GOARCH }}"
+          OUT_DIR="/tmp/iflygo-${GOOS}-${GOARCH}"
           cp "${GITHUB_WORKSPACE}/conf/server/config.yml" "${OUT_DIR}/server-config-template.yml"
           cp "${GITHUB_WORKSPACE}/conf/client/config.yml" "${OUT_DIR}/client-config-template.yml"
-          
-          if [ "${{ matrix.GOOS }}" = "windows" ]; then
-            cat > "${OUT_DIR}/README.txt" <<'EOF'
-iFlyGo ${{ matrix.DISPLAY_NAME }} 原生二进制
-=====================================================
-GitHub: https://github.com/iflyelf/iflygo-docker
 
-使用方法:
-  1. 安装 Wintun 驱动 (https://www.wintun.net/)
-  2. 以管理员权限运行 iflygo.exe
-  3. 参考 client-config-template.yml 配置
-EOF
-          else
-            cat > "${OUT_DIR}/README.txt" <<'EOF'
-iFlyGo ${{ matrix.DISPLAY_NAME }} 原生二进制
-=====================================================
-GitHub: https://github.com/iflyelf/iflygo-docker
-
-使用方法:
-  1. chmod +x iflygo iflygo-cert
-  2. sudo ./iflygo -config config.yml
-  3. 参考 client-config-template.yml 配置
-EOF
-          fi
+          {
+            echo "iFlyGo ${DISPLAY_NAME} 原生二进制"
+            echo "====================================================="
+            echo "GitHub: https://github.com/iflyelf/iflygo-docker"
+            echo ""
+            echo "使用方法:"
+            if [ "${GOOS}" = "windows" ]; then
+              echo "  1. 安装 Wintun 驱动 (https://www.wintun.net/)"
+              echo "  2. 以管理员权限运行 iflygo.exe"
+              echo "  3. 参考 client-config-template.yml 配置"
+            else
+              echo "  1. chmod +x iflygo iflygo-cert"
+              echo "  2. sudo ./iflygo -config config.yml"
+              echo "  3. 参考 client-config-template.yml 配置"
+            fi
+          } > "${OUT_DIR}/README.txt"
+          cat "${OUT_DIR}/README.txt"
 
       - name: 打包 zip/tar.gz
         shell: bash
+        env:
+          GOOS: ${{ matrix.GOOS }}
+          GOARCH: ${{ matrix.GOARCH }}
         run: |
           set -eux
           cd /tmp
-          if [ "${{ matrix.GOOS }}" = "windows" ]; then
-            zip -r -j "iflygo-${{ matrix.GOOS }}-${{ matrix.GOARCH }}.zip" "iflygo-${{ matrix.GOOS }}-${{ matrix.GOARCH }}"
-            ls -lh /tmp/iflygo-${{ matrix.GOOS }}-${{ matrix.GOARCH }}.zip
+          if [ "${GOOS}" = "windows" ]; then
+            zip -r -j "iflygo-${GOOS}-${GOARCH}.zip" "iflygo-${GOOS}-${GOARCH}"
+            ls -lh /tmp/iflygo-${GOOS}-${GOARCH}.zip
           else
-            tar czf "iflygo-${{ matrix.GOOS }}-${{ matrix.GOARCH }}.tar.gz" -C "iflygo-${{ matrix.GOOS }}-${{ matrix.GOARCH }}" .
-            ls -lh /tmp/iflygo-${{ matrix.GOOS }}-${{ matrix.GOARCH }}.tar.gz
+            tar czf "iflygo-${GOOS}-${GOARCH}.tar.gz" -C "iflygo-${GOOS}-${GOARCH}" .
+            ls -lh /tmp/iflygo-${GOOS}-${GOARCH}.tar.gz
           fi
 
       - name: 上传二进制 artifact
