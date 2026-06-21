@@ -519,8 +519,8 @@ iflygo-docker/
 │   └── client/
 │       └── config.yml         # Client 配置模板(含中文注释)
 ├── .github/workflows/
-│   ├── docker-publish.yml          # Linux 多架构(amd64/arm64)自动构建
-│   └── docker-publish-windows.yml  # Windows 多架构(amd64/arm64)自动构建
+│   ├── docker-publish-linux.yml        # Linux 多架构(amd64/arm64)自动构建
+│   └── docker-publish-windows.yml      # Windows 多架构(amd64/arm64)自动构建
 ├── .gitignore
 └── README.md
 ```

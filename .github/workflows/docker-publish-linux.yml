@@ -5,7 +5,7 @@
 # Blog: https://www.xiaonuo.live
 #=================================================
 
-name: 自动编译并上传镜像
+name: 自动编译并上传 Linux 镜像
 
 # 设置触发条件
 on:
@@ -13,13 +13,14 @@ on:
   push:
     paths:
       - 'Dockerfile'
+      - '.github/workflows/docker-publish-linux.yml'
   # 手动触发工作流
   workflow_dispatch:
     inputs:
       build:
-        description: 'build iflygo'
+        description: 'build iflygo linux'
         required: true
-        default: 'build iflygo'
+        default: 'build iflygo linux'
   # 定时触发编译(每天早5点)
   #schedule:
   #   - cron: '0 21 * * *'
