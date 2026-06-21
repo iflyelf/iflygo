@@ -119,23 +119,75 @@ TEMPLATE_DIR="${IFLYGO_TEMPLATE_DIR:-/opt/iflygo/templates}"
 mkdir -p "${CONF_DIR}/hosts" "${LOG_DIR}"
 
 # ------------------------------------------------------------------------------
-# 1. 自动生成 CA 与节点证书 (只在缺失且开启 AUTO_GEN_CA 时执行)
+# 1. 自动生成 CA 与节点证书
+#    - server/lighthouse 模式: 自动生成 CA (若 AUTO_GEN_CA=true), 然后签发节点证书
+#    - client 模式: 不自动生成 CA, 智能检测 3 种证书状态:
+#        a) <node>.crt + <node>.key 已存在 -> 直接使用(从服务端预签发拷贝)
+#        b) 仅 ca.crt + ca.key 存在        -> 本地签发节点证书
+#        c) 上述都不满足                    -> 每 60 秒循环检测, 等待证书就绪
 # ------------------------------------------------------------------------------
-if [ ! -f "${CONF_DIR}/ca.crt" ] || [ ! -f "${CONF_DIR}/ca.key" ]; then
-    if [ "${AUTO_GEN_CA}" = "true" ]; then
-        echo "[iflygo-init] 未发现 CA, 自动生成: ${CONF_DIR}/ca.{crt,key} (有效期: ${CA_DURATION})"
-        ( cd "${CONF_DIR}" && \
-          iflygo-cert ca -name "iFlyGo CA (${NODE})" -duration "${CA_DURATION}" )
-    else
-        echo "[iflygo-init][WARN] 未发现 CA 且 AUTO_GEN_CA=false, 请手动放置 ca.crt/ca.key"
-    fi
-fi
 
 # 节点证书文件名(基于自定义主机名, 默认取 NODE)
 HOST_CRT="${CERT_HOSTNAME}.crt"
 HOST_KEY="${CERT_HOSTNAME}.key"
 
+# 1.1 Server/Lighthouse: 自动生成 CA (若缺失且 AUTO_GEN_CA=true)
+if [ "${RUNMODE}" = "server" ] || [ "${RUNMODE}" = "lighthouse" ]; then
+    if [ ! -f "${CONF_DIR}/ca.crt" ] || [ ! -f "${CONF_DIR}/ca.key" ]; then
+        if [ "${AUTO_GEN_CA}" = "true" ]; then
+            echo "[iflygo-init] 未发现 CA, 自动生成: ${CONF_DIR}/ca.{crt,key} (有效期: ${CA_DURATION})"
+            ( cd "${CONF_DIR}" && \
+              iflygo-cert ca -name "iFlyGo CA (${NODE})" -duration "${CA_DURATION}" )
+        else
+            echo "[iflygo-init][WARN] 未发现 CA 且 AUTO_GEN_CA=false, 请手动放置 ca.crt/ca.key"
+        fi
+    fi
+fi
+
+# 1.2 Client: 等待证书就绪 (不自动生成 CA)
+if [ "${RUNMODE}" = "client" ]; then
+    # 循环检测直到满足以下任一条件:
+    #   a) <node>.crt + <node>.key 已存在 (直接用预签发的证书)
+    #   b) ca.crt + ca.key 存在 (可本地签发节点证书)
+    while :; do
+        node_cert_ok=false
+        ca_with_key_ok=false
+        ca_only_ok=false
+        
+        if [ -f "${CONF_DIR}/${HOST_CRT}" ] && [ -f "${CONF_DIR}/${HOST_KEY}" ]; then
+            node_cert_ok=true
+        fi
+        if [ -f "${CONF_DIR}/ca.crt" ] && [ -f "${CONF_DIR}/ca.key" ]; then
+            ca_with_key_ok=true
+        elif [ -f "${CONF_DIR}/ca.crt" ]; then
+            ca_only_ok=true
+        fi
+        
+        if [ "$node_cert_ok" = "true" ]; then
+            echo "[iflygo-init] ✅ 检测到预签发的节点证书: ${HOST_CRT}/${HOST_KEY} (跳过签发)"
+            break
+        elif [ "$ca_with_key_ok" = "true" ]; then
+            echo "[iflygo-init] ✅ 检测到 CA(含私钥), 将在本地签发节点证书"
+            break
+        elif [ "$ca_only_ok" = "true" ]; then
+            echo "[iflygo-init] ⚠️  仅检测到 ca.crt, 缺少 ca.key 或预签发的节点证书"
+            echo "[iflygo-init] [$(date +%H:%M:%S)] 等待中... 请将以下任一组合拷贝到 ${CONF_DIR}/:"
+            echo "[iflygo-init]   方式 A: ca.crt + ca.key  (本地签发)"
+            echo "[iflygo-init]   方式 B: ca.crt + ${HOST_CRT} + ${HOST_KEY}  (使用预签发证书)"
+            sleep 60
+        else
+            echo "[iflygo-init] ⏳ 等待 CA 证书... 请将以下任一组合拷贝到 ${CONF_DIR}/:"
+            echo "[iflygo-init]   方式 A: ca.crt + ca.key  (本地签发, 不推荐传输 ca.key)"
+            echo "[iflygo-init]   方式 B: ca.crt + ${HOST_CRT} + ${HOST_KEY}  (推荐, 服务端预签发)"
+            echo "[iflygo-init] [$(date +%H:%M:%S)] 检测间隔: 60 秒"
+            sleep 60
+        fi
+    done
+fi
+
+# 1.3 签发节点证书 (server 总是签发, client 仅在需要时签发)
 if [ ! -f "${CONF_DIR}/${HOST_CRT}" ] || [ ! -f "${CONF_DIR}/${HOST_KEY}" ]; then
+    # 需要 ca.crt + ca.key 才能签发
     if [ -f "${CONF_DIR}/ca.crt" ] && [ -f "${CONF_DIR}/ca.key" ]; then
         # 构建 -networks 参数: IPv4 必需, IPv6 可选
         NETWORKS="${IFLYGO_IP}/${IFLYGO_NETMASK}"
@@ -165,6 +217,9 @@ if [ ! -f "${CONF_DIR}/${HOST_CRT}" ] || [ ! -f "${CONF_DIR}/${HOST_KEY}" ]; the
         
         ( cd "${CONF_DIR}" && \
           iflygo-cert sign "${SIGN_ARGS[@]}" -out-crt "${HOST_CRT}" -out-key "${HOST_KEY}" )
+    else
+        echo "[iflygo-init][WARN] 缺少 ca.key, 无法签发节点证书"
+        echo "[iflygo-init] 如使用预签发证书, 请确保 ${HOST_CRT} 和 ${HOST_KEY} 已就位"
     fi
 fi
 
