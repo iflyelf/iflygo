@@ -26,6 +26,8 @@
 
 ### Linux (amd64/arm64)
 
+#### 方式一：Docker 镜像（推荐）
+
 Docker 镜像支持 Linux amd64 和 arm64 平台，可直接使用：
 
 ```bash
@@ -34,13 +36,51 @@ docker pull iflyelf/iflygo:latest
 
 Docker 会自动拉取匹配当前系统架构的镜像。
 
+#### 方式二：下载原生二进制
+
+从 GitHub Release 下载对应架构的 tar.gz：
+
+- **amd64 (x64)**: [iflygo-linux-amd64.tar.gz](https://github.com/iflyelf/iflygo-docker/releases/download/latest/iflygo-linux-amd64.tar.gz)
+- **arm64 (ARM)**: [iflygo-linux-arm64.tar.gz](https://github.com/iflyelf/iflygo-docker/releases/download/latest/iflygo-linux-arm64.tar.gz)
+
+```bash
+# 下载并解压 (以 amd64 为例)
+curl -L https://github.com/iflyelf/iflygo-docker/releases/download/latest/iflygo-linux-amd64.tar.gz -o iflygo.tar.gz
+mkdir -p /opt/iflygo && tar xzf iflygo.tar.gz -C /opt/iflygo
+chmod +x /opt/iflygo/iflygo /opt/iflygo/iflygo-cert
+
+# 验证版本
+/opt/iflygo/iflygo -version
+```
+
 ---
 
 ### macOS (Apple Silicon / M 系列芯片)
 
-**macOS M1/M2/M3 芯片使用 Linux ARM64 容器**。由于 Docker Desktop for Mac 运行 Linux VM，需要从容器中复制二进制到宿主机直接运行。
+**macOS M1/M2/M3 芯片使用 Linux ARM64 二进制**。Docker Desktop for Mac 运行 Linux VM，提供两种获取方式：
 
-#### 方法一：从容器提取二进制（推荐）
+#### 方式一：直接下载 Linux ARM64 二进制（推荐，最简单）
+
+从 GitHub Release 直接下载，无需 Docker：
+
+```bash
+# 下载 ARM64 二进制并解压
+curl -L https://github.com/iflyelf/iflygo-docker/releases/download/latest/iflygo-linux-arm64.tar.gz -o iflygo.tar.gz
+sudo mkdir -p /usr/local/iflygo
+sudo tar xzf iflygo.tar.gz -C /usr/local/iflygo
+sudo chmod +x /usr/local/iflygo/iflygo /usr/local/iflygo/iflygo-cert
+
+# 软链接到 PATH
+sudo ln -sf /usr/local/iflygo/iflygo /usr/local/bin/iflygo
+sudo ln -sf /usr/local/iflygo/iflygo-cert /usr/local/bin/iflygo-cert
+
+# 验证版本
+iflygo -version
+```
+
+> 💡 macOS 上的二进制在 Docker Desktop VM 中运行（兼容 Linux ARM64），不直接运行在 macOS 内核。如需 macOS 原生 darwin 二进制，可参考 [Nebula 上游项目](https://github.com/slackhq/nebula/releases) 自行编译。
+
+#### 方式二：从容器提取二进制
 
 ```bash
 # 1. 拉取 Linux arm64 镜像
@@ -63,7 +103,7 @@ iflygo -version
 docker rm iflygo-temp
 ```
 
-#### 方法二：在容器内运行（需配置网络）
+#### 方式三：在容器内运行（需配置网络）
 
 ```bash
 # 使用 host 网络模式 (需 Docker Desktop 最新版本)
@@ -172,9 +212,9 @@ C:\iflygo\iflygo.exe -version
 
 | 平台 | 架构 | 获取方式 | 推荐方式 |
 |------|------|----------|----------|
-| **Linux** | amd64 | `docker pull iflyelf/iflygo:latest` | 容器部署 |
-| **Linux** | arm64 | `docker pull iflyelf/iflygo:latest` | 容器部署 |
-| **macOS** | Apple Silicon (M1/M2/M3) | 从 `linux/arm64` 容器提取二进制 | 提取二进制 |
+| **Linux** | amd64 | Docker: `iflyelf/iflygo:latest` 或 [下载 tar.gz](https://github.com/iflyelf/iflygo-docker/releases/download/latest/iflygo-linux-amd64.tar.gz) | 容器部署 |
+| **Linux** | arm64 | Docker: `iflyelf/iflygo:latest` 或 [下载 tar.gz](https://github.com/iflyelf/iflygo-docker/releases/download/latest/iflygo-linux-arm64.tar.gz) | 容器部署 |
+| **macOS** | Apple Silicon (M1/M2/M3) | [下载 tar.gz](https://github.com/iflyelf/iflygo-docker/releases/download/latest/iflygo-linux-arm64.tar.gz) 或从容器提取 | 下载 tar.gz |
 | **Windows** | amd64 (x64) | Docker: `iflyelf/iflygo:windows-amd64` 或 [下载 zip](https://github.com/iflyelf/iflygo-docker/releases/download/latest/iflygo-windows-amd64.zip) | 下载 zip |
 | **Windows** | arm64 (ARM) | [下载 zip](https://github.com/iflyelf/iflygo-docker/releases/download/latest/iflygo-windows-arm64.zip) | 下载 zip |
 
