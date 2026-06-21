@@ -1,4 +1,4 @@
-# iFlyGo Docker 🚀
+# iFlyGo 🚀
 
 [![Docker Pulls](https://img.shields.io/docker/pulls/iflyelf/iflygo?style=flat-square)](https://hub.docker.com/r/iflyelf/iflygo)
 [![Docker Image Size](https://img.shields.io/docker/image-size/iflyelf/iflygo/latest?style=flat-square)](https://hub.docker.com/r/iflyelf/iflygo)
