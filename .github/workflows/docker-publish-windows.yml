@@ -189,6 +189,8 @@ jobs:
     needs: build-image-amd64
     runs-on: ubuntu-latest
     if: github.event.repository.owner.id == github.event.sender.id
+    permissions:
+      actions: write
     steps:
       - name: 删除旧的 GitHub-workflow
         uses: Mattraks/delete-workflow-runs@main

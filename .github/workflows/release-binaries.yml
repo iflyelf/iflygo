@@ -265,6 +265,8 @@ jobs:
     name: 清理旧 workflow
     needs: release
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
     steps:
       - name: 删除旧的 GitHub-workflow
         uses: Mattraks/delete-workflow-runs@main
