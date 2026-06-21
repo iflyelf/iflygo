@@ -163,11 +163,11 @@ jobs:
         run: |
           Get-ChildItem -Path ./bin -Recurse
 
-      - name: 启动 Docker 服务并切换到 Windows 容器
+      - name: 验证 Docker 状态
         shell: pwsh
         run: |
-          Start-Service docker
-          & 'C:\Program Files\Docker\Docker\DockerCli.exe' -SwitchDaemon
+          docker version
+          docker info
 
       - name: 登录 DockerHub
         uses: docker/login-action@v3
