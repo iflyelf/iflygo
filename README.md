@@ -55,17 +55,20 @@ chmod +x /opt/iflygo/iflygo /opt/iflygo/iflygo-cert
 
 ---
 
-### macOS (Apple Silicon / M 系列芯片)
+### macOS (Apple Silicon / M 系列芯片 + Intel)
 
-**macOS M1/M2/M3 芯片使用 Linux ARM64 二进制**。Docker Desktop for Mac 运行 Linux VM，提供三种获取方式。
+**macOS 原生 darwin 二进制（推荐）**。支持 Intel (amd64) 和 Apple Silicon (arm64)。
 
-#### 方式一：直接下载 Linux ARM64 二进制（推荐，最简单）
+#### 方式一：直接下载 macOS 原生二进制（推荐，最简单）
 
-从 GitHub Release 直接下载，无需 Docker：
+从 GitHub Release 下载对应架构的原生 darwin 二进制：
+
+- **Apple Silicon (M1/M2/M3)**: [iflygo-darwin-arm64.tar.gz](https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-darwin-arm64.tar.gz)
+- **Intel (x64)**: [iflygo-darwin-amd64.tar.gz](https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-darwin-amd64.tar.gz)
 
 ```bash
-# 下载 ARM64 二进制并解压
-curl -L https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-linux-arm64.tar.gz -o iflygo.tar.gz
+# 下载并解压 (以 Apple Silicon arm64 为例)
+curl -L https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-darwin-arm64.tar.gz -o iflygo.tar.gz
 sudo mkdir -p /usr/local/iflygo
 sudo tar xzf iflygo.tar.gz -C /usr/local/iflygo
 sudo chmod +x /usr/local/iflygo/iflygo /usr/local/iflygo/iflygo-cert
@@ -78,9 +81,11 @@ sudo ln -sf /usr/local/iflygo/iflygo-cert /usr/local/bin/iflygo-cert
 iflygo -version
 ```
 
-> 💡 macOS 上的二进制在 Docker Desktop VM 中运行（兼容 Linux ARM64），不直接运行在 macOS 内核。如需 macOS 原生 darwin 二进制，需从源码自行编译。
+> 💡 提示：darwin 原生二进制直接运行在 macOS 内核，无需 Docker Desktop。Intel Mac 使用 amd64 版本，Apple Silicon Mac 使用 arm64 版本。
 
-#### 方式二：从容器提取二进制
+#### 方式二：从容器提取 Linux ARM64 二进制（兼容模式）
+
+Docker Desktop for Mac 运行 Linux VM，可提取 Linux ARM64 二进制（仅适用于 Apple Silicon）：
 
 ```bash
 # 1. 拉取 Linux arm64 镜像
@@ -102,6 +107,8 @@ iflygo -version
 # 6. 删除临时容器
 docker rm iflygo-temp
 ```
+
+> ⚠️ 注意：此方式提取的是 Linux ARM64 二进制，在 Docker Desktop VM 中运行，兼容性不如 darwin 原生二进制，但可作为备选方案。
 
 #### 方式三：在容器内运行（需配置网络）
 
@@ -237,7 +244,8 @@ C:\iflygo\iflygo.exe -version
 |------|------|----------|----------|
 | **Linux** | amd64 | Docker: `iflyelf/iflygo:latest` 或 [下载 tar.gz](https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-linux-amd64.tar.gz) | 容器部署 |
 | **Linux** | arm64 | Docker: `iflyelf/iflygo:latest` 或 [下载 tar.gz](https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-linux-arm64.tar.gz) | 容器部署 |
-| **macOS** | Apple Silicon (M1/M2/M3) | [下载 tar.gz](https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-linux-arm64.tar.gz) 或从容器提取 | 下载 tar.gz |
+| **macOS** | Apple Silicon (M1/M2/M3) | [下载 darwin-arm64 tar.gz](https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-darwin-arm64.tar.gz) | 下载原生二进制 |
+| **macOS** | Intel (x64) | [下载 darwin-amd64 tar.gz](https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-darwin-amd64.tar.gz) | 下载原生二进制 |
 | **Windows** | amd64 (x64) | Docker: `iflyelf/iflygo:windows-amd64` 或 [下载 zip](https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-windows-amd64.zip) | 下载 zip |
 | **Windows** | arm64 (ARM) | [下载 zip](https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-windows-arm64.zip) | 下载 zip |
 

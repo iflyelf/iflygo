@@ -6,6 +6,7 @@
 #
 # 统一发布工作流: 汇总所有平台二进制发布到 GitHub Release
 #   - Linux: amd64 + arm64
+#   - macOS (darwin): amd64 (Intel) + arm64 (Apple Silicon)
 #   - Windows: amd64 + arm64
 #
 # 本 workflow 可手动触发, 或由其他 workflow 通过 workflow_call 调用
@@ -49,6 +50,12 @@ jobs:
           - GOOS: linux
             GOARCH: arm64
             DISPLAY_NAME: Linux ARM64
+          - GOOS: darwin
+            GOARCH: amd64
+            DISPLAY_NAME: macOS Intel (x64)
+          - GOOS: darwin
+            GOARCH: arm64
+            DISPLAY_NAME: macOS Apple Silicon (arm64)
           - GOOS: windows
             GOARCH: amd64
             DISPLAY_NAME: Windows x64
@@ -172,6 +179,11 @@ jobs:
               echo "  1. 安装 Wintun 驱动 (https://www.wintun.net/)"
               echo "  2. 以管理员权限运行 iflygo.exe"
               echo "  3. 参考 client-config-template.yml 配置"
+            elif [ "${GOOS}" = "darwin" ]; then
+              echo "  1. chmod +x iflygo iflygo-cert"
+              echo "  2. sudo ./iflygo -config config.yml"
+              echo "  3. 参考 client-config-template.yml 配置"
+              echo "  4. 首次运行需在 系统偏好设置 → 安全性与隐私 允许网络扩展"
             else
               echo "  1. chmod +x iflygo iflygo-cert"
               echo "  2. sudo ./iflygo -config config.yml"
@@ -235,7 +247,11 @@ jobs:
 
             ## Linux
             - `iflygo-linux-amd64.tar.gz` - Linux x64
-            - `iflygo-linux-arm64.tar.gz` - Linux ARM64 (树莓派/NAS/Apple Silicon Mac)
+            - `iflygo-linux-arm64.tar.gz` - Linux ARM64 (树莓派/NAS)
+
+            ## macOS (darwin 原生)
+            - `iflygo-darwin-amd64.tar.gz` - macOS Intel (x64)
+            - `iflygo-darwin-arm64.tar.gz` - macOS Apple Silicon (M1/M2/M3)
 
             ## Windows
             - `iflygo-windows-amd64.zip` - Windows x64
