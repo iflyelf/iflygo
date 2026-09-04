@@ -29,6 +29,7 @@ services:
       - IFLYGO_IP_V6=fd88::ffff:a58:1
       # IPv6 子网掩码
       - IFLYGO_NETMASK_V6=64
+      # ========== 单节点 Lighthouse 配置（注释掉使用单 lighthouse） =====
       ## Lighthouse 内网 IP
       #- LIGHTHOUSE_IP=10.88.0.1
       # Lighthouse 内网 IPv6
