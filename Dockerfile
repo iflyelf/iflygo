@@ -40,14 +40,14 @@ ENV IFLYGO_DIR=$IFLYGO_DIR
 ARG IFLYGO_UPSTREAM_REPO=https://github.com/slackhq/nebula.git
 ENV IFLYGO_UPSTREAM_REPO=$IFLYGO_UPSTREAM_REPO
 # 上游版本(可在构建时通过 --build-arg IFLYGO_UPSTREAM_VERSION=vX.Y.Z 覆盖)
-ARG IFLYGO_UPSTREAM_VERSION=v1.10.3
+ARG IFLYGO_UPSTREAM_VERSION=v1.11.1
 ENV IFLYGO_UPSTREAM_VERSION=$IFLYGO_UPSTREAM_VERSION
 # 项目品牌(替换文本标识时使用)
 ARG IFLYGO_BRAND=iflygo
 ENV IFLYGO_BRAND=$IFLYGO_BRAND
 
 # GO 环境变量
-ARG GO_VERSION=1.26.4
+ARG GO_VERSION=1.27.1
 ENV GO_VERSION=$GO_VERSION
 ARG GOROOT=/opt/go
 ENV GOROOT=$GOROOT
@@ -88,12 +88,12 @@ RUN set -eux && \
    touch /etc/apt/apt.conf.d/99verify-peer.conf && \
    echo "Acquire { https::Verify-Peer false }" >>/etc/apt/apt.conf.d/99verify-peer.conf && \
    # 更新系统软件
-   DEBIAN_FRONTEND=noninteractive apt-get update -qqy && apt-get upgrade -qqy && \
+   DEBIAN_FRONTEND=noninteractive apt update -qqy && apt upgrade -qqy && \
    # 安装编译依赖
-   DEBIAN_FRONTEND=noninteractive apt-get install -qqy --no-install-recommends $BUILD_DEPS \
+   DEBIAN_FRONTEND=noninteractive apt install -qqy $BUILD_DEPS \
        --option=Dpkg::Options::=--force-confdef && \
-   DEBIAN_FRONTEND=noninteractive apt-get -qqy --no-install-recommends autoremove --purge && \
-   DEBIAN_FRONTEND=noninteractive apt-get -qqy --no-install-recommends autoclean && \
+   DEBIAN_FRONTEND=noninteractive apt -qqy autoremove --purge && \
+   DEBIAN_FRONTEND=noninteractive apt -qqy autoclean && \
    rm -rf /var/lib/apt/lists/* && \
    # 更新时区
    ln -sf /usr/share/zoneinfo/${TZ} /etc/localtime && \
@@ -236,6 +236,8 @@ ARG PKG_DEPS="\
     iproute2 \
     net-tools \
     iptables \
+    nftables \
+    firewalld \
     iputils-ping \
     telnet \
     ncat \
@@ -279,12 +281,19 @@ RUN set -eux && \
    touch /etc/apt/apt.conf.d/99verify-peer.conf && \
    echo "Acquire { https::Verify-Peer false }" >>/etc/apt/apt.conf.d/99verify-peer.conf && \
    # 更新系统软件
-   DEBIAN_FRONTEND=noninteractive apt-get update -qqy && apt-get upgrade -qqy && \
+   DEBIAN_FRONTEND=noninteractive apt update -qqy && apt upgrade -qqy && \
    # 安装运行时依赖
-   DEBIAN_FRONTEND=noninteractive apt-get install -qqy --no-install-recommends $PKG_DEPS \
+   DEBIAN_FRONTEND=noninteractive apt install -qqy $PKG_DEPS \
        --option=Dpkg::Options::=--force-confdef && \
-   DEBIAN_FRONTEND=noninteractive apt-get -qqy --no-install-recommends autoremove --purge && \
-   DEBIAN_FRONTEND=noninteractive apt-get -qqy --no-install-recommends autoclean && \
+   # 验证依赖包是否真正安装成功(逐个检查 dpkg 状态, 缺失则构建失败)
+   for pkg in $PKG_DEPS; do \
+       if ! dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "install ok installed"; then \
+           echo "ERROR: 依赖包未成功安装: $pkg" >&2 && exit 1; \
+       fi; \
+   done && \
+   echo "所有依赖包验证通过" && \
+   DEBIAN_FRONTEND=noninteractive apt -qqy autoremove --purge && \
+   DEBIAN_FRONTEND=noninteractive apt -qqy autoclean && \
    rm -rf /var/lib/apt/lists/* && \
    # 更新时区
    ln -sf /usr/share/zoneinfo/${TZ} /etc/localtime && \
