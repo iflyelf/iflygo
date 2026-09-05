@@ -851,6 +851,235 @@ iFlyGo Certificate (version 2)
 
 > 💡 提示：通过 `print` 命令可以快速确认证书的网络地址、分组和有效期，排查配置问题。
 
+### 移动端配置（Android / iOS）
+
+移动端（Mobile Nebula App）使用与服务端相同的配置格式，但有以下关键区别：
+
+#### 配置文件差异
+
+**1. DNS 解析器配置**
+
+移动端需要额外配置 `mobile_nebula` 段，用于指定 DNS 解析器：
+
+```yaml
+# 移动端专用 DNS 配置
+mobile_nebula:
+  dns_resolvers:
+    - 10.88.0.1      # lighthouse 节点提供 DNS 服务
+    - 10.88.0.2      # 备用 DNS 服务器
+  match_domains: []  # 匹配域名列表（空表示转发所有查询）
+```
+
+**2. 证书内联格式**
+
+移动端配置文件中的证书必须使用**内联格式**（YAML 多行字符串），而非文件路径：
+
+```yaml
+# 配置证书（移动端必须内联，不支持文件路径）
+pki:
+  # 握手时使用的证书版本（1 或 2，推荐 2）
+  initiating_version: 2
+  
+  # CA 证书内容（从 ca.crt 文件复制完整内容）
+  ca: |
+    -----BEGIN NEBULA CERTIFICATE V2-----
+    CkMKIEWrgC3JKM7oaXbJBXRb3q1YLuCTvS0YWa19PnGCWj39EAEiGQoDYXBwEgZz
+    ... (ca.crt 完整内容)
+    -----END NEBULA CERTIFICATE V2-----
+  
+  # 节点证书内容（从签发的 .crt 文件复制完整内容）
+  cert: |
+    -----BEGIN NEBULA CERTIFICATE V2-----
+    CkMKIHjSN3D2gEKzEcWQ3Ll2x8sVNq9kphUt5wuKUFo8KH7hEAEiIQogRauALcko
+    ... (客户端 .crt 完整内容)
+    -----END NEBULA CERTIFICATE V2-----
+  
+  # 私钥内容（从签发的 .key 文件复制完整内容）
+  key: |
+    -----BEGIN NEBULA X25519 PRIVATE KEY-----
+    oIjQOe/xAmQnFJX/y3KMl6iWphQx7f2XOogR6xU3+C8=
+    -----END NEBULA X25519 PRIVATE KEY-----
+```
+
+#### 移动端证书签发方式
+
+**方式一：标准签发（服务端生成密钥对）**
+
+```bash
+# IPv4 单栈证书
+docker run --rm \
+  -v $(pwd)/data/server/config:/etc/iflygo \
+  iflyelf/iflygo:latest sign \
+  -name huawei80-phone \
+  -ip 10.88.11.1 \
+  -groups phone \
+  -version 2
+
+# IPv4+IPv6 双栈证书（推荐）
+docker run --rm \
+  -v $(pwd)/data/server/config:/etc/iflygo \
+  iflyelf/iflygo:latest sign \
+  -name huawei80-phone \
+  -networks "10.88.11.1/16,fd88::ffff:a58:b01/64" \
+  -groups phone \
+  -version 2
+```
+
+**方式二：使用设备公钥签发（更安全，私钥不离开设备）**
+
+适用于高安全场景，设备先在本地生成密钥对，只上传公钥到服务端签发证书：
+
+```bash
+# 1. 在移动设备上生成密钥对（通过 Mobile Nebula App 或命令行）
+#    生成 device.pub（公钥）和 device.key（私钥，保留在设备）
+
+# 2. 将 device.pub 上传到服务器，使用 -in-pub 参数签发证书
+docker run --rm \
+  -v $(pwd)/data/server/config:/etc/iflygo \
+  iflyelf/iflygo:latest sign \
+  -name huawei80-phone \
+  -networks "10.88.11.1/16,fd88::ffff:a58:b01/64" \
+  -groups phone \
+  -version 2 \
+  -in-pub /etc/iflygo/device.pub \
+  -out-crt /etc/iflygo/huawei80-phone.crt
+
+# 3. 将签发的 huawei80-phone.crt 和 ca.crt 下发到设备
+#    设备使用自己保留的 device.key 作为私钥
+```
+
+#### 完整移动端配置示例
+
+```yaml
+# 移动端 config.yml 示例（适用于 Mobile Nebula App）
+
+# 节点基础信息
+static_host_map:
+  "10.88.0.1": ["sh.example.com:6688"]     # lighthouse 1
+  "10.88.0.2": ["sg.example.com:6688"]     # lighthouse 2
+
+# 移动端 DNS 配置
+mobile_nebula:
+  dns_resolvers:
+    - 10.88.0.1
+    - 10.88.0.2
+  match_domains: []
+
+# 证书配置（内联格式）
+pki:
+  initiating_version: 2
+  ca: |
+    -----BEGIN NEBULA CERTIFICATE V2-----
+    ... ca.crt 完整内容 ...
+    -----END NEBULA CERTIFICATE V2-----
+  cert: |
+    -----BEGIN NEBULA CERTIFICATE V2-----
+    ... huawei80-phone.crt 完整内容 ...
+    -----END NEBULA CERTIFICATE V2-----
+  key: |
+    -----BEGIN NEBULA X25519 PRIVATE KEY-----
+    ... huawei80-phone.key 完整内容 ...
+    -----END NEBULA X25519 PRIVATE KEY-----
+
+# Lighthouse 配置
+lighthouse:
+  am_lighthouse: false
+  interval: 60
+  hosts:
+    - "10.88.0.1"
+    - "10.88.0.2"
+
+# 监听配置（移动端通常使用动态端口）
+listen:
+  host: "[::]"
+  port: 0
+
+# 打洞配置（移动端推荐启用）
+punchy:
+  punch: true
+  respond: true
+  delay: 1s
+
+# 中继配置（移动网络环境建议启用）
+relay:
+  relays:
+    - 10.88.0.1
+    - 10.88.0.2
+  am_relay: false
+  use_relays: true
+
+# TUN 设备配置
+tun:
+  disabled: false
+  dev: iflygo
+  drop_local_broadcast: true
+  drop_multicast: true
+  tx_queue: 500
+  mtu: 1300
+
+# 防火墙规则（移动端通常更严格）
+firewall:
+  outbound_action: drop
+  inbound_action: drop
+  
+  conntrack:
+    tcp_timeout: 12m
+    udp_timeout: 3m
+    default_timeout: 10m
+  
+  outbound:
+    - port: any
+      proto: any
+      host: any
+  
+  inbound:
+    # 允许 ICMP（ping 测试）
+    - port: any
+      proto: icmp
+      host: any
+    
+    # 仅允许 laptop 和 home 组访问移动设备的 SSH
+    - port: 22
+      proto: tcp
+      groups:
+        - laptop
+        - home
+
+# 日志配置
+logging:
+  level: info
+  format: text
+```
+
+#### 移动端配置要点
+
+| 配置项 | 移动端特殊要求 | 说明 |
+|--------|----------------|------|
+| `mobile_nebula.dns_resolvers` | ✅ 必须配置 | 指定 overlay 网络内的 DNS 服务器 |
+| `pki.ca/cert/key` | ✅ 内联格式 | 不支持文件路径，必须复制完整证书内容 |
+| `listen.port` | 建议 `0` | 动态端口适应移动网络 NAT |
+| `punchy` | 建议 `true` | 移动网络穿透必备 |
+| `relay.use_relays` | 建议 `true` | 移动网络环境中继兜底 |
+| `tun.mtu` | 建议 `1300` | 避免移动网络分片 |
+| `firewall.inbound` | 建议严格 | 移动设备安全防护 |
+
+#### 使用 IPv4/IPv6 转换工具
+
+```bash
+# 自动生成移动端双栈地址
+IPV4="10.88.11.1"
+IPV6=$(python3 ipv4_to_ipv6.py $IPV4 -p 0)
+
+# 签发双栈证书
+docker run --rm \
+  -v $(pwd)/data/server/config:/etc/iflygo \
+  iflyelf/iflygo:latest sign \
+  -name huawei80-phone \
+  -networks "$IPV4/16,$IPV6/64" \
+  -groups phone \
+  -version 2
+```
+
 ---
 
 ## 🔄 IPv4/IPv6 地址转换工具
