@@ -1,0 +1,78 @@
+# [Unit]  配置服务的描述, 规定在网络就绪之后启动。
+# [Service] 配置服务的启动、停止、重启及权限加固。
+# [Install] 配置服务所属的启动 Target。
+[Unit]
+# 描述服务
+Description=iFlyGo (overlay 网络隧道工具)
+# 项目文档地址
+Documentation=https://github.com/iflyelf/iflygo
+# 在网络就绪、DNS 可用之后启动
+After=syslog.target network-online.target nss-lookup.target
+# 依赖网络在线目标(确保网卡已配置好地址)
+Wants=network-online.target
+# 禁用启动频率限制的时间窗口
+StartLimitIntervalSec=0
+# 禁用启动尝试的次数限制
+StartLimitBurst=0
+
+[Service]
+# 启动类型:启动主进程
+Type=simple
+# 启动当前服务的命令(前台运行守护进程,读取指定配置文件)
+ExecStart=/usr/local/bin/iflygo -config /etc/iflygo/config.yml
+# 重启当前服务时执行的命令(热加载,重新读取配置)
+ExecReload=/bin/kill -s HUP $MAINPID
+# 启动服务用户
+User=root
+# 启动服务用户组
+Group=root
+# 停止方式:向主进程发 SIGTERM,由程序自身完成 TUN 接口与路由清理后退出
+KillMode=mixed
+# 停止信号(systemd 直接发给主进程)
+KillSignal=SIGTERM
+# 等待 30 秒后强制终止(留足时间清理 TUN 接口与路由表)
+TimeoutStopSec=30
+# 重启方式:仅在异常退出时重启
+Restart=on-failure
+# 重启需要等待的秒数
+RestartSec=5
+# 文件目录权限
+UMask=0022
+# 指定服务在系统日志中记录信息时使用的标识符
+SyslogIdentifier=iflygo
+# 进程标准输出
+StandardOutput=journal
+# 进程标准错误
+StandardError=journal+console
+
+# ***** 权限与加固 *****
+# 最小权限:授予网络管理能力(创建 TUN 设备 + 配置路由)
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+# 禁止进程获取新的特权
+NoNewPrivileges=true
+# 使用独立的 /tmp 命名空间
+PrivateTmp=true
+# 以只读方式保护系统目录
+ProtectSystem=strict
+# 保护用户主目录不可访问
+ProtectHome=true
+# 自动创建并授权日志目录 /var/log/iflygo(随服务生命周期管理)
+LogsDirectory=iflygo
+LogsDirectoryMode=0755
+# 允许写入的路径(配置目录 + 日志目录)
+# 注意: ProtectSystem=strict 下整个文件系统只读, 必须显式放行日志目录,
+# 否则日志初始化会报 "read-only file system"
+ReadWritePaths=/etc/iflygo /var/log/iflygo
+# 允许访问 TUN 设备节点(创建 overlay 隧道接口所需)
+DeviceAllow=/dev/net/tun rw
+
+# ***** 资源限制 *****
+# 系统文件数与进程数限制
+TasksMax=infinity
+LimitCORE=infinity
+LimitNOFILE=infinity
+LimitNPROC=infinity
+
+[Install]
+# 表示该服务所在的 Target
+WantedBy=multi-user.target

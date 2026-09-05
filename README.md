@@ -44,13 +44,36 @@ Docker 会自动拉取匹配当前系统架构的镜像。
 - **arm64 (ARM)**: [iflygo-linux-arm64.tar.gz](https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-linux-arm64.tar.gz)
 
 ```bash
-# 下载并解压 (以 amd64 为例)
-curl -L https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-linux-amd64.tar.gz -o iflygo.tar.gz
-mkdir -p /opt/iflygo && tar xzf iflygo.tar.gz -C /opt/iflygo
-chmod +x /opt/iflygo/iflygo /opt/iflygo/iflygo-cert
+# 1. 下载并解压到 /tmp (以 amd64 为例)
+wget -q -c --no-check-certificate -O /tmp/iflygo-linux-amd64.tar.gz \
+  "https://down.xiaonuo.live?url=https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-linux-amd64.tar.gz"
+tar -xzf /tmp/iflygo-linux-amd64.tar.gz -C /tmp
 
-# 验证版本
-/opt/iflygo/iflygo -version
+# 2. 原子覆盖到目标目录
+mkdir -p /usr/local/bin
+mv -f /tmp/iflygo /usr/local/bin/iflygo
+mv -f /tmp/iflygo-cert /usr/local/bin/iflygo-cert
+chmod +x /usr/local/bin/iflygo /usr/local/bin/iflygo-cert
+
+# 3. 验证版本
+iflygo -version
+
+# 4. 创建配置目录并生成配置文件
+mkdir -p /etc/iflygo
+# 手动创建配置文件 /etc/iflygo/config.yml (参考下方"快速开始"章节)
+
+# 5. 下载 systemd 服务单元到 /tmp 再替换
+wget -q -c --no-check-certificate -O /tmp/iflygo.service \
+  "https://down.xiaonuo.live?url=https://raw.githubusercontent.com/iflyelf/iflygo/main/deploy/systemd/iflygo.service"
+mv -f /tmp/iflygo.service /etc/systemd/system/iflygo.service
+
+# 6. 启动服务
+systemctl daemon-reload
+systemctl enable --now iflygo
+
+# 7. 查看服务状态
+systemctl status iflygo
+journalctl -u iflygo -f
 ```
 
 ---
@@ -67,10 +90,15 @@ chmod +x /opt/iflygo/iflygo /opt/iflygo/iflygo-cert
 - **Intel (x64)**: [iflygo-darwin-amd64.tar.gz](https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-darwin-amd64.tar.gz)
 
 ```bash
-# 下载并解压 (以 Apple Silicon arm64 为例)
-curl -L https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-darwin-arm64.tar.gz -o iflygo.tar.gz
+# 下载并解压到 /tmp (以 Apple Silicon arm64 为例)
+wget -q -c --no-check-certificate -O /tmp/iflygo-darwin-arm64.tar.gz \
+  "https://down.xiaonuo.live?url=https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-darwin-arm64.tar.gz"
+tar -xzf /tmp/iflygo-darwin-arm64.tar.gz -C /tmp
+
+# 原子覆盖到目标目录
 sudo mkdir -p /usr/local/iflygo
-sudo tar xzf iflygo.tar.gz -C /usr/local/iflygo
+sudo mv -f /tmp/iflygo /usr/local/iflygo/iflygo
+sudo mv -f /tmp/iflygo-cert /usr/local/iflygo/iflygo-cert
 sudo chmod +x /usr/local/iflygo/iflygo /usr/local/iflygo/iflygo-cert
 
 # 软链接到 PATH
@@ -183,11 +211,11 @@ sudo iflygo -config ~/.config/iflygo/config.yml
 或通过命令下载：
 
 ```powershell
-# 下载 amd64 版本
-Invoke-WebRequest -Uri "https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-windows-amd64.zip" -OutFile "iflygo-windows-amd64.zip"
+# 下载 amd64 版本到临时目录（经代理加速）
+Invoke-WebRequest -Uri "https://down.xiaonuo.live?url=https://github.com/iflyelf/iflygo/releases/download/latest/iflygo-windows-amd64.zip" -OutFile "$env:TEMP\iflygo-windows-amd64.zip"
 
-# 解压到 C:\iflygo
-Expand-Archive -Path iflygo-windows-amd64.zip -DestinationPath C:\iflygo -Force
+# 解压到 C:\iflygo（-Force 覆盖已存在文件）
+Expand-Archive -Path "$env:TEMP\iflygo-windows-amd64.zip" -DestinationPath C:\iflygo -Force
 ```
 
 安装与使用：
