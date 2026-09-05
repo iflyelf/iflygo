@@ -853,6 +853,84 @@ iFlyGo Certificate (version 2)
 
 ---
 
+## 🔄 IPv4/IPv6 地址转换工具
+
+项目提供 `ipv4_to_ipv6.py` 脚本，可快速将 IPv4 地址转换为 `fd88::ffff:` 前缀的 IPv6 地址，用于配置双栈网络。
+
+### 使用方法
+
+```bash
+# 基础用法（默认 /64 前缀）
+python3 ipv4_to_ipv6.py 10.88.0.1
+# 输出: fd88::ffff:a58:1/64
+
+# 指定前缀长度
+python3 ipv4_to_ipv6.py 10.88.0.100 --prefix 128
+# 输出: fd88::ffff:a58:64/128
+
+# 批量转换（结合 shell）
+for ip in 10.88.0.{1..5}; do
+  echo "$ip -> $(python3 ipv4_to_ipv6.py $ip)"
+done
+```
+
+### 转换示例
+
+| IPv4 地址 | IPv6 地址（/64） |
+|-----------|------------------|
+| `10.88.0.1` | `fd88::ffff:a58:1/64` |
+| `10.88.0.2` | `fd88::ffff:a58:2/64` |
+| `10.88.0.100` | `fd88::ffff:a58:64/64` |
+| `10.88.1.1` | `fd88::ffff:a58:101/64` |
+| `192.168.1.1` | `fd88::ffff:c0a8:101/64` |
+
+### 在证书签发中使用
+
+```bash
+# 使用脚本自动生成 IPv6 地址
+IPV4="10.88.0.101"
+IPV6=$(python3 ipv4_to_ipv6.py $IPV4 -p 64 | cut -d'/' -f1)
+
+# 签发双栈证书
+docker run --rm \
+  -v $(pwd)/data/server/config:/etc/iflygo \
+  iflyelf/iflygo:latest sign \
+  -name client-dual-stack \
+  -ip $IPV4 \
+  -ip6 $IPV6
+```
+
+### 在配置文件中使用
+
+```bash
+# 批量生成 lighthouse 配置
+cat << EOF
+static_host_map:
+  "10.88.0.1": ["1.2.3.4:6688"]
+  "$(python3 ipv4_to_ipv6.py 10.88.0.1 -p 0)": ["1.2.3.4:6688"]
+EOF
+```
+
+### 参数说明
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `ipv4_address` | 要转换的 IPv4 地址（必填） | - |
+| `-p, --prefix` | IPv6 前缀长度 | 64 |
+
+### 作为 Python 模块使用
+
+```python
+# 导入模块
+from ipv4_to_ipv6 import convert_ipv4_to_ipv6
+
+# 转换地址
+ipv6_addr = convert_ipv4_to_ipv6("10.88.0.1", prefix_length=64)
+print(ipv6_addr)  # fd88::ffff:a58:1/64
+```
+
+---
+
 ## 🔥 防火墙规则
 
 iFlyGo 使用基于证书 `groups` 的防火墙规则。示例：
