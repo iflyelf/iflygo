@@ -1,0 +1,93 @@
+#=================================================
+# https://github.com/iflyelf/iflygo
+# Lisence: MIT
+# Author: iflyelf
+# Blog: https://www.xiaonuo.live
+#=================================================
+
+name: 更新 iFlyGo 上游(nebula)版本号
+
+# 设置触发条件
+on:
+  # 定时检查(中国时间每天早4点, UTC 前一天20点; 早于镜像构建的5点)
+  schedule:
+    - cron: '0 20 * * *'
+  # 手动触发
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'update nebula upstream version'
+        required: false
+        default: 'manual check'
+
+# 同一分支仅保留最新一次检查
+concurrency:
+  group: update-version-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  update-version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: 获取 nebula 最新稳定版本号
+      id: ver
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        # /releases/latest 仅返回正式版(自动排除 prerelease: alpha/beta/rc)
+        LATEST=$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+          "https://api.github.com/repos/slackhq/nebula/releases/latest" \
+          | jq -r '.tag_name // empty')
+        # 二次校验: 排除包含 alpha/beta/rc 等不稳定标识的 tag
+        if echo "$LATEST" | grep -qiE '(alpha|beta|rc|dev|test|preview|snapshot)'; then
+          echo "最新 tag ($LATEST) 为不稳定版本, 跳过"
+          LATEST=""
+        fi
+        if [ -z "$LATEST" ]; then
+          echo "获取 nebula 最新稳定版本失败" >&2
+          exit 1
+        fi
+        echo "最新稳定版本: ${LATEST}"
+        echo "latest=${LATEST}" >> "$GITHUB_OUTPUT"
+
+    - name: 读取当前 Dockerfile 版本号
+      id: current
+      run: |
+        CURRENT=$(grep -oP 'ARG IFLYGO_UPSTREAM_VERSION=\K.*' Dockerfile | head -1)
+        echo "当前版本: ${CURRENT}"
+        echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
+
+    - name: 更新 Dockerfile 并提交
+      if: steps.ver.outputs.latest != steps.current.outputs.current
+      env:
+        LATEST: ${{ steps.ver.outputs.latest }}
+        CURRENT: ${{ steps.current.outputs.current }}
+      run: |
+        echo "发现新版本: ${CURRENT} => ${LATEST}, 更新 Dockerfile"
+        sed -i "s/^ARG IFLYGO_UPSTREAM_VERSION=.*/ARG IFLYGO_UPSTREAM_VERSION=${LATEST}/" Dockerfile
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add Dockerfile
+        git commit -m "chore: 更新 iFlyGo 上游(nebula)版本 ${CURRENT} => ${LATEST}"
+        git push
+
+    - name: 无需更新
+      if: steps.ver.outputs.latest == steps.current.outputs.current
+      run: echo "已是最新稳定版本 ${{ steps.current.outputs.current }}, 无需更新"
+
+    - name: 删除旧的GitHub-workflow
+      uses: Mattraks/delete-workflow-runs@main
+      with:
+        repository: ${{ github.repository }}
+        retain_days: 1
+        keep_minimum_runs: 3    #保留多少个workflow不删除

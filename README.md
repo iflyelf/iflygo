@@ -31,7 +31,11 @@
 Docker 镜像支持 Linux amd64 和 arm64 平台，可直接使用：
 
 ```bash
+# Docker Hub（国外）
 docker pull iflyelf/iflygo:latest
+
+# 华为云 SWR（国内推荐）
+docker pull swr.cn-east-3.myhuaweicloud.com/iflyelf/iflygo:latest
 ```
 
 Docker 会自动拉取匹配当前系统架构的镜像。
@@ -1443,6 +1447,49 @@ ip route | grep iflygo
 # 查看连接
 iflygo -config /etc/iflygo/config.yml -print-tunnel-info
 ```
+
+---
+
+## 🏗️ 构建与镜像
+
+采用**多阶段构建**，运行镜像基于 `iflyelf/ubuntu:lite`，体积更小。
+
+| 阶段 | 基础镜像 | 作用 |
+| --- | --- | --- |
+| builder | `iflyelf/ubuntu:latest` | 已预装 Go 与完整工具链，无需再装 Go 与编译依赖，拉取上游 nebula 源码、品牌化并交叉编译 iflygo / iflygo-cert 静态二进制 |
+| runtime | `iflyelf/ubuntu:lite` | iflygo 为静态二进制，仅拷贝产物 + 按需装 iptables / conntrack / net-tools / ncat，入口用 tini |
+
+Go 编译采用从上游 `go.mod` 读取声明版本并用 `GOTOOLCHAIN` 精确锁定（major.minor 自动补 `.0`），避免基础镜像 Go 版本过高导致的编译不兼容。
+
+### 镜像获取
+
+```bash
+# Docker Hub（国外）
+docker pull iflyelf/iflygo:latest
+
+# 华为云 SWR（国内推荐）
+docker pull swr.cn-east-3.myhuaweicloud.com/iflyelf/iflygo:latest
+```
+
+### 自动构建
+
+推送 `Dockerfile`、`conf/**`、`init.sh`、`entrypoint.sh` 或工作流变更、手动触发、Star 仓库，
+或**中国时间每天早 5 点**（UTC 21:00）定时触发 [docker-publish-linux.yml](./.github/workflows/docker-publish-linux.yml)，
+构建并推送到 Docker Hub 与华为云 SWR。同一分支仅保留最新一次构建（`concurrency` + `cancel-in-progress`）。
+
+### 上游版本自动更新
+
+[update-version.yml](./.github/workflows/update-version.yml) 每天中国时间早 4 点调用 GitHub API
+获取上游 [slackhq/nebula](https://github.com/slackhq/nebula) 最新**正式版**（`/releases/latest` 自动排除
+alpha/beta/rc 并二次校验），若与 Dockerfile 中的 `IFLYGO_UPSTREAM_VERSION` 不同则自动更新并提交，进而触发镜像重建。
+
+### 所需 Secrets
+
+| Secret | 说明 |
+| --- | --- |
+| `DOCKER_USERNAME` / `DOCKER_PASSWORD` | Docker Hub 凭据 |
+| `SWR_USERNAME` / `SWR_PASSWORD` | 华为云 SWR 登录凭据 |
+| `SWR_AK` / `SWR_SK` | 华为云账号 AK/SK，用于将 SWR 仓库设为公开（可选） |
 
 ---
 

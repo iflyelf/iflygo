@@ -1,125 +1,59 @@
-#############################
-#     设置公共的变量          #
-#############################
-ARG BASE_IMAGE_TAG=resolute
-FROM ubuntu:${BASE_IMAGE_TAG} AS base
-
-# 作者描述信息
-LABEL org.opencontainers.image.authors="iflyelf" \
-      org.opencontainers.image.vendor="iflyelf" \
-      org.opencontainers.image.title="iflygo" \
-      org.opencontainers.image.description="iFlyGo overlay 安全网络隧道"
-
-# 时区设置
-ARG TZ=Asia/Shanghai
-ENV TZ=$TZ
-# 语言设置
-ARG LANG=zh_CN.UTF-8
-ENV LANG=$LANG
-
-# 镜像变量
-ARG DOCKER_IMAGE=iflyelf/iflygo
-ENV DOCKER_IMAGE=$DOCKER_IMAGE
-ARG DOCKER_IMAGE_OS=ubuntu
-ENV DOCKER_IMAGE_OS=$DOCKER_IMAGE_OS
-ARG DOCKER_IMAGE_TAG=resolute
-ENV DOCKER_IMAGE_TAG=$DOCKER_IMAGE_TAG
-
-# 环境设置
-ARG DEBIAN_FRONTEND=noninteractive
-ENV DEBIAN_FRONTEND=$DEBIAN_FRONTEND
+#############################################################################
+#  iFlyGo 多阶段构建 (基于 slackhq/nebula, 品牌化为 iflygo)
+#  - builder(编译阶段) = iflyelf/ubuntu:latest
+#      已预装 Go / build-essential / git 等完整工具链, 无需再装 Go 与
+#      编译依赖, 直接交叉编译 iflygo / iflygo-cert 静态二进制。
+#  - runtime(运行阶段) = iflyelf/ubuntu:lite
+#      iflygo 为静态二进制, 仅拷贝产物 + 按需装网络工具(iptables 等),
+#      镜像更小。
+#############################################################################
 
 # ##############################################################################
-# ***** 设置 iFlyGo 构建变量 *****
-
-# 工作目录(运行时)
-ARG IFLYGO_DIR=/data/iflygo
-ENV IFLYGO_DIR=$IFLYGO_DIR
+# ***** iFlyGo 全局构建变量 *****
 
 # 上游源码仓库(用于源码构建)
 ARG IFLYGO_UPSTREAM_REPO=https://github.com/slackhq/nebula.git
-ENV IFLYGO_UPSTREAM_REPO=$IFLYGO_UPSTREAM_REPO
-# 上游版本(可在构建时通过 --build-arg IFLYGO_UPSTREAM_VERSION=vX.Y.Z 覆盖)
+# 上游版本(由 update-version 工作流自动更新; 也可 --build-arg 覆盖)
 ARG IFLYGO_UPSTREAM_VERSION=v1.11.1
-ENV IFLYGO_UPSTREAM_VERSION=$IFLYGO_UPSTREAM_VERSION
 # 项目品牌(替换文本标识时使用)
 ARG IFLYGO_BRAND=iflygo
-ENV IFLYGO_BRAND=$IFLYGO_BRAND
-
-# GO 环境变量
-ARG GO_VERSION=1.27.1
-ENV GO_VERSION=$GO_VERSION
-ARG GOROOT=/opt/go
-ENV GOROOT=$GOROOT
-ARG GOPATH=/opt/golang
-ENV GOPATH=$GOPATH
-# Go 模块代理(加速依赖下载, 国内构建必备; 海外可改为 https://proxy.golang.org,direct)
-ARG GOPROXY=https://goproxy.cn,direct
-ENV GOPROXY=$GOPROXY
-
-# 构建依赖
-ARG BUILD_DEPS="\
-    build-essential \
-    ca-certificates \
-    curl \
-    wget \
-    git \
-    pkg-config \
-    xz-utils"
-ENV BUILD_DEPS=$BUILD_DEPS
+# 工作目录(运行时)
+ARG IFLYGO_DIR=/data/iflygo
 
 
 ####################################
 #  阶段一: 构建 iFlyGo 二进制(Go)    #
 ####################################
-FROM base AS builder
+FROM iflyelf/ubuntu:latest AS builder
 
-# buildx 自动注入的目标平台 (amd64/arm64/arm/386 等), 用于按架构下载对应 Go 包并交叉编译
+LABEL org.opencontainers.image.authors="iflyelf" \
+      org.opencontainers.image.vendor="iflyelf" \
+      org.opencontainers.image.title="iflygo" \
+      org.opencontainers.image.description="iFlyGo overlay 安全网络隧道"
+
+# 时区/语言
+ARG TZ=Asia/Shanghai
+ENV TZ=$TZ
+ARG LANG=zh_CN.UTF-8
+ENV LANG=$LANG
+ARG DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=$DEBIAN_FRONTEND
+
+# 继承全局构建变量
+ARG IFLYGO_UPSTREAM_REPO
+ARG IFLYGO_UPSTREAM_VERSION
+ARG IFLYGO_BRAND
+ENV IFLYGO_UPSTREAM_REPO=$IFLYGO_UPSTREAM_REPO \
+    IFLYGO_UPSTREAM_VERSION=$IFLYGO_UPSTREAM_VERSION \
+    IFLYGO_BRAND=$IFLYGO_BRAND
+
+# Go 交叉编译环境(Go 与工具链已由 iflyelf/ubuntu:latest 预装)
+ARG GOPROXY=https://goproxy.cn,direct
+ENV GOPROXY=$GOPROXY
+# buildx 自动注入的目标平台, 用于交叉编译
 ARG TARGETOS
 ARG TARGETARCH
 ARG TARGETVARIANT
-
-# ***** 安装基础依赖(只装编译需要的, 保持构建层精简) *****
-RUN set -eux && \
-   # 更新源地址(走阿里云加速)
-   sed -i 's@URIs: http://[a-z.]*\.ubuntu\.com/ubuntu/@URIs: https://mirrors.aliyun.com/ubuntu/@g' /etc/apt/sources.list.d/ubuntu.sources && \
-   sed -i 's@^Types: deb$@Types: deb deb-src@' /etc/apt/sources.list.d/ubuntu.sources && \
-   # 解决证书认证失败问题
-   touch /etc/apt/apt.conf.d/99verify-peer.conf && \
-   echo "Acquire { https::Verify-Peer false }" >>/etc/apt/apt.conf.d/99verify-peer.conf && \
-   # 更新系统软件
-   DEBIAN_FRONTEND=noninteractive apt update -qqy && apt upgrade -qqy && \
-   # 安装编译依赖
-   DEBIAN_FRONTEND=noninteractive apt install -qqy $BUILD_DEPS \
-       --option=Dpkg::Options::=--force-confdef && \
-   DEBIAN_FRONTEND=noninteractive apt -qqy autoremove --purge && \
-   DEBIAN_FRONTEND=noninteractive apt -qqy autoclean && \
-   rm -rf /var/lib/apt/lists/* && \
-   # 更新时区
-   ln -sf /usr/share/zoneinfo/${TZ} /etc/localtime && \
-   echo ${TZ} > /etc/timezone
-
-# ***** 安装 Go 工具链(按 buildx 目标架构选择二进制包) *****
-RUN set -eux && \
-    case "${TARGETARCH}" in \
-        amd64)   GO_ARCH=amd64   ;; \
-        arm64)   GO_ARCH=arm64   ;; \
-        arm)     GO_ARCH=armv6l  ;; \
-        386)     GO_ARCH=386     ;; \
-        ppc64le) GO_ARCH=ppc64le ;; \
-        s390x)   GO_ARCH=s390x   ;; \
-        riscv64) GO_ARCH=riscv64 ;; \
-        *)       echo "不支持的架构: ${TARGETARCH}" && exit 1 ;; \
-    esac && \
-    echo "目标架构: ${TARGETARCH} => Go 包: linux-${GO_ARCH}" && \
-    wget --no-check-certificate \
-         "https://go.dev/dl/go${GO_VERSION}.linux-${GO_ARCH}.tar.gz" \
-         -O /tmp/go.tar.gz && \
-    tar xzf /tmp/go.tar.gz -C /opt && \
-    mkdir -pv ${GOPATH}/bin && \
-    rm -f /tmp/go.tar.gz && \
-    ln -sf /opt/go/bin/* /usr/bin/ && \
-    go version
 
 # ##############################################################################
 # ***** 拉取上游源码 *****
@@ -134,8 +68,6 @@ RUN set -eux && \
 # 注意:
 #   - 不动 Go import path 及其包名(否则编译失败)
 #   - 仅替换字符串字面量、默认值、用户可见输出
-#   - 替换包括: 默认 tun 接口名、默认配置目录(/etc -> /etc/iflygo)、
-#               日志/CLI/Banner 中的旧品牌字样、示例配置中的标识
 WORKDIR /src/upstream
 RUN set -eux && \
     BRAND="${IFLYGO_BRAND}" && \
@@ -151,7 +83,6 @@ RUN set -eux && \
             -e 's|/var/log/nebula|/var/log/'"${BRAND}"'|g' "$f"; \
     done; \
     # 3) CLI/banner/help 文本中的旧品牌词形替换为新品牌
-    #    仅匹配明确字符串字面量, 避免误伤
     grep -rln --include="*.go" --exclude-dir=vendor \
         -e '"Nebula' -e '"nebula version' -e 'nebula -config' -e 'Usage of nebula' . | while read -r f; do \
         sed -i \
@@ -181,33 +112,39 @@ RUN set -eux && \
     true
 
 # ##############################################################################
-# ***** 编译 iflygo / iflygo-cert (纯 Go, 静态链接, 跨平台 buildx 自动设置 GOOS/GOARCH) *****
-# 主二进制对应 ./cmd/nebula
-# 证书工具对应 ./cmd/nebula-cert
-RUN set -eux && \
+# ***** 编译 iflygo / iflygo-cert (纯 Go, 静态链接) *****
+# 从 go.mod 读取 Go 版本并用 GOTOOLCHAIN 精确锁定, 避免基础镜像 Go 版本
+# 过高导致的编译不兼容; major.minor(如 1.22) 需补 .0 才是有效工具链版本。
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/opt/golang/pkg/mod \
+    set -eux && \
     mkdir -p /out && \
     cd /src/upstream && \
+    GOVER=$(grep -oP '^go \K[0-9]+\.[0-9]+(\.[0-9]+)?' go.mod | head -1) && \
+    case "$GOVER" in *.*.*) GOTOOLCHAIN=go${GOVER} ;; *.*) GOTOOLCHAIN=go${GOVER}.0 ;; esac && \
+    export GOTOOLCHAIN && \
+    echo "iflygo(nebula) 要求 Go ${GOVER}, 锁定 GOTOOLCHAIN=${GOTOOLCHAIN}" && \
+    go version && \
     BUILD_NUMBER=$(cat /src/COMMIT) && \
     LDFLAGS="-w -s -X main.Build=${BUILD_NUMBER}" && \
     CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
         go build -trimpath -ldflags "${LDFLAGS}" -o /out/iflygo      ./cmd/nebula && \
     CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
         go build -trimpath -ldflags "${LDFLAGS}" -o /out/iflygo-cert ./cmd/nebula-cert && \
-    /out/iflygo -version || true && \
-    /out/iflygo-cert -h    || true && \
+    # 校验产物存在(不加 || true, 编译失败必须让构建失败)
+    test -x /out/iflygo && test -x /out/iflygo-cert && \
     ls -lh /out
 
 
 ##########################################
 #         阶段二: 构建运行时镜像           #
 ##########################################
-FROM base
+FROM iflyelf/ubuntu:lite
 
-# 作者描述信息
 LABEL org.opencontainers.image.authors="iflyelf" \
       org.opencontainers.image.vendor="iflyelf" \
       org.opencontainers.image.title="iflygo" \
-      org.opencontainers.image.description="iFlyGo overlay 安全网络隧道"
+      org.opencontainers.image.description="iFlyGo overlay 安全网络隧道, runtime on ubuntu:lite"
 
 ARG TARGETARCH
 ARG TARGETVARIANT
@@ -218,6 +155,12 @@ ENV TZ=$TZ
 # 语言设置
 ARG LANG=zh_CN.UTF-8
 ENV LANG=$LANG
+ARG DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=$DEBIAN_FRONTEND
+
+# 镜像变量
+ARG DOCKER_IMAGE=iflyelf/iflygo
+ENV DOCKER_IMAGE=$DOCKER_IMAGE
 
 # iFlyGo 运行时变量
 ARG IFLYGO_DIR=/data/iflygo
@@ -227,82 +170,37 @@ ENV IFLYGO_CONF_DIR=/etc/iflygo
 # 日志目录
 ENV IFLYGO_LOG_DIR=/var/log/iflygo
 
-# 安装运行时依赖包
-ARG PKG_DEPS="\
-    zsh \
-    bash \
-    bash-completion \
-    bind9-dnsutils \
-    iproute2 \
-    net-tools \
+# ***** 运行阶段按需依赖 *****
+# iflygo 为静态二进制, 无动态库依赖。ubuntu:lite 已含 zsh/bash/iproute2/nftables/
+#   ipset/iputils-ping/telnet/tcpdump/procps/psmisc/sysstat/lsof/htop/jq/git/vim/
+#   curl/wget/axel/zip/unzip/tar/tini/tzdata/ca-certificates/locales/bind9-dnsutils,
+#   此处仅补装 overlay 隧道/路由排障相关的网络工具:
+#     iptables/conntrack -> NAT 与连接跟踪
+#     net-tools          -> ifconfig/route 等传统工具
+#     ncat               -> 端口连通性测试
+ARG RUNTIME_DEPS="\
     iptables \
-    nftables \
-    firewalld \
-    iputils-ping \
-    telnet \
-    ncat \
-    tcpdump \
     conntrack \
-    ipset \
-    procps \
-    psmisc \
-    sysstat \
-    lsof \
-    htop \
-    jq \
-    git \
-    vim \
-    curl \
-    wget \
-    axel \
-    zip \
-    unzip \
-    tar \
-    rsync \
-    tini \
-    tzdata \
-    ca-certificates \
-    gnupg2 \
-    locales \
-    language-pack-zh-hans \
-    fonts-droid-fallback \
-    fonts-wqy-zenhei \
-    fonts-wqy-microhei \
-    fonts-arphic-ukai \
-    fonts-arphic-uming"
-ENV PKG_DEPS=$PKG_DEPS
+    net-tools \
+    ncat"
+ENV RUNTIME_DEPS=$RUNTIME_DEPS
 
 # ***** 安装运行时依赖 *****
 RUN set -eux && \
-   # 更新源地址(走阿里云加速)
-   sed -i 's@URIs: http://[a-z.]*\.ubuntu\.com/ubuntu/@URIs: https://mirrors.aliyun.com/ubuntu/@g' /etc/apt/sources.list.d/ubuntu.sources && \
-   sed -i 's@^Types: deb$@Types: deb deb-src@' /etc/apt/sources.list.d/ubuntu.sources && \
-   # 解决证书认证失败问题
-   touch /etc/apt/apt.conf.d/99verify-peer.conf && \
-   echo "Acquire { https::Verify-Peer false }" >>/etc/apt/apt.conf.d/99verify-peer.conf && \
-   # 更新系统软件
-   DEBIAN_FRONTEND=noninteractive apt update -qqy && apt upgrade -qqy && \
-   # 安装运行时依赖
-   DEBIAN_FRONTEND=noninteractive apt install -qqy $PKG_DEPS \
+   DEBIAN_FRONTEND=noninteractive apt-get update -qqy && apt-get upgrade -qqy && \
+   DEBIAN_FRONTEND=noninteractive apt-get install -qqy --no-install-recommends $RUNTIME_DEPS \
        --option=Dpkg::Options::=--force-confdef && \
    # 验证依赖包是否真正安装成功(逐个检查 dpkg 状态, 缺失则构建失败)
-   for pkg in $PKG_DEPS; do \
+   for pkg in $RUNTIME_DEPS; do \
        if ! dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "install ok installed"; then \
            echo "ERROR: 依赖包未成功安装: $pkg" >&2 && exit 1; \
        fi; \
    done && \
-   echo "所有依赖包验证通过" && \
-   DEBIAN_FRONTEND=noninteractive apt -qqy autoremove --purge && \
-   DEBIAN_FRONTEND=noninteractive apt -qqy autoclean && \
-   rm -rf /var/lib/apt/lists/* && \
-   # 更新时区
-   ln -sf /usr/share/zoneinfo/${TZ} /etc/localtime && \
-   echo ${TZ} > /etc/timezone && \
-   # 默认 shell 切换到 zsh(可选)
-   sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" || true && \
-   sed -i -e "s/bin\/ash/bin\/zsh/" /etc/passwd && \
-   find /usr/share/vim -name defaults.vim -exec sed -i -e 's/mouse=/mouse-=/g' {} + || true && \
-   locale-gen zh_CN.UTF-8 && localedef -f UTF-8 -i zh_CN zh_CN.UTF-8 && locale-gen
+   echo "运行依赖验证通过" && \
+   DEBIAN_FRONTEND=noninteractive apt-get -qqy autoremove --purge && \
+   DEBIAN_FRONTEND=noninteractive apt-get -qqy autoclean && \
+   rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/* && \
+   ln -sf /usr/share/zoneinfo/${TZ} /etc/localtime && echo ${TZ} > /etc/timezone
 
 # ***** 拷贝构建产物(iflygo / iflygo-cert) *****
 COPY --from=builder /out/iflygo      /usr/local/bin/iflygo
