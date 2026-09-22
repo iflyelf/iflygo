@@ -14,7 +14,7 @@
 # 上游源码仓库(用于源码构建)
 ARG IFLYGO_UPSTREAM_REPO=https://github.com/slackhq/nebula.git
 # 上游版本(由 update-version 工作流自动更新; 也可 --build-arg 覆盖)
-ARG IFLYGO_UPSTREAM_VERSION=v1.11.1
+ARG IFLYGO_UPSTREAM_VERSION=v1.11.2
 # 项目品牌(替换文本标识时使用)
 ARG IFLYGO_BRAND=iflygo
 # 工作目录(运行时)
