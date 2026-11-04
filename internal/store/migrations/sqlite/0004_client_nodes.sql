@@ -1,0 +1,23 @@
+CREATE TABLE IF NOT EXISTS client_nodes (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    network_id        INTEGER NOT NULL REFERENCES networks(id) ON DELETE CASCADE,
+    name              TEXT NOT NULL UNIQUE,
+    ipv4              TEXT NOT NULL DEFAULT '',
+    ipv6              TEXT NOT NULL DEFAULT '',
+    public_key        TEXT NOT NULL DEFAULT '',
+    cert_pem          TEXT NOT NULL DEFAULT '',
+    key_pem           TEXT NOT NULL DEFAULT '',
+    groups            TEXT NOT NULL DEFAULT '',
+    subnets           TEXT NOT NULL DEFAULT '',
+    os                TEXT NOT NULL DEFAULT '',
+    arch              TEXT NOT NULL DEFAULT '',
+    kernel            TEXT NOT NULL DEFAULT '',
+    version           TEXT NOT NULL DEFAULT '',
+    status            TEXT NOT NULL DEFAULT 'offline',
+    last_seen         TEXT NOT NULL DEFAULT '',
+    config_rev        INTEGER NOT NULL DEFAULT 0,
+    enroll_token_hash TEXT NOT NULL DEFAULT '',
+    secret_hash       TEXT NOT NULL DEFAULT '',
+    created_at        TEXT NOT NULL DEFAULT '',
+    updated_at        TEXT NOT NULL DEFAULT ''
+);

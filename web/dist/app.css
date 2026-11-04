@@ -1,0 +1,57 @@
+:root {
+  --bg: #f5f6f8;
+  --panel: #ffffff;
+  --border: #e2e5ea;
+  --text: #1f2430;
+  --muted: #6b7280;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --danger: #dc2626;
+  --ok: #16a34a;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", Segoe UI, Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+#app { max-width: 1100px; margin: 0 auto; padding: 20px; }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 16px; }
+h1, h2, h3 { margin: 0 0 12px; }
+.topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.topbar .brand { font-size: 20px; font-weight: 700; }
+.btn {
+  display: inline-block; border: 1px solid var(--border); background: #fff; color: var(--text);
+  padding: 7px 14px; border-radius: 7px; cursor: pointer; font-size: 14px;
+}
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover { background: var(--accent-hover); }
+.btn.danger { color: var(--danger); border-color: var(--danger); }
+.btn.sm { padding: 3px 9px; font-size: 12px; }
+input, select {
+  width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; font-size: 14px; margin-bottom: 8px;
+}
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 600; }
+.badge { padding: 2px 8px; border-radius: 10px; font-size: 12px; }
+.badge.online { background: #dcfce7; color: var(--ok); }
+.badge.offline { background: #f1f5f9; color: var(--muted); }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.muted { color: var(--muted); font-size: 13px; }
+.msg { padding: 8px 12px; border-radius: 7px; margin-bottom: 12px; }
+.msg.err { background: #fee2e2; color: var(--danger); }
+.msg.ok { background: #dcfce7; color: var(--ok); }
+code.cmd {
+  display: block; background: #0f172a; color: #e2e8f0; padding: 10px 12px; border-radius: 7px;
+  font-family: ui-monospace, Menlo, monospace; font-size: 12px; word-break: break-all; margin: 6px 0;
+}
+.form-row { display: flex; gap: 8px; align-items: center; }
+.form-row input { margin-bottom: 0; }
+@media (max-width: 720px) {
+  .grid { grid-template-columns: 1fr; }
+  #app { padding: 12px; }
+  table { font-size: 12px; }
+  th, td { padding: 6px; }
+}

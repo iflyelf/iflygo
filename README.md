@@ -25,15 +25,34 @@
 
 ## 📦 当前状态
 
-仓库骨架 + 构建/CI 已就绪，业务逻辑开发中：
+仓库骨架 + 控制面基础已就绪，业务持续开发中：
 
 - [x] 两个二进制入口 + 版本注入
 - [x] 多阶段 Dockerfile（builder=`iflyelf/ubuntu:latest`，runtime=`iflyelf/ubuntu:lite`）
 - [x] GitHub Actions：CI / Docker 多架构发布 / 全平台二进制 / 上游版本更新
-- [ ] 控制面（store 双数据库 / 认证 / IPAM / PKI / 配置下发）
+- [x] 控制面基础：store 双数据库（PostgreSQL + SQLite）、认证、IPAM、PKI、Token 注册、配置下发
+- [x] Web 基础页面：登录 / 网络 / 客户端（响应式，原生 JS）
+- [ ] 客户端 Agent（enroll / run / 服务守护）
 - [ ] overlay（嵌入 Nebula）+ 不安全路由 HA
 - [ ] edge + 自定义域名
-- [ ] Web 前端页面
+- [ ] 完整配置热加载 / 证书续期
+
+## 🔌 控制面 API（已实现）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/health` `/ready` | 健康检查 |
+| POST | `/api/auth/login` `/logout` | 登录/登出 |
+| GET | `/api/auth/userinfo` | 当前用户 |
+| GET/POST | `/api/networks` | 网络列表/创建（自动生成 CA） |
+| DELETE | `/api/networks/{id}` | 删除网络 |
+| GET/POST | `/api/clients` | 客户端列表/创建（分配 IP + 签发证书 + enroll token） |
+| GET/DELETE | `/api/clients/{id}` | 客户端详情/删除 |
+| POST | `/api/clients/{id}/enroll-token` | 重新生成安装 token |
+| GET | `/api/clients/{id}/bundle` | 下载配置包 |
+| POST | `/api/agent/register` | Agent 用 token 注册 |
+| POST | `/api/agent/heartbeat` | Agent 心跳 |
+| GET | `/api/agent/config` | Agent 拉取配置 |
 
 ## 🔧 本地构建
 
