@@ -1,0 +1,15 @@
+services:
+  server:
+    image: iflyelf/iflygo:latest
+    container_name: iflygo-server
+    restart: unless-stopped
+    command: ["-role", "console,lighthouse,relay,edge"]
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./data:/data

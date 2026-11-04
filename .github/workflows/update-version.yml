@@ -1,0 +1,33 @@
+name: 更新上游 Nebula 版本
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 北京时间每天 05:00（UTC 21:00）
+    - cron: '0 21 * * *'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 获取最新 Nebula release
+        id: nebula
+        run: |
+          TAG=$(curl -fsSL https://api.github.com/repos/slackhq/nebula/releases/latest | jq -r .tag_name)
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+      - name: 更新 NEBULA_VERSION
+        run: |
+          echo "${{ steps.nebula.outputs.tag }}" > NEBULA_VERSION
+      - name: 创建 PR
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "chore(deps): 更新 Nebula 到 ${{ steps.nebula.outputs.tag }}"
+          branch: chore/nebula-${{ steps.nebula.outputs.tag }}
+          title: "chore(deps): 更新 Nebula 到 ${{ steps.nebula.outputs.tag }}"
+          body: "自动检测到上游 Nebula 最新版本：${{ steps.nebula.outputs.tag }}"
+          delete-branch: true

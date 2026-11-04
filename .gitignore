@@ -1,0 +1,22 @@
+# 构建产物
+/bin/
+/dist/
+
+# 运行时数据
+/data/
+*.db
+*.sqlite
+*.db-wal
+*.db-shm
+
+# 日志
+*.log
+
+# 本地环境
+.env
+.idea/
+.vscode/
+
+# 二进制
+iflygo-server
+iflygo-client

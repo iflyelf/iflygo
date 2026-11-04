@@ -1,0 +1,11 @@
+.git
+.gitignore
+bin
+dist
+data
+*.db
+*.sqlite
+*.log
+Dockerfile
+.dockerignore
+README.md
