@@ -83,7 +83,12 @@ func (o *Overlay) Reload(yamlBytes []byte) error {
 	if o.cfg == nil {
 		return fmt.Errorf("overlay 未启动")
 	}
-	return o.cfg.ReloadConfigString(string(yamlBytes))
+	// Nebula v1.12.0 起 ReloadConfigString 返回 ReloadResult（含 Err/RestartRequired 等）
+	res := o.cfg.ReloadConfigString(string(yamlBytes))
+	if res.Err != nil {
+		return res.Err
+	}
+	return nil
 }
 
 // Peers 返回已建立隧道列表。
