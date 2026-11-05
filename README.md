@@ -32,8 +32,10 @@
 - [x] GitHub Actions：CI / Docker 多架构发布 / 全平台二进制 / 上游版本更新
 - [x] 控制面基础：store 双数据库（PostgreSQL + SQLite）、认证、IPAM、PKI、Token 注册、配置下发
 - [x] Web 基础页面：登录 / 网络 / 客户端（响应式，原生 JS）
-- [ ] 客户端 Agent（enroll / run / 服务守护）
-- [ ] overlay（嵌入 Nebula）+ 不安全路由 HA
+- [x] 客户端 Agent：enroll / run / config / status / service
+- [x] overlay：嵌入 Nebula（证书、完整配置生成、启停、热加载、隧道状态）
+- [x] 服务端节点：lighthouse / relay / edge / gateway 配置生成
+- [ ] 不安全路由 HA（多网关加权 + 健康检查 + 故障切换）
 - [ ] edge + 自定义域名
 - [ ] 完整配置热加载 / 证书续期
 
@@ -44,9 +46,12 @@
 | GET | `/health` `/ready` | 健康检查 |
 | POST | `/api/auth/login` `/logout` | 登录/登出 |
 | GET | `/api/auth/userinfo` | 当前用户 |
-| GET/POST | `/api/networks` | 网络列表/创建（自动生成 CA） |
+| GET/POST | `/api/networks` | 网络列表/创建（自动生成 Nebula CA + 可选 nebula 设置） |
 | DELETE | `/api/networks/{id}` | 删除网络 |
-| GET/POST | `/api/clients` | 客户端列表/创建（分配 IP + 签发证书 + enroll token） |
+| GET/POST | `/api/server-nodes` | 服务端节点（lighthouse/relay/edge/gateway） |
+| GET | `/api/server-nodes/{id}/bundle` | 服务端节点配置包（含 Nebula 配置） |
+| DELETE | `/api/server-nodes/{id}` | 删除服务端节点 |
+| GET/POST | `/api/clients` | 客户端列表/创建（分配 IP + 签发 Nebula 证书 + enroll token） |
 | GET/DELETE | `/api/clients/{id}` | 客户端详情/删除 |
 | POST | `/api/clients/{id}/enroll-token` | 重新生成安装 token |
 | GET | `/api/clients/{id}/bundle` | 下载配置包 |

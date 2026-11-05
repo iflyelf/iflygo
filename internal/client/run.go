@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -11,35 +12,44 @@ import (
 	"time"
 
 	"github.com/iflyelf/iflygo/internal/model"
+	"github.com/iflyelf/iflygo/internal/overlay"
 )
 
-// Run 启动客户端主循环：心跳 + 配置热更新。
+// Run 启动客户端主循环：心跳 + 配置热更新 + overlay。
 func Run(dir string, interval time.Duration) error {
 	st, err := LoadState(dir)
 	if err != nil {
 		return errors.New("未找到状态文件，请先执行 enroll")
 	}
 	c := New(st.Server, st.ClientID, st.Secret)
+	ov := overlay.New(slog.Default())
 
 	log.Printf("🚀 iflygo-client 运行中: #%d %s (%s) 服务器 %s", st.ClientID, st.Name, st.IPv4, st.Server)
 
-	// 首次拉取配置
+	// 首次拉取配置（含证书与 Nebula 配置）
 	if err := fetchAndApply(c, st, dir); err != nil {
 		log.Printf("⚠️ 拉取配置失败: %v", err)
 	}
+	// 尝试启动 overlay（需要 TUN 设备与 NET_ADMIN）
+	if err := startOverlay(ov, dir); err != nil {
+		log.Printf("⚠️ 启动 overlay 失败（需要 root/TUN）: %v", err)
+	}
+	defer ov.Stop()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	hb := time.NewTicker(interval)
+	defer hb.Stop()
+	peers := time.NewTicker(15 * time.Second)
+	defer peers.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			log.Println("正在退出...")
 			return nil
-		case <-ticker.C:
+		case <-hb.C:
 			rev, err := c.Heartbeat(ctx)
 			if err != nil {
 				log.Printf("⚠️ 心跳失败: %v", err)
@@ -48,7 +58,13 @@ func Run(dir string, interval time.Duration) error {
 			if rev != st.ConfigRev {
 				if err := fetchAndApply(c, st, dir); err != nil {
 					log.Printf("⚠️ 更新配置失败: %v", err)
+				} else if err := reloadOverlay(ov, dir); err != nil {
+					log.Printf("⚠️ 热加载失败: %v", err)
 				}
+			}
+		case <-peers.C:
+			for _, p := range ov.Peers() {
+				log.Printf("🔗 隧道: %s <-> %s (relay=%v)", p.VPNIP, p.Remote, p.Relays)
 			}
 		}
 	}
@@ -79,7 +95,7 @@ func fetchAndApply(c *Client, st *State, dir string) error {
 	return st.Save(dir)
 }
 
-// ApplyBundle 将配置包写入状态目录（供 overlay 使用）。
+// ApplyBundle 将配置包写入状态目录（证书 + Nebula 配置）。
 func ApplyBundle(dir string, b *model.Bundle) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -100,4 +116,29 @@ func ApplyBundle(dir string, b *model.Bundle) error {
 	}
 	log.Printf("✅ 配置已应用到 %s", dir)
 	return nil
+}
+
+func startOverlay(ov *overlay.Overlay, dir string) error {
+	cfg, err := readNebulaConfig(dir)
+	if err != nil {
+		return err
+	}
+	return ov.Start(cfg)
+}
+
+func reloadOverlay(ov *overlay.Overlay, dir string) error {
+	cfg, err := readNebulaConfig(dir)
+	if err != nil {
+		return err
+	}
+	return ov.Reload(cfg)
+}
+
+func readNebulaConfig(dir string) ([]byte, error) {
+	cfg, err := os.ReadFile(filepath.Join(dir, "config.yml"))
+	if err != nil {
+		return nil, err
+	}
+	caP, certP, keyP := overlay.PKIPaths(dir)
+	return overlay.RewritePKIPaths(cfg, caP, certP, keyP)
 }

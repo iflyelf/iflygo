@@ -1,0 +1,1 @@
+ALTER TABLE networks ADD COLUMN nebula TEXT NOT NULL DEFAULT '';

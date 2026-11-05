@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/iflyelf/iflygo/internal/config"
 	"github.com/iflyelf/iflygo/internal/middleware"
+	"github.com/iflyelf/iflygo/internal/overlay"
 	"github.com/iflyelf/iflygo/internal/svc"
 	"github.com/iflyelf/iflygo/internal/version"
 )
@@ -23,6 +25,7 @@ import (
 func main() {
 	configFile := flag.String("c", "", "配置文件路径")
 	role := flag.String("role", "console", "服务端角色(逗号分隔): console,lighthouse,relay,edge,gateway")
+	overlayConfig := flag.String("overlay-config", "", "Nebula 配置文件（lighthouse/relay/edge 角色用）")
 	showVersion := flag.Bool("version", false, "显示版本并退出")
 	flag.Parse()
 
@@ -61,6 +64,21 @@ func main() {
 	}
 
 	log.Printf("🚀 iflygo-server %s 监听 %s (role=%s)", version.Version, cfg.Addr(), *role)
+
+	// lighthouse/relay/edge 数据面角色：读取预生成 Nebula 配置并启动 overlay
+	var ov *overlay.Overlay
+	if *overlayConfig != "" {
+		b, err := os.ReadFile(*overlayConfig)
+		if err != nil {
+			log.Fatalf("读取 overlay 配置失败: %v", err)
+		}
+		ov = overlay.New(slog.Default())
+		if err := ov.Start(b); err != nil {
+			log.Fatalf("启动 overlay 失败: %v", err)
+		}
+		defer ov.Stop()
+		log.Printf("🔗 overlay 数据面已启动 (roles=%s)", *role)
+	}
 
 	go func() {
 		if cfg.Server.TLSCert != "" && cfg.Server.TLSKey != "" {

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
@@ -12,13 +13,14 @@ import (
 )
 
 type networkReq struct {
-	Name     string `json:"name"`
-	Cidr4    string `json:"cidr4"`
-	Cidr6    string `json:"cidr6"`
-	Gateway4 string `json:"gateway4"`
-	Gateway6 string `json:"gateway6"`
-	DNS      string `json:"dns"`
-	MTU      int    `json:"mtu"`
+	Name     string               `json:"name"`
+	Cidr4    string               `json:"cidr4"`
+	Cidr6    string               `json:"cidr6"`
+	Gateway4 string               `json:"gateway4"`
+	Gateway6 string               `json:"gateway6"`
+	DNS      string               `json:"dns"`
+	MTU      int                  `json:"mtu"`
+	Nebula   model.NebulaSettings `json:"nebula"`
 }
 
 // ListNetworks 列出网络。
@@ -66,8 +68,13 @@ func CreateNetwork(sc *svc.ServiceContext) http.HandlerFunc {
 		}
 
 		now := nowStr()
-		res, err := sc.Store.DB.Exec(sc.Store.Rebind(`INSERT INTO networks (name,cidr4,cidr6,gateway4,gateway6,dns,mtu,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`),
-			req.Name, req.Cidr4, req.Cidr6, req.Gateway4, req.Gateway6, req.DNS, req.MTU, now)
+		nebulaJSON, err := json.Marshal(req.Nebula)
+		if err != nil {
+			httpx.FailErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		res, err := sc.Store.DB.Exec(sc.Store.Rebind(`INSERT INTO networks (name,cidr4,cidr6,gateway4,gateway6,dns,mtu,nebula,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`),
+			req.Name, req.Cidr4, req.Cidr6, req.Gateway4, req.Gateway6, req.DNS, req.MTU, string(nebulaJSON), now)
 		if err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
@@ -115,6 +122,22 @@ func getCA(sc *svc.ServiceContext, networkID int64) (certPEM, keyPEM string, err
 	q := sc.Store.Rebind(`SELECT cert_pem, key_pem FROM cas WHERE network_id = $1 ORDER BY id DESC LIMIT 1`)
 	err = sc.Store.DB.QueryRow(q, networkID).Scan(&certPEM, &keyPEM)
 	return
+}
+
+// getNebulaSettings 读取网络的 Nebula 设置。
+func getNebulaSettings(sc *svc.ServiceContext, networkID int64) (*model.NebulaSettings, error) {
+	var raw string
+	q := sc.Store.Rebind(`SELECT nebula FROM networks WHERE id = $1`)
+	if err := sc.Store.DB.QueryRow(q, networkID).Scan(&raw); err != nil {
+		return nil, err
+	}
+	s := &model.NebulaSettings{}
+	if raw != "" {
+		if err := json.Unmarshal([]byte(raw), s); err != nil {
+			return nil, err
+		}
+	}
+	return s, nil
 }
 
 func pathID(r *http.Request) (int64, error) {

@@ -1,22 +1,19 @@
-// Package pki 负责 CA 与节点证书的签发。
+// Package pki 负责 CA 与节点证书的签发（Nebula 证书格式）。
 //
-// 注意：当前为占位实现（Ed25519 + x509），用于打通控制面证书/配置下发流程；
-// 接入 overlay 时需替换为 Nebula 证书格式（curve25519 + 自定义结构）。
+// 与 Nebula 保持一致：
+//   - CA 使用 ed25519 签名密钥（curve 记为 Curve_CURVE25519）
+//   - 节点使用 X25519 密钥对（Noise 握手用），证书绑定 networks/groups/unsafe_networks
 package pki
 
 import (
-	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/sha256"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/hex"
-	"encoding/pem"
 	"fmt"
-	"math/big"
-	"net"
 	"net/netip"
 	"time"
+
+	"github.com/slackhq/nebula/cert"
+	"golang.org/x/crypto/curve25519"
+	"golang.org/x/crypto/ed25519"
 )
 
 // CA 证书颁发机构。
@@ -28,123 +25,113 @@ type CA struct {
 	ExpiresAt   time.Time
 }
 
-// NodeKey 节点密钥对。
+// NodeKey 节点密钥对（X25519）。
 type NodeKey struct {
 	PublicKeyPEM  string
 	PrivateKeyPEM string
 }
 
-// CreateCA 生成自签 CA。
+// CreateCA 生成自签 CA（ed25519 签名）。
 func CreateCA(name string, duration time.Duration) (*CA, error) {
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	pub, rawPriv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now().UTC()
-	tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: name},
-		NotBefore:             now.Add(-time.Minute),
-		NotAfter:              now.Add(duration),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
+	now := time.Now()
+	t := &cert.TBSCertificate{
+		Version:   cert.Version2,
+		Name:      name,
+		NotBefore: now.Add(-time.Minute),
+		NotAfter:  now.Add(duration),
+		PublicKey: pub,
+		IsCA:      true,
+		Curve:     cert.Curve_CURVE25519,
 	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
+	c, err := t.Sign(nil, cert.Curve_CURVE25519, rawPriv)
 	if err != nil {
 		return nil, err
 	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	certPEM, err := c.MarshalPEM()
 	if err != nil {
 		return nil, err
 	}
-	fp := sha256.Sum256(der)
+	fp, err := c.Fingerprint()
+	if err != nil {
+		return nil, err
+	}
 	return &CA{
 		Name:        name,
-		CertPEM:     string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})),
-		KeyPEM:      string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})),
-		Fingerprint: hex.EncodeToString(fp[:]),
+		CertPEM:     string(certPEM),
+		KeyPEM:      string(cert.MarshalSigningPrivateKeyToPEM(cert.Curve_CURVE25519, rawPriv)),
+		Fingerprint: fp,
 		ExpiresAt:   now.Add(duration),
 	}, nil
 }
 
-// GenerateNodeKey 生成节点 Ed25519 密钥对。
+// GenerateNodeKey 生成节点 X25519 密钥对。
 func GenerateNodeKey() (*NodeKey, error) {
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
+	privkey := make([]byte, 32)
+	if _, err := rand.Read(privkey); err != nil {
 		return nil, err
 	}
-	pubDER, err := x509.MarshalPKIXPublicKey(pub)
-	if err != nil {
-		return nil, err
-	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	pubkey, err := curve25519.X25519(privkey, curve25519.Basepoint)
 	if err != nil {
 		return nil, err
 	}
 	return &NodeKey{
-		PublicKeyPEM:  string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})),
-		PrivateKeyPEM: string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})),
+		PublicKeyPEM:  string(cert.MarshalPublicKeyToPEM(cert.Curve_CURVE25519, pubkey)),
+		PrivateKeyPEM: string(cert.MarshalPrivateKeyToPEM(cert.Curve_CURVE25519, privkey)),
 	}, nil
 }
 
-// IssueNodeCert 用 CA 为节点签发证书，绑定 IP 地址。
-func IssueNodeCert(ca *CA, node *NodeKey, name string, ips []netip.Addr, duration time.Duration) (string, error) {
-	caCert, err := parseCert(ca.CertPEM)
+// IssueNodeCert 用 CA 为节点签发证书，绑定 networks / unsafe_networks / groups。
+func IssueNodeCert(ca *CA, node *NodeKey, name string, networks, unsafeNetworks []netip.Prefix, groups []string, duration time.Duration) (string, error) {
+	caCert, _, err := cert.UnmarshalCertificateFromPEM([]byte(ca.CertPEM))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("解析 CA 证书: %w", err)
 	}
-	caKey, err := parseKey(ca.KeyPEM)
+	caKey, _, _, err := cert.UnmarshalSigningPrivateKeyFromPEM([]byte(ca.KeyPEM))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("解析 CA 私钥: %w", err)
 	}
-	nodePub, err := parsePubKey(node.PublicKeyPEM)
+	pub, _, _, err := cert.UnmarshalPublicKeyFromPEM([]byte(node.PublicKeyPEM))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("解析节点公钥: %w", err)
 	}
 
-	now := time.Now().UTC()
-	ipAddrs := make([]net.IP, 0, len(ips))
-	for _, ip := range ips {
-		ipAddrs = append(ipAddrs, ip.AsSlice())
+	now := time.Now()
+	t := &cert.TBSCertificate{
+		Version:        cert.Version2,
+		Name:           name,
+		Networks:       networks,
+		UnsafeNetworks: unsafeNetworks,
+		Groups:         groups,
+		NotBefore:      now.Add(-time.Minute),
+		NotAfter:       now.Add(duration),
+		PublicKey:      pub,
+		IsCA:           false,
+		Curve:          cert.Curve_CURVE25519,
 	}
-
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(now.UnixNano()),
-		Subject:      pkix.Name{CommonName: name},
-		NotBefore:    now.Add(-time.Minute),
-		NotAfter:     now.Add(duration),
-		IPAddresses:  ipAddrs,
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+	c, err := t.Sign(caCert, cert.Curve_CURVE25519, caKey)
+	if err != nil {
+		return "", fmt.Errorf("签发节点证书: %w", err)
 	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, nodePub, caKey)
+	b, err := c.MarshalPEM()
 	if err != nil {
 		return "", err
 	}
-	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), nil
+	return string(b), nil
 }
 
-func parseCert(pemStr string) (*x509.Certificate, error) {
-	block, _ := pem.Decode([]byte(pemStr))
-	if block == nil {
-		return nil, fmt.Errorf("证书 PEM 解码失败")
+// ParseCert 解析证书，返回指纹与到期时间（用于展示/校验）。
+func ParseCert(certPEM string) (fingerprint string, expiresAt time.Time, err error) {
+	c, _, err := cert.UnmarshalCertificateFromPEM([]byte(certPEM))
+	if err != nil {
+		return "", time.Time{}, err
 	}
-	return x509.ParseCertificate(block.Bytes)
-}
-
-func parseKey(pemStr string) (any, error) {
-	block, _ := pem.Decode([]byte(pemStr))
-	if block == nil {
-		return nil, fmt.Errorf("私钥 PEM 解码失败")
+	fp, err := c.Fingerprint()
+	if err != nil {
+		return "", time.Time{}, err
 	}
-	return x509.ParsePKCS8PrivateKey(block.Bytes)
-}
-
-func parsePubKey(pemStr string) (any, error) {
-	block, _ := pem.Decode([]byte(pemStr))
-	if block == nil {
-		return nil, fmt.Errorf("公钥 PEM 解码失败")
-	}
-	return x509.ParsePKIXPublicKey(block.Bytes)
+	return fp, c.NotAfter(), nil
 }

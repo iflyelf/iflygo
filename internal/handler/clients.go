@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/iflyelf/iflygo/internal/configgen"
@@ -104,8 +105,10 @@ func CreateClient(sc *svc.ServiceContext) http.HandlerFunc {
 			return
 		}
 
-		ips := parseIPs(ipv4, ipv6)
-		certPEM, err := pki.IssueNodeCert(&pki.CA{CertPEM: caCert, KeyPEM: caKey}, nodeKey, req.Name, ips, 3*365*24*time.Hour)
+		networks := nodePrefixes(net, ipv4, ipv6)
+		unsafe := parsePrefixes(req.Subnets)
+		groups := splitList(req.Groups)
+		certPEM, err := pki.IssueNodeCert(&pki.CA{CertPEM: caCert, KeyPEM: caKey}, nodeKey, req.Name, networks, unsafe, groups, 3*365*24*time.Hour)
 		if err != nil {
 			rollbackIPs(sc, net.ID, ipv4, ipv6)
 			httpx.FailErr(w, http.StatusInternalServerError, err)
@@ -242,7 +245,7 @@ func getClientRow(sc *svc.ServiceContext, id int64) (*clientRow, error) {
 	return &c, nil
 }
 
-// buildBundle 组装配置包。
+// buildBundle 组装配置包（Nebula 证书 + 完整 Nebula 配置）。
 func buildBundle(sc *svc.ServiceContext, c *clientRow) (*model.Bundle, error) {
 	net, err := getNetwork(sc, c.NetworkID)
 	if err != nil {
@@ -252,15 +255,17 @@ func buildBundle(sc *svc.ServiceContext, c *clientRow) (*model.Bundle, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := configgen.Render(configgen.ClientConfig{
-		Network: net.Name, IPv4: c.IPv4, IPv6: c.IPv6, MTU: net.MTU, DNS: net.DNS,
-	})
+	input, err := buildNebulaInput(sc, c.NetworkID, false, 0, false)
+	if err != nil {
+		return nil, err
+	}
+	cfgBytes, err := configgen.Build(*input)
 	if err != nil {
 		return nil, err
 	}
 	return &model.Bundle{
 		Network: net.Name, IPv4: c.IPv4, IPv6: c.IPv6, MTU: net.MTU, DNS: net.DNS,
-		CA: caCert, Cert: c.CertPEM, Key: c.KeyPEM, Config: cfg, ConfigRev: c.ConfigRev,
+		CA: caCert, Cert: c.CertPEM, Key: c.KeyPEM, Config: string(cfgBytes), ConfigRev: c.ConfigRev,
 	}, nil
 }
 
@@ -268,16 +273,41 @@ func enrollCommand(baseURL, token, name string) string {
 	return "iflygo-client enroll --server " + baseURL + " --token " + token + " --name " + name
 }
 
-func parseIPs(ipv4, ipv6 string) []netip.Addr {
-	var out []netip.Addr
-	if ipv4 != "" {
-		if a, err := netip.ParseAddr(ipv4); err == nil {
-			out = append(out, a)
+// nodePrefixes 用网络前缀长度构造节点的证书 networks。
+func nodePrefixes(net *model.Network, ipv4, ipv6 string) []netip.Prefix {
+	var out []netip.Prefix
+	if ipv4 != "" && net.Cidr4 != "" {
+		if p, err := netip.ParsePrefix(net.Cidr4); err == nil {
+			if a, err := netip.ParseAddr(ipv4); err == nil {
+				out = append(out, netip.PrefixFrom(a, p.Bits()))
+			}
 		}
 	}
-	if ipv6 != "" {
-		if a, err := netip.ParseAddr(ipv6); err == nil {
-			out = append(out, a)
+	if ipv6 != "" && net.Cidr6 != "" {
+		if p, err := netip.ParsePrefix(net.Cidr6); err == nil {
+			if a, err := netip.ParseAddr(ipv6); err == nil {
+				out = append(out, netip.PrefixFrom(a, p.Bits()))
+			}
+		}
+	}
+	return out
+}
+
+func parsePrefixes(csv string) []netip.Prefix {
+	var out []netip.Prefix
+	for _, s := range splitList(csv) {
+		if p, err := netip.ParsePrefix(s); err == nil {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func splitList(csv string) []string {
+	var out []string
+	for _, s := range strings.Split(csv, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
 		}
 	}
 	return out
