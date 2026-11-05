@@ -10,13 +10,25 @@ import (
 	"embed"
 	"fmt"
 	"log"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 )
 
+var dollarRe = regexp.MustCompile(`\$[0-9]+`)
+
 //go:embed migrations/*.sql
-var migrationsFS embed.FS
+var postgresMigrationsFS embed.FS
+
+//go:embed migrations_sqlite/*.sql
+var sqliteMigrationsFS embed.FS
+
+// 方言常量。
+const (
+	DialectPostgres = "postgres"
+	DialectSQLite   = "sqlite"
+)
 
 // Migration 单个迁移脚本。
 type Migration struct {
@@ -28,22 +40,29 @@ type Migration struct {
 
 // Migrator 迁移管理器。
 type Migrator struct {
-	db         *sql.DB
+	db       *sql.DB
+	dialect  string
 	migrations []Migration
 }
 
 // New 创建迁移管理器。
-func New(db *sql.DB) (*Migrator, error) {
-	m := &Migrator{db: db}
+func New(db *sql.DB, dialect string) (*Migrator, error) {
+	m := &Migrator{db: db, dialect: dialect}
 	if err := m.loadMigrations(); err != nil {
 		return nil, err
 	}
 	return m, nil
 }
 
-// loadMigrations 从 embed.FS 加载所有迁移脚本。
+// loadMigrations 从 embed.FS 加载所有迁移脚本（按方言选择目录）。
 func (m *Migrator) loadMigrations() error {
-	entries, err := migrationsFS.ReadDir("migrations")
+	fs := postgresMigrationsFS
+	dir := "migrations"
+	if m.dialect == DialectSQLite {
+		fs = sqliteMigrationsFS
+		dir = "migrations_sqlite"
+	}
+	entries, err := fs.ReadDir(dir)
 	if err != nil {
 		return fmt.Errorf("读取迁移目录失败: %w", err)
 	}
@@ -83,7 +102,7 @@ func (m *Migrator) loadMigrations() error {
 			migName = remaining
 		}
 
-		content, err := migrationsFS.ReadFile("migrations/" + name)
+		content, err := fs.ReadFile(dir + "/" + name)
 		if err != nil {
 			return fmt.Errorf("读取迁移文件 %s 失败: %w", name, err)
 		}
@@ -161,7 +180,7 @@ func (m *Migrator) Up(ctx context.Context) error {
 	}
 
 	// 1. 确保 schema_migrations 表存在（以下全部复用持锁连接 conn）
-	if err := ensureMigrationsTable(ctx, conn); err != nil {
+	if err := ensureMigrationsTable(ctx, conn, m.dialect); err != nil {
 		return err
 	}
 
@@ -187,7 +206,7 @@ func (m *Migrator) Up(ctx context.Context) error {
 
 		log.Printf("🔄 应用迁移 %d: %s", mig.Version, mig.Name)
 
-		if err := applyMigration(ctx, conn, mig); err != nil {
+		if err := applyMigration(ctx, conn, mig, m.dialect); err != nil {
 			return fmt.Errorf("应用迁移 %d 失败: %w", mig.Version, err)
 		}
 
@@ -204,14 +223,24 @@ func (m *Migrator) Up(ctx context.Context) error {
 }
 
 // ensureMigrationsTable 确保 schema_migrations 表存在。
-func ensureMigrationsTable(ctx context.Context, q querier) error {
-	_, err := q.ExecContext(ctx, `
+func ensureMigrationsTable(ctx context.Context, q querier, dialect string) error {
+	ddl := `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version INTEGER PRIMARY KEY,
 			name VARCHAR(255) NOT NULL,
 			applied_at TIMESTAMPTZ DEFAULT NOW()
 		)
-	`)
+	`
+	if dialect == DialectSQLite {
+		ddl = `
+			CREATE TABLE IF NOT EXISTS schema_migrations (
+				version INTEGER PRIMARY KEY,
+				name TEXT NOT NULL,
+				applied_at TEXT DEFAULT CURRENT_TIMESTAMP
+			)
+		`
+	}
+	_, err := q.ExecContext(ctx, ddl)
 	return err
 }
 
@@ -227,29 +256,83 @@ func getCurrentVersion(ctx context.Context, q querier) (int, error) {
 	return version, nil
 }
 
-// applyMigration 应用单个迁移（事务内执行）。
-func applyMigration(ctx context.Context, q querier, mig Migration) error {
+// applyMigration 应用单个迁移（事务内执行，按方言分句执行 + 占位符改写）。
+func applyMigration(ctx context.Context, q querier, mig Migration, dialect string) error {
 	tx, err := q.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	// 执行 SQL（可能包含多条语句）
-	if _, err := tx.ExecContext(ctx, mig.UpSQL); err != nil {
-		return fmt.Errorf("执行 SQL 失败: %w", err)
+	// 分句执行（SQLite 驱动不保证多语句 Exec 可靠；对「列已存在」幂等容错）
+	for _, stmt := range splitStatements(mig.UpSQL) {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			if dialect == DialectSQLite && isIdempotentErr(err) {
+				continue
+			}
+			return fmt.Errorf("执行 SQL 失败: %w", err)
+		}
 	}
 
 	// 记录版本
-	_, err = tx.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, rebind(dialect, `
 		INSERT INTO schema_migrations (version, name, applied_at)
 		VALUES ($1, $2, $3)
-	`, mig.Version, mig.Name, time.Now())
+	`), mig.Version, mig.Name, time.Now())
 	if err != nil {
 		return fmt.Errorf("记录版本失败: %w", err)
 	}
 
 	return tx.Commit()
+}
+
+// splitStatements 按分号切分 SQL 语句，过滤空行与注释。
+func splitStatements(sql string) []string {
+	var out []string
+	for _, s := range strings.Split(sql, ";") {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		// 去掉纯注释片段
+		if onlyComments(s) {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+func onlyComments(s string) bool {
+	for _, line := range strings.Split(s, "\n") {
+		t := strings.TrimSpace(line)
+		if t != "" && !strings.HasPrefix(t, "--") {
+			return false
+		}
+	}
+	return true
+}
+
+// isIdempotentErr 判断 SQLite 下可安全跳过的幂等错误。
+func isIdempotentErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	for _, sub := range []string{"duplicate column name", "already exists", "duplicate index"} {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// rebind 将 $N 占位符改写为 ?（SQLite）。
+func rebind(dialect, query string) string {
+	if dialect != DialectSQLite {
+		return query
+	}
+	return dollarRe.ReplaceAllString(query, "?")
 }
 
 // Down 回滚最后一个迁移。
@@ -294,7 +377,7 @@ func (m *Migrator) Down(ctx context.Context) error {
 	}
 
 	// 删除版本记录
-	_, err = tx.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = $1`, currentVersion)
+	_, err = tx.ExecContext(ctx, rebind(m.dialect, `DELETE FROM schema_migrations WHERE version = $1`), currentVersion)
 	if err != nil {
 		return fmt.Errorf("删除版本记录失败: %w", err)
 	}
@@ -331,8 +414,8 @@ func (m *Migrator) Status(ctx context.Context) error {
 }
 
 // AutoMigrate 启动时自动迁移（推荐在 main 中调用）。
-func AutoMigrate(db *sql.DB) error {
-	m, err := New(db)
+func AutoMigrate(db *sql.DB, dialect string) error {
+	m, err := New(db, dialect)
 	if err != nil {
 		return err
 	}

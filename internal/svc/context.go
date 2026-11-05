@@ -124,7 +124,11 @@ func New(c *config.Config) *ServiceContext {
 
 	// 自动迁移数据库（创建/更新 schema）
 	log.Println("🔄 检查数据库版本...")
-	if err := migrate.AutoMigrate(db); err != nil {
+	dialect := migrate.DialectPostgres
+	if st.DriverName() == migrate.DialectSQLite {
+		dialect = migrate.DialectSQLite
+	}
+	if err := migrate.AutoMigrate(db, dialect); err != nil {
 		log.Fatalf("数据库迁移失败: %v", err)
 	}
 
