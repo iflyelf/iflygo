@@ -60,9 +60,9 @@
     const o = Object.assign({ headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin' }, opts);
     if (o.body && typeof o.body !== 'string') o.body = JSON.stringify(o.body);
     const res = await fetch(path, o);
-    const data = await res.json().catch(() => ({}));
+    const env = await res.json().catch(() => ({}));
     if (res.status === 401 && state.user) { state.user = null; state.view = 'login'; }
-    return { ok: res.ok, status: res.status, data };
+    return { ok: res.ok, status: res.status, data: env.data, message: env.message };
   }
 
   function setMsg(text, kind) { state.msg = text || ''; state.msgKind = kind || 'err'; }
@@ -108,7 +108,7 @@
     const submit = async () => {
       const r = await api('/api/auth/login', { method: 'POST', body: { username: user.value, password: pass.value } });
       if (r.ok) { state.user = r.data; state.view = 'dashboard'; await loadAll(); render(); }
-      else { setMsg(r.data.message || '登录失败'); render(); }
+      else { setMsg(r.message || '登录失败'); render(); }
     };
     btn.onclick = submit;
     pass.onkeydown = (e) => { if (e.key === 'Enter') submit(); };
@@ -188,7 +188,7 @@
     create.onclick = async () => {
       const r = await api('/api/clients', { method: 'POST', body: { network_id: Number(net.value), name: name.value, ipv4: ipv4.value, ipv6: ipv6.value } });
       if (r.ok) { await loadAll(); setMsg('已创建，安装命令：' + r.data.install_command, 'ok'); try { navigator.clipboard.writeText(r.data.install_command); } catch (_) {} }
-      else setMsg(r.data.message);
+      else setMsg(r.message);
       render();
     };
 
@@ -214,7 +214,7 @@
     const create = h('button', { class: 'btn primary', style: 'width:100%' }, '创建网络');
     create.onclick = async () => {
       const r = await api('/api/networks', { method: 'POST', body: { name: name.value, cidr4: cidr4.value, cidr6: cidr6.value, gateway4: gw4.value, gateway6: gw6.value } });
-      if (r.ok) { await loadAll(); setMsg('网络已创建', 'ok'); } else setMsg(r.data.message);
+      if (r.ok) { await loadAll(); setMsg('网络已创建', 'ok'); } else setMsg(r.message);
       render();
     };
 
@@ -242,7 +242,7 @@
     const create = h('button', { class: 'btn primary', style: 'width:100%' }, '创建节点');
     create.onclick = async () => {
       const r = await api('/api/server-nodes', { method: 'POST', body: { network_id: Number(net.value), name: name.value, roles: roles.value, overlay_ip4: ip4.value, overlay_ip6: ip6.value, public_host: host.value, public_port: Number(port.value || 0) } });
-      if (r.ok) { await loadAll(); setMsg('节点已创建', 'ok'); } else setMsg(r.data.message);
+      if (r.ok) { await loadAll(); setMsg('节点已创建', 'ok'); } else setMsg(r.message);
       render();
     };
 
@@ -267,7 +267,7 @@
     create.onclick = async () => {
       const gateways = gws.value.split(',').map((s) => { const [ip, w] = s.trim().split(':'); return { overlay_ip: ip, weight: Number(w || 1), priority: 0 }; }).filter((g) => g.overlay_ip);
       const r = await api('/api/networks/' + state.routeNetwork + '/routes', { method: 'POST', body: { cidr: cidr.value, mtu: 1300, mode: mode.value, gateways } });
-      if (r.ok) { await loadRoutes(); setMsg('路由已创建', 'ok'); } else setMsg(r.data.message);
+      if (r.ok) { await loadRoutes(); setMsg('路由已创建', 'ok'); } else setMsg(r.message);
       render();
     };
 
@@ -295,7 +295,7 @@
     const create = h('button', { class: 'btn primary', style: 'width:100%' }, '创建服务');
     create.onclick = async () => {
       const r = await api('/api/edge-services', { method: 'POST', body: { network_id: Number(net.value), name: name.value, host: host.value, target: target.value, protocol: proto.value, public_port: Number(pubPort.value || 0) } });
-      if (r.ok) { await loadAll(); setMsg('服务已创建', 'ok'); } else setMsg(r.data.message);
+      if (r.ok) { await loadAll(); setMsg('服务已创建', 'ok'); } else setMsg(r.message);
       render();
     };
 
@@ -307,19 +307,19 @@
   // ---------- 操作 ----------
   async function getToken(id, name) {
     const r = await api('/api/clients/' + id + '/enroll-token', { method: 'POST' });
-    if (r.ok) { setMsg(name + ' 安装命令：' + r.data.install_command, 'ok'); try { navigator.clipboard.writeText(r.data.install_command); } catch (_) {} } else setMsg(r.data.message);
+    if (r.ok) { setMsg(name + ' 安装命令：' + r.data.install_command, 'ok'); try { navigator.clipboard.writeText(r.data.install_command); } catch (_) {} } else setMsg(r.message);
     render();
   }
   async function renewCert(id) {
     if (!confirm('确认续期该客户端证书？')) return;
     const r = await api('/api/clients/' + id + '/cert/renew', { method: 'POST' });
-    setMsg(r.ok ? '证书已续期' : r.data.message);
+    setMsg(r.ok ? '证书已续期' : r.message);
     render();
   }
   async function revokeCert(id) {
     if (!confirm('确认吊销该客户端证书（加入 blocklist）？')) return;
     const r = await api('/api/clients/' + id + '/revoke', { method: 'POST' });
-    setMsg(r.ok ? '证书已吊销' : r.data.message);
+    setMsg(r.ok ? '证书已吊销' : r.message);
     render();
   }
   async function delClient(id) { if (!confirm('确认删除该客户端？')) return; await api('/api/clients/' + id, { method: 'DELETE' }); await loadAll(); render(); }

@@ -1,0 +1,12 @@
+{
+  "name": "iflygo-e2e",
+  "private": true,
+  "version": "1.0.0",
+  "description": "iflygo 前端端到端测试（Playwright）",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}
