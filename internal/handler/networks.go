@@ -73,13 +73,13 @@ func CreateNetwork(sc *svc.ServiceContext) http.HandlerFunc {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		res, err := sc.Store.DB.Exec(sc.Store.Rebind(`INSERT INTO networks (name,cidr4,cidr6,gateway4,gateway6,dns,mtu,nebula,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`),
-			req.Name, req.Cidr4, req.Cidr6, req.Gateway4, req.Gateway6, req.DNS, req.MTU, string(nebulaJSON), now)
+		var nid int64
+		err = sc.Store.DB.QueryRow(sc.Store.Rebind(`INSERT INTO networks (name,cidr4,cidr6,gateway4,gateway6,dns,mtu,nebula,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`),
+			req.Name, req.Cidr4, req.Cidr6, req.Gateway4, req.Gateway6, req.DNS, req.MTU, string(nebulaJSON), now).Scan(&nid)
 		if err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		nid, _ := res.LastInsertId()
 
 		if _, err := sc.Store.DB.Exec(sc.Store.Rebind(`INSERT INTO cas (network_id,name,cert_pem,key_pem,fingerprint,expires_at,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)`),
 			nid, ca.Name, ca.CertPEM, ca.KeyPEM, ca.Fingerprint, ca.ExpiresAt.UTC().Format(time.RFC3339), now); err != nil {

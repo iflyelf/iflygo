@@ -123,16 +123,16 @@ func CreateClient(sc *svc.ServiceContext) http.HandlerFunc {
 		}
 
 		now := nowStr()
-		res, err := sc.Store.DB.Exec(sc.Store.Rebind(`INSERT INTO client_nodes
+		var nid int64
+		err = sc.Store.DB.QueryRow(sc.Store.Rebind(`INSERT INTO client_nodes
 			(network_id,name,ipv4,ipv6,public_key,cert_pem,key_pem,groups,subnets,enroll_token_hash,created_at,updated_at)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`),
-			net.ID, req.Name, ipv4, ipv6, nodeKey.PublicKeyPEM, certPEM, nodeKey.PrivateKeyPEM, req.Groups, req.Subnets, sha256hex(token), now, now)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`),
+			net.ID, req.Name, ipv4, ipv6, nodeKey.PublicKeyPEM, certPEM, nodeKey.PrivateKeyPEM, req.Groups, req.Subnets, sha256hex(token), now, now).Scan(&nid)
 		if err != nil {
 			rollbackIPs(sc, net.ID, ipv4, ipv6)
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		nid, _ := res.LastInsertId()
 
 		if ipv4 != "" {
 			_ = sc.IPAM.BindNode(net.ID, ipv4, nid)

@@ -69,13 +69,13 @@ func CreateRoute(sc *svc.ServiceContext) http.HandlerFunc {
 		}
 
 		now := nowStr()
-		res, err := sc.Store.DB.Exec(sc.Store.Rebind(`INSERT INTO subnet_routes (network_id,cidr,mtu,metric,mode,all_down_policy,enabled,description,created_at) VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8)`),
-			nid, req.CIDR, req.MTU, req.Metric, req.Mode, req.AllDownPolicy, req.Description, now)
+		var rid int64
+		err = sc.Store.DB.QueryRow(sc.Store.Rebind(`INSERT INTO subnet_routes (network_id,cidr,mtu,metric,mode,all_down_policy,enabled,description,created_at) VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8) RETURNING id`),
+			nid, req.CIDR, req.MTU, req.Metric, req.Mode, req.AllDownPolicy, req.Description, now).Scan(&rid)
 		if err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		rid, _ := res.LastInsertId()
 
 		for _, g := range req.Gateways {
 			if g.Weight == 0 {

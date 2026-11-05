@@ -80,13 +80,13 @@ func CreateEdgeService(sc *svc.ServiceContext) http.HandlerFunc {
 			return
 		}
 		now := nowStr()
-		res, err := sc.Store.DB.Exec(sc.Store.Rebind(`INSERT INTO edge_services (network_id,name,host,target,protocol,tls_mode,public_port,enabled,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,1,$8)`),
-			req.NetworkID, req.Name, req.Host, req.Target, req.Protocol, req.TLSMode, req.PublicPort, now)
+		var id int64
+		err := sc.Store.DB.QueryRow(sc.Store.Rebind(`INSERT INTO edge_services (network_id,name,host,target,protocol,tls_mode,public_port,enabled,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,1,$8) RETURNING id`),
+			req.NetworkID, req.Name, req.Host, req.Target, req.Protocol, req.TLSMode, req.PublicPort, now).Scan(&id)
 		if err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		id, _ := res.LastInsertId()
 		httpx.OK(w, model.EdgeService{ID: id, NetworkID: req.NetworkID, Name: req.Name, Host: req.Host, Target: req.Target, Protocol: req.Protocol, TLSMode: req.TLSMode, PublicPort: req.PublicPort, Enabled: true, CreatedAt: now})
 	}
 }

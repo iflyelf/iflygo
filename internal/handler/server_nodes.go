@@ -103,17 +103,17 @@ func CreateServerNode(sc *svc.ServiceContext) http.HandlerFunc {
 		}
 
 		now := nowStr()
-		res, err := sc.Store.DB.Exec(sc.Store.Rebind(`INSERT INTO server_nodes
+		var nid int64
+		err = sc.Store.DB.QueryRow(sc.Store.Rebind(`INSERT INTO server_nodes
 			(network_id,name,roles,region,overlay_ip4,overlay_ip6,public_host,public_port,public_key,cert_pem,key_pem,created_at)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`),
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`),
 			net.ID, req.Name, req.Roles, req.Region, ip4, ip6, req.PublicHost, req.PublicPort,
-			nodeKey.PublicKeyPEM, certPEM, nodeKey.PrivateKeyPEM, now)
+			nodeKey.PublicKeyPEM, certPEM, nodeKey.PrivateKeyPEM, now).Scan(&nid)
 		if err != nil {
 			rollbackIPs(sc, net.ID, ip4, ip6)
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		nid, _ := res.LastInsertId()
 		if ip4 != "" {
 			_ = sc.IPAM.BindNode(net.ID, ip4, nid)
 		}
