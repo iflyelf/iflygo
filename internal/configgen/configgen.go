@@ -28,11 +28,11 @@ type Config struct {
 }
 
 type PKI struct {
-	CA                string `yaml:"ca"`
-	Cert              string `yaml:"cert"`
-	Key               string `yaml:"key"`
-	Blocklist         string `yaml:"blocklist,omitempty"`
-	InitiatingVersion int    `yaml:"initiating_version,omitempty"`
+	CA                string   `yaml:"ca"`
+	Cert              string   `yaml:"cert"`
+	Key               string   `yaml:"key"`
+	Blocklist         []string `yaml:"blocklist,omitempty"`
+	InitiatingVersion int      `yaml:"initiating_version,omitempty"`
 }
 
 type StaticMap struct {
@@ -142,6 +142,8 @@ type Input struct {
 	CertPath string
 	KeyPath  string
 
+	Blocklist []string
+
 	IsLighthouse bool
 	ListenHost   string
 	ListenPort   int
@@ -185,6 +187,7 @@ func Build(in Input) ([]byte, error) {
 			CA:                in.CAPath,
 			Cert:              in.CertPath,
 			Key:               in.KeyPath,
+			Blocklist:         in.Blocklist,
 			InitiatingVersion: 2,
 		},
 		StaticHostMap: in.StaticHostMap,

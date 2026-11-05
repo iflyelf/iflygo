@@ -37,8 +37,9 @@
 - [x] 服务端节点：lighthouse / relay / edge / gateway 配置生成
 - [x] 不安全路由 HA：多网关加权 + 健康探测 + 动态热加载（active-active / active-passive / fail-closed）
 - [x] edge + 自定义域名：Host/SNI 路由反向代理（HTTP/TLS）、域名→overlay 目标
-- [ ] ACME 自动签发证书（DNS-01/HTTP-01）
-- [ ] 完整配置热加载 / 证书续期
+- [x] ACME 自动证书（Let's Encrypt，HTTP-01 + TLS-ALPN-01）
+- [x] 证书续期 / 吊销（pki.blocklist）
+- [x] Web 管理页面：客户端 / 网络 / 节点 / 路由 / 域名
 
 ## 🔌 控制面 API（已实现）
 

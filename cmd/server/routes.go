@@ -54,6 +54,9 @@ func registerRoutes(mux *http.ServeMux, sc *svc.ServiceContext) {
 	mux.Handle("DELETE /api/clients/{id}", auth(handler.DeleteClient(sc)))
 	mux.Handle("POST /api/clients/{id}/enroll-token", auth(handler.ClientEnrollToken(sc)))
 	mux.Handle("GET /api/clients/{id}/bundle", auth(handler.ClientBundle(sc)))
+	mux.Handle("POST /api/clients/{id}/cert/renew", auth(handler.RenewCert(sc)))
+	mux.Handle("POST /api/clients/{id}/revoke", auth(handler.RevokeCert(sc)))
+	mux.Handle("GET /api/networks/{id}/revocations", auth(handler.ListRevocations(sc)))
 
 	// Agent（注册匿名，心跳/配置需 Bearer）
 	mux.HandleFunc("POST /api/agent/register", handler.AgentRegister(sc))

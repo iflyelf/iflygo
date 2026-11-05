@@ -90,6 +90,11 @@ func buildNebulaInput(sc *svc.ServiceContext, networkID int64, isLighthouse bool
 		return nil, err
 	}
 
+	blocklist, err := loadRevocations(sc, networkID)
+	if err != nil {
+		return nil, err
+	}
+
 	var dns []string
 	if net.DNS != "" {
 		dns = strings.Split(net.DNS, ",")
@@ -99,6 +104,7 @@ func buildNebulaInput(sc *svc.ServiceContext, networkID int64, isLighthouse bool
 		CAPath:               "ca.crt",
 		CertPath:             "node.crt",
 		KeyPath:              "node.key",
+		Blocklist:            blocklist,
 		IsLighthouse:         isLighthouse,
 		ListenPort:           listenPort,
 		Lighthouses:          hosts,

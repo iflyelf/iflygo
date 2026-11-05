@@ -31,6 +31,9 @@ func main() {
 	edgeRoutes := flag.String("edge-routes", "", "edge 路由表 JSON 文件路径")
 	edgeTLSCert := flag.String("edge-tls-cert", "", "edge TLS 证书（可选）")
 	edgeTLSKey := flag.String("edge-tls-key", "", "edge TLS 私钥（可选）")
+	edgeAcmeEmail := flag.String("edge-acme-email", "", "启用 Let's Encrypt 自动证书（填邮箱）")
+	edgeAcmeCache := flag.String("edge-acme-cache", "", "ACME 证书缓存目录")
+	edgeHTTPAddr := flag.String("edge-http-addr", "", "edge ACME HTTP 监听地址（默认 :80）")
 	showVersion := flag.Bool("version", false, "显示版本并退出")
 	flag.Parse()
 
@@ -87,7 +90,11 @@ func main() {
 
 	// edge 角色：按 Host 反向代理到 overlay 目标
 	if *edgeAddr != "" && strings.Contains(*role, "edge") {
-		if err := startEdge(*edgeAddr, *edgeRoutes, *edgeTLSCert, *edgeTLSKey); err != nil {
+		if err := startEdge(edgeConfig{
+			addr: *edgeAddr, httpAddr: *edgeHTTPAddr, routes: *edgeRoutes,
+			cert: *edgeTLSCert, key: *edgeTLSKey,
+			acmeEmail: *edgeAcmeEmail, acmeCache: *edgeAcmeCache,
+		}); err != nil {
 			log.Fatalf("启动 edge 失败: %v", err)
 		}
 	}
