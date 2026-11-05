@@ -54,6 +54,7 @@ jobs:
       - name: 创建 PR
         uses: peter-evans/create-pull-request@v7
         with:
+          token: ${{ secrets.SYNC_PAT }}
           commit-message: "chore(deps): 更新 Nebula 到 ${{ steps.nebula.outputs.latest }}"
           branch: chore/nebula-${{ steps.nebula.outputs.latest }}
           title: "chore(deps): 更新 Nebula 到 ${{ steps.nebula.outputs.latest }}"
@@ -77,6 +78,7 @@ jobs:
       - name: 创建 PR
         uses: peter-evans/create-pull-request@v7
         with:
+          token: ${{ secrets.SYNC_PAT }}
           commit-message: "chore(deps): 同步 upgrade_mgr 子模块到最新"
           branch: chore/upgrade-mgr-sync
           title: "chore(deps): 同步 upgrade_mgr 子模块"
