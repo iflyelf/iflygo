@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -26,6 +27,10 @@ func main() {
 	configFile := flag.String("c", "", "配置文件路径")
 	role := flag.String("role", "console", "服务端角色(逗号分隔): console,lighthouse,relay,edge,gateway")
 	overlayConfig := flag.String("overlay-config", "", "Nebula 配置文件（lighthouse/relay/edge 角色用）")
+	edgeAddr := flag.String("edge-addr", "", "edge 代理监听地址（如 :443）")
+	edgeRoutes := flag.String("edge-routes", "", "edge 路由表 JSON 文件路径")
+	edgeTLSCert := flag.String("edge-tls-cert", "", "edge TLS 证书（可选）")
+	edgeTLSKey := flag.String("edge-tls-key", "", "edge TLS 私钥（可选）")
 	showVersion := flag.Bool("version", false, "显示版本并退出")
 	flag.Parse()
 
@@ -78,6 +83,13 @@ func main() {
 		}
 		defer ov.Stop()
 		log.Printf("🔗 overlay 数据面已启动 (roles=%s)", *role)
+	}
+
+	// edge 角色：按 Host 反向代理到 overlay 目标
+	if *edgeAddr != "" && strings.Contains(*role, "edge") {
+		if err := startEdge(*edgeAddr, *edgeRoutes, *edgeTLSCert, *edgeTLSKey); err != nil {
+			log.Fatalf("启动 edge 失败: %v", err)
+		}
 	}
 
 	go func() {

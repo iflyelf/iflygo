@@ -36,7 +36,8 @@
 - [x] overlay：嵌入 Nebula（证书、完整配置生成、启停、热加载、隧道状态）
 - [x] 服务端节点：lighthouse / relay / edge / gateway 配置生成
 - [x] 不安全路由 HA：多网关加权 + 健康探测 + 动态热加载（active-active / active-passive / fail-closed）
-- [ ] edge + 自定义域名
+- [x] edge + 自定义域名：Host/SNI 路由反向代理（HTTP/TLS）、域名→overlay 目标
+- [ ] ACME 自动签发证书（DNS-01/HTTP-01）
 - [ ] 完整配置热加载 / 证书续期
 
 ## 🔌 控制面 API（已实现）
@@ -58,6 +59,11 @@
 | POST | `/api/agent/register` | Agent 用 token 注册 |
 | POST | `/api/agent/heartbeat` | Agent 心跳 |
 | GET | `/api/agent/config` | Agent 拉取配置 |
+| GET/POST | `/api/networks/{id}/routes` | 不安全路由列表/创建（加权网关） |
+| DELETE | `/api/routes/{id}` | 删除路由 |
+| GET/POST | `/api/edge-services` | 边缘服务（自定义域名 → overlay 目标） |
+| DELETE | `/api/edge-services/{id}` | 删除边缘服务 |
+| GET | `/api/server-nodes/{id}/edge-routes` | 边缘节点路由表 |
 
 ## 🔧 本地构建
 

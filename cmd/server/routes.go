@@ -41,6 +41,12 @@ func registerRoutes(mux *http.ServeMux, sc *svc.ServiceContext) {
 	mux.Handle("POST /api/networks/{id}/routes", auth(handler.CreateRoute(sc)))
 	mux.Handle("DELETE /api/routes/{id}", auth(handler.DeleteRoute(sc)))
 
+	// 边缘服务（自定义域名/二级前缀 → overlay 目标）
+	mux.Handle("GET /api/edge-services", auth(handler.ListEdgeServices(sc)))
+	mux.Handle("POST /api/edge-services", auth(handler.CreateEdgeService(sc)))
+	mux.Handle("DELETE /api/edge-services/{id}", auth(handler.DeleteEdgeService(sc)))
+	mux.Handle("GET /api/server-nodes/{id}/edge-routes", auth(handler.EdgeRoutes(sc)))
+
 	// 客户端
 	mux.Handle("GET /api/clients", auth(handler.ListClients(sc)))
 	mux.Handle("POST /api/clients", auth(handler.CreateClient(sc)))
