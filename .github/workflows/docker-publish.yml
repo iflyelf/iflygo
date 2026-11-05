@@ -27,7 +27,9 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: recursive
 
       - name: 计算镜像 tag
         id: tag

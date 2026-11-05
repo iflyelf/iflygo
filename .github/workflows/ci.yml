@@ -41,6 +41,8 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/iflygo?sslmode=disable
     steps:
       - uses: actions/checkout@v7.0.1
+        with:
+          submodules: recursive
 
       - name: 安装 Go
         uses: actions/setup-go@v7.0.0
@@ -74,6 +76,8 @@ jobs:
           - { os: darwin,  arch: arm64 }
     steps:
       - uses: actions/checkout@v7.0.1
+        with:
+          submodules: recursive
 
       - name: 安装 Go
         uses: actions/setup-go@v7.0.0

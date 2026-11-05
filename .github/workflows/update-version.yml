@@ -1,5 +1,7 @@
-name: 更新上游 Nebula 版本
+name: 自动更新依赖
 
+# 自动跟随上游：Nebula 更新到最新 release（子模块 + go.mod + NEBULA_VERSION），
+# upgrade_mgr 更新子模块到最新 main（供人工对齐功能）。均为开 PR 供审查，不直接合并。
 on:
   workflow_dispatch:
   schedule:
@@ -10,24 +12,70 @@ permissions:
   contents: write
   pull-requests: write
 
+env:
+  GOPROXY: https://goproxy.cn,direct
+
 jobs:
-  update:
+  nebula:
+    name: 更新 Nebula 到最新 release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: recursive
+
+      - name: 安装 Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: 'go.mod'
+
       - name: 获取最新 Nebula release
         id: nebula
         run: |
-          TAG=$(curl -fsSL https://api.github.com/repos/slackhq/nebula/releases/latest | jq -r .tag_name)
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-      - name: 更新 NEBULA_VERSION
+          LATEST=$(curl -fsSL https://api.github.com/repos/slackhq/nebula/releases/latest | jq -r .tag_name)
+          echo "latest=${LATEST}" >> "$GITHUB_OUTPUT"
+
+      - name: 更新子模块 + 版本号
         run: |
-          echo "${{ steps.nebula.outputs.tag }}" > NEBULA_VERSION
+          cd third_party/nebula
+          git fetch --depth 1 origin tag "${{ steps.nebula.outputs.latest }}"
+          git checkout "${{ steps.nebula.outputs.latest }}"
+          cd ../..
+          echo "${{ steps.nebula.outputs.latest }}" > NEBULA_VERSION
+
+      - name: 更新 go.mod
+        run: |
+          go mod edit -require="github.com/slackhq/nebula@${{ steps.nebula.outputs.latest }}"
+          go mod tidy
+
       - name: 创建 PR
         uses: peter-evans/create-pull-request@v7
         with:
-          commit-message: "chore(deps): 更新 Nebula 到 ${{ steps.nebula.outputs.tag }}"
-          branch: chore/nebula-${{ steps.nebula.outputs.tag }}
-          title: "chore(deps): 更新 Nebula 到 ${{ steps.nebula.outputs.tag }}"
-          body: "自动检测到上游 Nebula 最新版本：${{ steps.nebula.outputs.tag }}"
+          commit-message: "chore(deps): 更新 Nebula 到 ${{ steps.nebula.outputs.latest }}"
+          branch: chore/nebula-${{ steps.nebula.outputs.latest }}
+          title: "chore(deps): 更新 Nebula 到 ${{ steps.nebula.outputs.latest }}"
+          body: "自动检测到上游 Nebula 最新版本：${{ steps.nebula.outputs.latest }}。\n\n已同步子模块、NEBULA_VERSION 与 go.mod，CI 将校验兼容性，请审查后合并。"
+          delete-branch: true
+
+  upgrade_mgr:
+    name: 同步 upgrade_mgr 子模块
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: recursive
+
+      - name: 更新子模块到最新 main
+        run: |
+          cd third_party/upgrade_mgr
+          git fetch --depth 1 origin main
+          git checkout FETCH_HEAD
+
+      - name: 创建 PR
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "chore(deps): 同步 upgrade_mgr 子模块到最新"
+          branch: chore/upgrade-mgr-sync
+          title: "chore(deps): 同步 upgrade_mgr 子模块"
+          body: "upgrade_mgr 上游有更新，请人工对齐相关功能（其 internal/ 包不可跨模块导入，需按 diff 移植）。"
           delete-branch: true

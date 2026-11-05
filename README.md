@@ -105,6 +105,33 @@ docker run --rm iflyelf/iflygo:latest -version
 - `workflow_dispatch` 手动触发构建
 - `update-version.yml` 每天检测上游 Nebula 最新版本并自动开 PR
 
+## 🔗 上游子模块同步
+
+本项目以 git 子模块引用上游，跟随其改动：
+
+| 子模块 | 路径 | 用途 | 跟随方式 |
+|---|---|---|---|
+| Nebula | `third_party/nebula`（`go.mod replace`） | 数据面引擎 | 自动：`update-version.yml` 检测最新 release → 更新子模块 + go.mod + `NEBULA_VERSION` → 开 PR |
+| upgrade_mgr | `third_party/upgrade_mgr` | 控制面/前端/CI 对齐参考 | 自动更新子模块开 PR，功能按 diff 手动移植（其 `internal/` 不可跨模块导入） |
+
+**手动同步命令：**
+
+```bash
+# 克隆时初始化子模块
+git clone --recurse-submodules https://github.com/iflyelf/iflygo.git
+
+# 更新 Nebula 到指定 tag（或最新 release）
+cd third_party/nebula && git fetch --depth 1 origin tag v1.11.1 && git checkout v1.11.1 && cd ../..
+go mod edit -require="github.com/slackhq/nebula@v1.11.1" && go mod tidy
+git add third_party/nebula go.mod go.sum NEBULA_VERSION && git commit
+
+# 更新 upgrade_mgr 到最新 main（仅作参考）
+cd third_party/upgrade_mgr && git fetch --depth 1 origin main && git checkout FETCH_HEAD && cd ../..
+git add third_party/upgrade_mgr && git commit
+```
+
+> 升级 Nebula 后如遇编译/行为不兼容，CI 会在 PR 中暴露，请审查后合并。
+
 ## 🔐 安全
 
 凭据（Docker Hub / 华为云 SWR）只存放于 GitHub Actions Secrets，**不写入代码**。

@@ -9,3 +9,7 @@ data
 Dockerfile
 .dockerignore
 README.md
+# 子模块内部 .git 元数据不进镜像
+**/.git
+# upgrade_mgr 仅作功能对齐参考，不参与构建
+third_party/upgrade_mgr
