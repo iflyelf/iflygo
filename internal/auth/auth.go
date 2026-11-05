@@ -1,186 +1,104 @@
-// Package auth 实现会话 Cookie 认证与管理员引导。
+// Package auth 提供可切换的认证抽象：builtin（内置 bcrypt 账号 + 签名会话）与
+// casdoor（FlyIAM SSO，P3 完整实现）。控制台按 config.Auth.Provider 选择实现。
 package auth
 
 import (
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/base64"
-	"encoding/hex"
-	"encoding/json"
+	"context"
 	"errors"
-	"log"
+	"fmt"
 	"net/http"
-	"time"
-
-	"github.com/iflyelf/iflygo/internal/store"
-	"golang.org/x/crypto/bcrypt"
 )
 
-// User 已认证用户。
+// User 认证后的用户身份。
 type User struct {
-	ID          int64  `json:"id"`
-	Username    string `json:"username"`
-	DisplayName string `json:"display_name"`
-	IsAdmin     bool   `json:"is_admin"`
+	ID          string
+	Username    string
+	DisplayName string
+	IsAdmin     bool
+	// TenantID 所属租户；业务查询据此做数据隔离。
+	TenantID int64
+	// Roles 角色列表，如 ["admin"]、["superadmin"]；superadmin 可跨租户。
+	Roles []string
 }
 
-// Auth 会话认证器。
-type Auth struct {
-	s         *store.Store
-	secret    []byte
-	ttl       time.Duration
-	cookieSec string // auto | true | false
-}
+// 角色常量：避免字面量散落导致拼写不一致。
+const (
+	RoleUser       = "user"
+	RoleAdmin      = "admin"
+	RoleSuperAdmin = "superadmin"
+)
 
-const cookieName = "iflygo_session"
-
-type sessionPayload struct {
-	ID          int64  `json:"id"`
-	Username    string `json:"u"`
-	DisplayName string `json:"d"`
-	IsAdmin     bool   `json:"a"`
-	Exp         int64  `json:"exp"`
-}
-
-// New 创建认证器。
-func New(s *store.Store, secret string, ttl time.Duration, cookieSecure string) *Auth {
-	if secret == "" {
-		secret = randomHex(32)
-		log.Printf("⚠️ SESSION_SECRET 未设置，已生成临时密钥（重启后会话失效），建议生产显式配置")
-	}
-	if ttl <= 0 {
-		ttl = 168 * time.Hour
-	}
-	if cookieSecure == "" {
-		cookieSecure = "auto"
-	}
-	return &Auth{s: s, secret: []byte(secret), ttl: ttl, cookieSec: cookieSecure}
-}
-
-// EnsureAdmin 首个启动时创建管理员账号。
-func (a *Auth) EnsureAdmin(username, password string) error {
-	if username == "" {
-		username = "admin"
-	}
-	var n int
-	if err := a.s.DB.QueryRow(a.s.Rebind(`SELECT COUNT(*) FROM users`)).Scan(&n); err != nil {
-		return err
-	}
-	if n > 0 {
-		return nil
-	}
-	if password == "" {
-		password = randomHex(16)
-		log.Printf("🔐 已创建管理员账号 %s，初始密码: %s（请尽快修改）", username, password)
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
-		return err
-	}
-	_, err = a.s.DB.Exec(a.s.Rebind(`INSERT INTO users (username, password_hash, display_name, is_admin, created_at) VALUES ($1,$2,$3,$4,$5)`),
-		username, string(hash), username, true, time.Now().UTC().Format(time.RFC3339))
-	return err
-}
-
-// Verify 校验用户名密码。
-func (a *Auth) Verify(username, password string) (*User, error) {
-	var u User
-	var hash string
-	q := a.s.Rebind(`SELECT id, username, password_hash, display_name, is_admin FROM users WHERE username = $1`)
-	if err := a.s.DB.QueryRow(q, username).Scan(&u.ID, &u.Username, &hash, &u.DisplayName, &u.IsAdmin); err != nil {
-		return nil, errors.New("用户名或密码错误")
-	}
-	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
-		return nil, errors.New("用户名或密码错误")
-	}
-	return &u, nil
-}
-
-// Issue 下发会话 Cookie。
-func (a *Auth) Issue(w http.ResponseWriter, r *http.Request, u *User) {
-	payload := sessionPayload{
-		ID: u.ID, Username: u.Username, DisplayName: u.DisplayName, IsAdmin: u.IsAdmin,
-		Exp: time.Now().Add(a.ttl).Unix(),
-	}
-	raw, _ := json.Marshal(payload)
-	body := base64.RawURLEncoding.EncodeToString(raw)
-	sig := a.sign(body)
-	cookie := &http.Cookie{
-		Name:     cookieName,
-		Value:    body + "." + sig,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   a.secure(r),
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   int(a.ttl.Seconds()),
-	}
-	http.SetCookie(w, cookie)
-}
-
-// User 从请求解析用户（未登录返回 nil）。
-func (a *Auth) User(r *http.Request) (*User, error) {
-	c, err := r.Cookie(cookieName)
-	if err != nil {
-		return nil, nil
-	}
-	body, sig, ok := cutLast(c.Value, '.')
-	if !ok {
-		return nil, errors.New("会话非法")
-	}
-	if subtle.ConstantTimeCompare([]byte(sig), []byte(a.sign(body))) != 1 {
-		return nil, errors.New("会话签名错误")
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(body)
-	if err != nil {
-		return nil, err
-	}
-	var p sessionPayload
-	if err := json.Unmarshal(raw, &p); err != nil {
-		return nil, err
-	}
-	if p.Exp < time.Now().Unix() {
-		return nil, errors.New("会话已过期")
-	}
-	return &User{ID: p.ID, Username: p.Username, DisplayName: p.DisplayName, IsAdmin: p.IsAdmin}, nil
-}
-
-// Clear 清除会话 Cookie。
-func (a *Auth) Clear(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true})
-}
-
-func (a *Auth) sign(body string) string {
-	m := hmac.New(sha256.New, a.secret)
-	m.Write([]byte(body))
-	return hex.EncodeToString(m.Sum(nil))
-}
-
-func (a *Auth) secure(r *http.Request) bool {
-	switch a.cookieSec {
-	case "true":
-		return true
-	case "false":
-		return false
-	default:
-		return r.TLS != nil
-	}
-}
-
-func cutLast(s string, sep byte) (string, string, bool) {
-	for i := len(s) - 1; i >= 0; i-- {
-		if s[i] == sep {
-			return s[:i], s[i+1:], true
+// HasRole 是否拥有指定角色。
+func (u *User) HasRole(role string) bool {
+	for _, r := range u.Roles {
+		if r == role {
+			return true
 		}
 	}
-	return "", "", false
+	return false
 }
 
-func randomHex(n int) string {
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
+// IsSuperAdmin 超级管理员：可跨租户访问全部数据。
+func (u *User) IsSuperAdmin() bool { return u.HasRole(RoleSuperAdmin) }
+
+// CanAccessTenant 是否允许访问指定租户的数据。
+func (u *User) CanAccessTenant(tenantID int64) bool {
+	if u.IsSuperAdmin() {
+		return true
 	}
-	return hex.EncodeToString(b)
+	return u.TenantID == tenantID
 }
+
+// ErrUnauthorized 未认证/凭据无效。
+var ErrUnauthorized = errors.New("未认证或凭据无效")
+
+// Provider 认证提供方抽象。
+type Provider interface {
+	// Name 提供方标识：builtin / casdoor。
+	Name() string
+	// Login 校验凭据（builtin：用户名+密码；casdoor：不使用，走 OAuth 跳转）。
+	Login(ctx context.Context, username, password string) (*User, string, error)
+	// Authenticate 从请求中解析并校验当前用户（cookie / bearer）。
+	Authenticate(r *http.Request) (*User, error)
+	// SetSession 登录成功后写入会话（builtin：签名 cookie）。
+	SetSession(w http.ResponseWriter, token string)
+	// ClearSession 注销。
+	ClearSession(w http.ResponseWriter)
+	// LoginURL 返回登录跳转地址（casdoor 用；builtin 返回空表示本地表单登录）。
+	LoginURL(state string) string
+}
+
+type ctxKey int
+
+const userKey ctxKey = 0
+
+// WithUser 把用户放入 context。
+func WithUser(ctx context.Context, u *User) context.Context {
+	return context.WithValue(ctx, userKey, u)
+}
+
+// FromContext 取出当前用户。
+func FromContext(ctx context.Context) (*User, bool) {
+	u, ok := ctx.Value(userKey).(*User)
+	return u, ok
+}
+
+// ValidatePassword 校验密码合法性。
+// 要求：长度 8-72 字节（bcrypt 限制），且新密码不能与旧密码相同。
+func ValidatePassword(oldPassword, newPassword string) error {
+	if len(newPassword) < 8 {
+		return fmt.Errorf("新密码长度不能少于 8 字符")
+	}
+	if len(newPassword) > 72 {
+		return fmt.Errorf("新密码长度不能超过 72 字节")
+	}
+	if oldPassword != "" && oldPassword == newPassword {
+		return fmt.Errorf("新密码不能与原密码相同")
+	}
+	return nil
+}
+
+var (
+	// ErrWrongPassword 原密码错误。
+	ErrWrongPassword = fmt.Errorf("原密码错误")
+)

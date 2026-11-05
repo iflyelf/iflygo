@@ -59,9 +59,9 @@ func registerRoutes(mux *http.ServeMux, sc *svc.ServiceContext) {
 	mux.Handle("GET /api/networks/{id}/revocations", auth(handler.ListRevocations(sc)))
 
 	// Agent（注册匿名，心跳/配置需 Bearer）
-	mux.HandleFunc("POST /api/agent/register", handler.AgentRegister(sc))
-	mux.HandleFunc("POST /api/agent/heartbeat", handler.AgentHeartbeat(sc))
-	mux.HandleFunc("GET /api/agent/config", handler.AgentConfig(sc))
+	mux.HandleFunc("POST /api/tunnel/register", handler.TunnelAgentRegister(sc))
+	mux.HandleFunc("POST /api/tunnel/heartbeat", handler.TunnelAgentHeartbeat(sc))
+	mux.HandleFunc("GET /api/tunnel/config", handler.TunnelAgentConfig(sc))
 
 	// 前端 SPA
 	mux.Handle("/", spaHandler())

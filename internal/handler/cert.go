@@ -12,7 +12,7 @@ import (
 // RenewCert 用相同密钥重新签发客户端证书。
 func RenewCert(sc *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
+		id, err := tunnelID(r)
 		if err != nil {
 			httpx.Fail(w, http.StatusBadRequest, "id 非法")
 			return
@@ -54,7 +54,7 @@ func RenewCert(sc *svc.ServiceContext) http.HandlerFunc {
 // RevokeCert 吊销客户端证书（加入 blocklist）。
 func RevokeCert(sc *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
+		id, err := tunnelID(r)
 		if err != nil {
 			httpx.Fail(w, http.StatusBadRequest, "id 非法")
 			return
@@ -82,7 +82,7 @@ func RevokeCert(sc *svc.ServiceContext) http.HandlerFunc {
 // ListRevocations 列出网络的吊销指纹。
 func ListRevocations(sc *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		nid, err := pathID(r)
+		nid, err := tunnelID(r)
 		if err != nil {
 			httpx.Fail(w, http.StatusBadRequest, "id 非法")
 			return

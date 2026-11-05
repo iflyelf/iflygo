@@ -25,11 +25,11 @@ type migration struct {
 // migrate 执行尚未应用的迁移。
 func (s *Store) migrate() error {
 	if _, err := s.DB.Exec(s.schemaMigrationsDDL()); err != nil {
-		return fmt.Errorf("创建 schema_migrations: %w", err)
+		return fmt.Errorf("创建 iflygo_migrations: %w", err)
 	}
 
 	applied := map[int]bool{}
-	rows, err := s.DB.Query("SELECT version FROM schema_migrations")
+	rows, err := s.DB.Query("SELECT version FROM iflygo_migrations")
 	if err != nil {
 		return err
 	}
@@ -60,7 +60,7 @@ func (s *Store) migrate() error {
 			_ = tx.Rollback()
 			return fmt.Errorf("迁移 %03d_%s 失败: %w", m.version, m.name, err)
 		}
-		if _, err := tx.Exec(s.Rebind("INSERT INTO schema_migrations (version, name) VALUES ($1, $2)"), m.version, m.name); err != nil {
+		if _, err := tx.Exec(s.Rebind("INSERT INTO iflygo_migrations (version, name) VALUES ($1, $2)"), m.version, m.name); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("记录迁移 %03d 失败: %w", m.version, err)
 		}
@@ -73,9 +73,9 @@ func (s *Store) migrate() error {
 
 func (s *Store) schemaMigrationsDDL() string {
 	if s.Dialect == Postgres {
-		return `CREATE TABLE IF NOT EXISTS schema_migrations (version BIGINT PRIMARY KEY, name TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`
+		return `CREATE TABLE IF NOT EXISTS iflygo_migrations (version BIGINT PRIMARY KEY, name TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`
 	}
-	return `CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`
+	return `CREATE TABLE IF NOT EXISTS iflygo_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`
 }
 
 func (s *Store) loadMigrations() ([]migration, error) {

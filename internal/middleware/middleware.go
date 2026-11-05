@@ -1,34 +1,56 @@
-// Package middleware 提供 HTTP 中间件。
+// Package middleware 提供 HTTP 中间件：认证、管理员校验、访问日志。
 package middleware
 
 import (
-	"context"
 	"log"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/iflyelf/iflygo/internal/auth"
 	"github.com/iflyelf/iflygo/internal/pkg/httpx"
 )
 
-type userKey struct{}
-
-type statusWriter struct {
-	http.ResponseWriter
-	status int
+// RequireAuth 校验登录；通过则把 User 放入 context。
+func RequireAuth(p auth.Provider, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		u, err := p.Authenticate(r)
+		if err != nil || u == nil {
+			httpx.Fail(w, http.StatusUnauthorized, "未认证，请先登录")
+			return
+		}
+		next(w, r.WithContext(auth.WithUser(r.Context(), u)))
+	}
 }
 
-func (w *statusWriter) WriteHeader(code int) {
-	w.status = code
-	w.ResponseWriter.WriteHeader(code)
+// RequireAdmin 在 RequireAuth 之后使用，要求管理员。
+func RequireAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		u, ok := auth.FromContext(r.Context())
+		if !ok || !u.IsAdmin {
+			httpx.Fail(w, http.StatusForbidden, "需要管理员权限")
+			return
+		}
+		next(w, r)
+	}
 }
 
-// AccessLog 记录访问日志。
+// RequireSuperAdmin 要求超级管理员（可修改全局配置）。
+func RequireSuperAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		u, ok := auth.FromContext(r.Context())
+		if !ok || !u.IsSuperAdmin() {
+			httpx.Fail(w, http.StatusForbidden, "需要超级管理员权限")
+			return
+		}
+		next(w, r)
+	}
+}
+
+// AccessLog 简单访问日志。
 func AccessLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		sw := &statusWriter{ResponseWriter: w, status: 200}
 		next.ServeHTTP(sw, r)
 		if r.URL.Path != "/health" {
 			log.Printf("%s %s %d %s", r.Method, r.URL.Path, sw.status, time.Since(start).Round(time.Millisecond))
@@ -36,50 +58,12 @@ func AccessLog(next http.Handler) http.Handler {
 	})
 }
 
-// SecurityHeaders 设置安全响应头。
-func SecurityHeaders(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		h := w.Header()
-		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("X-Frame-Options", "DENY")
-		h.Set("Referrer-Policy", "no-referrer")
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			h.Set("Cache-Control", "no-store")
-		}
-		next.ServeHTTP(w, r)
-	})
+type statusWriter struct {
+	http.ResponseWriter
+	status int
 }
 
-// Recover 捕获 panic，返回 500。
-func Recover(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			if rec := recover(); rec != nil {
-				log.Printf("❌ panic: %v", rec)
-				httpx.Fail(w, http.StatusInternalServerError, "内部错误")
-			}
-		}()
-		next.ServeHTTP(w, r)
-	})
-}
-
-// RequireAuth 要求已登录。
-func RequireAuth(a *auth.Auth, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		u, err := a.User(r)
-		if err != nil || u == nil {
-			httpx.Fail(w, http.StatusUnauthorized, "未登录")
-			return
-		}
-		ctx := context.WithValue(r.Context(), userKey{}, u)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
-}
-
-// CurrentUser 从上下文取当前用户。
-func CurrentUser(r *http.Request) *auth.User {
-	if u, ok := r.Context().Value(userKey{}).(*auth.User); ok {
-		return u
-	}
-	return nil
+func (s *statusWriter) WriteHeader(code int) {
+	s.status = code
+	s.ResponseWriter.WriteHeader(code)
 }

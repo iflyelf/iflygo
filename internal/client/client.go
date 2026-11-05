@@ -55,7 +55,7 @@ func Register(ctx context.Context, server, token string, info RegInfo) (id int64
 		Secret   string       `json:"secret"`
 		Bundle   model.Bundle `json:"bundle"`
 	}
-	err = doJSON(ctx, http.MethodPost, server+"/api/agent/register", "", map[string]string{
+	err = doJSON(ctx, http.MethodPost, server+"/api/tunnel/register", "", map[string]string{
 		"enroll_token": token,
 		"os":           info.OS,
 		"arch":         info.Arch,
@@ -71,7 +71,7 @@ func (c *Client) Heartbeat(ctx context.Context) (int64, error) {
 		ConfigRev int64  `json:"config_rev"`
 		ServerURL string `json:"server_url"`
 	}
-	if err := doJSON(ctx, http.MethodPost, c.Server+"/api/agent/heartbeat", c.bearer(), nil, &out); err != nil {
+	if err := doJSON(ctx, http.MethodPost, c.Server+"/api/tunnel/heartbeat", c.bearer(), nil, &out); err != nil {
 		return 0, err
 	}
 	return out.ConfigRev, nil
@@ -80,7 +80,7 @@ func (c *Client) Heartbeat(ctx context.Context) (int64, error) {
 // Config 拉取配置包。
 func (c *Client) Config(ctx context.Context) (*model.Bundle, error) {
 	var out model.Bundle
-	if err := doJSON(ctx, http.MethodGet, c.Server+"/api/agent/config", c.bearer(), nil, &out); err != nil {
+	if err := doJSON(ctx, http.MethodGet, c.Server+"/api/tunnel/config", c.bearer(), nil, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

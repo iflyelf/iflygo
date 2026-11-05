@@ -94,7 +94,7 @@ func CreateNetwork(sc *svc.ServiceContext) http.HandlerFunc {
 // DeleteNetwork 删除网络（级联删除 CA/节点/地址）。
 func DeleteNetwork(sc *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
+		id, err := tunnelID(r)
 		if err != nil {
 			httpx.Fail(w, http.StatusBadRequest, "id 非法")
 			return
@@ -140,6 +140,6 @@ func getNebulaSettings(sc *svc.ServiceContext, networkID int64) (*model.NebulaSe
 	return s, nil
 }
 
-func pathID(r *http.Request) (int64, error) {
+func tunnelID(r *http.Request) (int64, error) {
 	return strconv.ParseInt(r.PathValue("id"), 10, 64)
 }

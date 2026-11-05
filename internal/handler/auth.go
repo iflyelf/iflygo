@@ -1,54 +1,133 @@
 package handler
 
 import (
+	"github.com/iflyelf/iflygo/internal/pkg/audit"
 	"net/http"
 
-	"github.com/iflyelf/iflygo/internal/middleware"
+	"github.com/iflyelf/iflygo/internal/auth"
 	"github.com/iflyelf/iflygo/internal/pkg/httpx"
 	"github.com/iflyelf/iflygo/internal/svc"
 )
 
-type loginReq struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
-// AuthConfig 返回认证配置（前端据此决定是否显示登录页）。
-func AuthConfig(sc *svc.ServiceContext) http.HandlerFunc {
+// AuthConfig 返回认证方式与登录地址，供前端决定展示本地表单或跳转 SSO。
+func AuthConfig(s *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		httpx.OK(w, map[string]any{"provider": "builtin", "requires_login": true})
+		loginURL := s.Auth.LoginURL("")
+		// Casdoor：启动 OAuth 流程，写入 nonce cookie
+		if cd, ok := s.Auth.(*auth.Casdoor); ok {
+			loginURL = cd.BeginLogin(w)
+		}
+		httpx.OK(w, map[string]any{
+			"provider":  s.Auth.Name(),
+			"login_url": loginURL,
+		})
 	}
 }
 
-// Login 登录。
-func Login(sc *svc.ServiceContext) http.HandlerFunc {
+// Login 内置账号登录。
+func Login(s *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req loginReq
+		var req struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+		}
 		if err := httpx.DecodeJSON(r, &req); err != nil {
-			httpx.Fail(w, http.StatusBadRequest, "请求体非法")
+			httpx.Fail(w, http.StatusBadRequest, "请求格式错误")
 			return
 		}
-		u, err := sc.Auth.Verify(req.Username, req.Password)
+		u, token, err := s.Auth.Login(r.Context(), req.Username, req.Password)
 		if err != nil {
-			httpx.Fail(w, http.StatusUnauthorized, err.Error())
+			// 登录失败必须留痕：识别暴力破解的主要依据。
+			auditAnon(s, r, audit.ActionLogin, req.Username, "auth", "", err)
+			httpx.Fail(w, http.StatusUnauthorized, "用户名或密码错误")
 			return
 		}
-		sc.Auth.Issue(w, r, u)
+		auditAnon(s, r, audit.ActionLogin, req.Username, "auth", "", nil)
+		s.Auth.SetSession(w, token)
 		httpx.OK(w, u)
 	}
 }
 
-// Logout 登出。
-func Logout(sc *svc.ServiceContext) http.HandlerFunc {
+// Logout 注销。
+func Logout(s *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		sc.Auth.Clear(w)
+		s.Auth.ClearSession(w)
 		httpx.OK(w, nil)
 	}
 }
 
-// UserInfo 当前用户信息。
-func UserInfo(sc *svc.ServiceContext) http.HandlerFunc {
+// UserInfo 返回当前用户。
+func UserInfo(s *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		httpx.OK(w, middleware.CurrentUser(r))
+		u, _ := auth.FromContext(r.Context())
+		httpx.OK(w, u)
+	}
+}
+
+// AuthCallback OAuth2 授权码回调（casdoor）。
+//
+// 流程：Casdoor 重定向携带 code+state → 校验 nonce cookie（防 CSRF）→ 用 code 换 token
+// → 拉取用户信息 → 签发本系统会话 cookie → 重定向回前端首页。
+// 仅当 Provider 为 casdoor 时可用；builtin 下返回 404，避免暴露无用端点。
+func AuthCallback(s *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cd, ok := s.Auth.(*auth.Casdoor)
+		if !ok {
+			httpx.Fail(w, http.StatusNotFound, "当前认证方式不支持 OAuth 回调")
+			return
+		}
+		u, token, err := cd.HandleCallbackRequest(r.Context(), w, r)
+		if err != nil {
+			auditAnon(s, r, audit.ActionLogin, "", "auth", "", err)
+			httpx.Fail(w, http.StatusUnauthorized, "SSO 登录失败")
+			return
+		}
+		auditAnon(s, r, audit.ActionLogin, u.Username, "auth", "", nil)
+		cd.SetSession(w, token)
+		// 会话已写入 cookie，重定向回前端首页。
+		http.Redirect(w, r, "/", http.StatusFound)
+	}
+}
+
+// ChangePassword 修改当前用户密码（自助）。
+func ChangePassword(s *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// 仅 builtin 支持密码修改
+		b, ok := s.Auth.(*auth.Builtin)
+		if !ok {
+			httpx.Fail(w, http.StatusBadRequest, "当前认证方式不支持密码修改")
+			return
+		}
+		
+		u, ok := auth.FromContext(r.Context())
+		if !ok || u == nil {
+			httpx.Fail(w, http.StatusUnauthorized, "未认证")
+			return
+		}
+		
+		var req struct {
+			OldPassword string `json:"old_password"`
+			NewPassword string `json:"new_password"`
+		}
+		if err := httpx.DecodeJSON(r, &req); err != nil {
+			httpx.Fail(w, http.StatusBadRequest, "请求格式错误")
+			return
+		}
+		
+		token, err := b.ChangePassword(r.Context(), u.ID, req.OldPassword, req.NewPassword)
+		if err != nil {
+			action := audit.ActionPasswordChange
+			auditOp(s, r, action, "auth", u.ID, u.Username, err)
+			if err == auth.ErrWrongPassword {
+				httpx.Fail(w, http.StatusBadRequest, "原密码错误")
+				return
+			}
+			httpx.FailErr(w, http.StatusBadRequest, err)
+			return
+		}
+		
+		auditOp(s, r, audit.ActionPasswordChange, "auth", u.ID, u.Username, nil)
+		b.SetSession(w, token)
+		httpx.OK(w, map[string]any{"message": "密码修改成功"})
 	}
 }

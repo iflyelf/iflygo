@@ -129,7 +129,7 @@ func CreateServerNode(sc *svc.ServiceContext) http.HandlerFunc {
 // DeleteServerNode 删除服务端节点。
 func DeleteServerNode(sc *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
+		id, err := tunnelID(r)
 		if err != nil {
 			httpx.Fail(w, http.StatusBadRequest, "id 非法")
 			return
@@ -146,7 +146,7 @@ func DeleteServerNode(sc *svc.ServiceContext) http.HandlerFunc {
 // ServerNodeBundle 返回服务端节点的配置包（ca/cert/key/nebula 配置）。
 func ServerNodeBundle(sc *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
+		id, err := tunnelID(r)
 		if err != nil {
 			httpx.Fail(w, http.StatusBadRequest, "id 非法")
 			return

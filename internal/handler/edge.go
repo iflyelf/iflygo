@@ -94,7 +94,7 @@ func CreateEdgeService(sc *svc.ServiceContext) http.HandlerFunc {
 // DeleteEdgeService 删除边缘服务。
 func DeleteEdgeService(sc *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
+		id, err := tunnelID(r)
 		if err != nil {
 			httpx.Fail(w, http.StatusBadRequest, "id 非法")
 			return
@@ -110,7 +110,7 @@ func DeleteEdgeService(sc *svc.ServiceContext) http.HandlerFunc {
 // EdgeRoutes 返回边缘节点所需的路由表（域名 → overlay 目标）。
 func EdgeRoutes(sc *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
+		id, err := tunnelID(r)
 		if err != nil {
 			httpx.Fail(w, http.StatusBadRequest, "id 非法")
 			return

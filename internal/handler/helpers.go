@@ -30,7 +30,7 @@ func randomToken() (string, error) {
 
 // baseURL 计算对外地址（用于安装命令）。
 func baseURL(sc *svc.ServiceContext, r *http.Request) string {
-	if u := sc.Cfg.Server.ExternalURL; u != "" {
+	if u := sc.Config.Server.ExternalURL; u != "" {
 		return u
 	}
 	scheme := "http"

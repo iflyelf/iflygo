@@ -50,10 +50,7 @@ func main() {
 		log.Fatalf("配置校验失败: %v", err)
 	}
 
-	sc, err := svc.New(cfg)
-	if err != nil {
-		log.Fatalf("初始化失败: %v", err)
-	}
+	sc := svc.New(cfg)
 	defer sc.Store.Close()
 
 	mux := http.NewServeMux()

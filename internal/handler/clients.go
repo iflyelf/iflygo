@@ -152,7 +152,7 @@ func CreateClient(sc *svc.ServiceContext) http.HandlerFunc {
 // GetClient 单个客户端。
 func GetClient(sc *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
+		id, err := tunnelID(r)
 		if err != nil {
 			httpx.Fail(w, http.StatusBadRequest, "id 非法")
 			return
@@ -169,7 +169,7 @@ func GetClient(sc *svc.ServiceContext) http.HandlerFunc {
 // DeleteClient 删除客户端并释放 IP。
 func DeleteClient(sc *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
+		id, err := tunnelID(r)
 		if err != nil {
 			httpx.Fail(w, http.StatusBadRequest, "id 非法")
 			return
@@ -186,7 +186,7 @@ func DeleteClient(sc *svc.ServiceContext) http.HandlerFunc {
 // ClientEnrollToken 重新生成 enroll token。
 func ClientEnrollToken(sc *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
+		id, err := tunnelID(r)
 		if err != nil {
 			httpx.Fail(w, http.StatusBadRequest, "id 非法")
 			return
@@ -213,7 +213,7 @@ func ClientEnrollToken(sc *svc.ServiceContext) http.HandlerFunc {
 // ClientBundle 返回客户端配置包（证书 + 配置）。
 func ClientBundle(sc *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
+		id, err := tunnelID(r)
 		if err != nil {
 			httpx.Fail(w, http.StatusBadRequest, "id 非法")
 			return

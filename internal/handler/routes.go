@@ -30,7 +30,7 @@ type createRouteReq struct {
 // ListRoutes 列出网络的不安全路由（含网关）。
 func ListRoutes(sc *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		nid, err := pathID(r)
+		nid, err := tunnelID(r)
 		if err != nil {
 			httpx.Fail(w, http.StatusBadRequest, "id 非法")
 			return
@@ -47,7 +47,7 @@ func ListRoutes(sc *svc.ServiceContext) http.HandlerFunc {
 // CreateRoute 创建不安全路由及其网关。
 func CreateRoute(sc *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		nid, err := pathID(r)
+		nid, err := tunnelID(r)
 		if err != nil {
 			httpx.Fail(w, http.StatusBadRequest, "id 非法")
 			return
@@ -106,7 +106,7 @@ func CreateRoute(sc *svc.ServiceContext) http.HandlerFunc {
 // DeleteRoute 删除路由。
 func DeleteRoute(sc *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id, err := pathID(r)
+		id, err := tunnelID(r)
 		if err != nil {
 			httpx.Fail(w, http.StatusBadRequest, "id 非法")
 			return
