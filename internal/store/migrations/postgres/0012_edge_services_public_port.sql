@@ -1,0 +1,1 @@
+ALTER TABLE edge_services ADD COLUMN public_port INTEGER NOT NULL DEFAULT 0;

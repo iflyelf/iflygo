@@ -12,24 +12,27 @@ import (
 	"sync"
 )
 
-// Route 一条域名 → 目标映射。
+// Route 一条接入映射：HTTP 用 Host，TCP 用 Port。
 type Route struct {
-	Host   string `json:"host"`   // 域名（精确或 *.example.com 通配）
-	Target string `json:"target"` // overlayIP:port
+	Host   string `json:"host,omitempty"` // 域名（精确或 *.example.com 通配）
+	Port   int    `json:"port,omitempty"` // TCP 公网监听端口
+	Target string `json:"target"`         // overlayIP:port
 }
 
-// Table 路由表。
+// Table HTTP 路由表。
 type Table struct {
 	mu       sync.RWMutex
 	exact    map[string]string
 	wildcard map[string]string // *.example.com -> target
 }
 
-// NewTable 构建路由表。
+// NewTable 构建 HTTP 路由表（忽略 TCP 路由）。
 func NewTable(routes []Route) *Table {
 	t := &Table{exact: map[string]string{}, wildcard: map[string]string{}}
 	for _, r := range routes {
-		t.add(r.Host, r.Target)
+		if r.Host != "" {
+			t.add(r.Host, r.Target)
+		}
 	}
 	return t
 }
@@ -44,7 +47,9 @@ func (t *Table) FromJSON(b []byte) error {
 	t.exact = map[string]string{}
 	t.wildcard = map[string]string{}
 	for _, r := range routes {
-		t.addLocked(r.Host, r.Target)
+		if r.Host != "" {
+			t.addLocked(r.Host, r.Target)
+		}
 	}
 	t.mu.Unlock()
 	return nil
@@ -62,7 +67,9 @@ func (t *Table) Set(routes []Route) {
 	t.exact = map[string]string{}
 	t.wildcard = map[string]string{}
 	for _, r := range routes {
-		t.addLocked(r.Host, r.Target)
+		if r.Host != "" {
+			t.addLocked(r.Host, r.Target)
+		}
 	}
 	t.mu.Unlock()
 }

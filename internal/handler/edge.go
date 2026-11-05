@@ -12,12 +12,13 @@ import (
 )
 
 type edgeServiceReq struct {
-	NetworkID int64  `json:"network_id"`
-	Name      string `json:"name"`
-	Host      string `json:"host"`
-	Target    string `json:"target"`
-	Protocol  string `json:"protocol"`
-	TLSMode   string `json:"tls_mode"`
+	NetworkID  int64  `json:"network_id"`
+	Name       string `json:"name"`
+	Host       string `json:"host"`
+	Target     string `json:"target"`
+	Protocol   string `json:"protocol"`
+	TLSMode    string `json:"tls_mode"`
+	PublicPort int    `json:"public_port"`
 }
 
 // ListEdgeServices 列出边缘服务。
@@ -27,9 +28,9 @@ func ListEdgeServices(sc *svc.ServiceContext) http.HandlerFunc {
 		var err error
 		if nidStr := r.URL.Query().Get("network_id"); nidStr != "" {
 			nid, _ := strconv.ParseInt(nidStr, 10, 64)
-			rows, err = sc.Store.DB.Query(sc.Store.Rebind(`SELECT id,network_id,name,host,target,protocol,tls_mode,enabled,created_at FROM edge_services WHERE network_id = $1 ORDER BY id`), nid)
+			rows, err = sc.Store.DB.Query(sc.Store.Rebind(`SELECT id,network_id,name,host,target,protocol,tls_mode,public_port,enabled,created_at FROM edge_services WHERE network_id = $1 ORDER BY id`), nid)
 		} else {
-			rows, err = sc.Store.DB.Query(sc.Store.Rebind(`SELECT id,network_id,name,host,target,protocol,tls_mode,enabled,created_at FROM edge_services ORDER BY id`))
+			rows, err = sc.Store.DB.Query(sc.Store.Rebind(`SELECT id,network_id,name,host,target,protocol,tls_mode,public_port,enabled,created_at FROM edge_services ORDER BY id`))
 		}
 		if err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
@@ -40,7 +41,7 @@ func ListEdgeServices(sc *svc.ServiceContext) http.HandlerFunc {
 		for rows.Next() {
 			var s model.EdgeService
 			var enabled int64
-			if err := rows.Scan(&s.ID, &s.NetworkID, &s.Name, &s.Host, &s.Target, &s.Protocol, &s.TLSMode, &enabled, &s.CreatedAt); err != nil {
+			if err := rows.Scan(&s.ID, &s.NetworkID, &s.Name, &s.Host, &s.Target, &s.Protocol, &s.TLSMode, &s.PublicPort, &enabled, &s.CreatedAt); err != nil {
 				httpx.FailErr(w, http.StatusInternalServerError, err)
 				return
 			}
@@ -59,8 +60,8 @@ func CreateEdgeService(sc *svc.ServiceContext) http.HandlerFunc {
 			httpx.Fail(w, http.StatusBadRequest, "请求体非法")
 			return
 		}
-		if req.Host == "" || req.Target == "" || req.NetworkID == 0 {
-			httpx.Fail(w, http.StatusBadRequest, "host、target、network_id 必填")
+		if req.Target == "" || req.NetworkID == 0 {
+			httpx.Fail(w, http.StatusBadRequest, "target、network_id 必填")
 			return
 		}
 		if req.Protocol == "" {
@@ -69,15 +70,24 @@ func CreateEdgeService(sc *svc.ServiceContext) http.HandlerFunc {
 		if req.TLSMode == "" {
 			req.TLSMode = "terminate"
 		}
+		if req.Protocol == "tcp" {
+			if req.PublicPort == 0 {
+				httpx.Fail(w, http.StatusBadRequest, "tcp 协议需要 public_port")
+				return
+			}
+		} else if req.Host == "" {
+			httpx.Fail(w, http.StatusBadRequest, "http/https 协议需要 host")
+			return
+		}
 		now := nowStr()
-		res, err := sc.Store.DB.Exec(sc.Store.Rebind(`INSERT INTO edge_services (network_id,name,host,target,protocol,tls_mode,enabled,created_at) VALUES ($1,$2,$3,$4,$5,$6,1,$7)`),
-			req.NetworkID, req.Name, req.Host, req.Target, req.Protocol, req.TLSMode, now)
+		res, err := sc.Store.DB.Exec(sc.Store.Rebind(`INSERT INTO edge_services (network_id,name,host,target,protocol,tls_mode,public_port,enabled,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,1,$8)`),
+			req.NetworkID, req.Name, req.Host, req.Target, req.Protocol, req.TLSMode, req.PublicPort, now)
 		if err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
 		}
 		id, _ := res.LastInsertId()
-		httpx.OK(w, model.EdgeService{ID: id, NetworkID: req.NetworkID, Name: req.Name, Host: req.Host, Target: req.Target, Protocol: req.Protocol, TLSMode: req.TLSMode, Enabled: true, CreatedAt: now})
+		httpx.OK(w, model.EdgeService{ID: id, NetworkID: req.NetworkID, Name: req.Name, Host: req.Host, Target: req.Target, Protocol: req.Protocol, TLSMode: req.TLSMode, PublicPort: req.PublicPort, Enabled: true, CreatedAt: now})
 	}
 }
 
@@ -110,7 +120,7 @@ func EdgeRoutes(sc *svc.ServiceContext) http.HandlerFunc {
 			httpx.Fail(w, http.StatusNotFound, "边缘节点不存在")
 			return
 		}
-		rows, err := sc.Store.DB.Query(sc.Store.Rebind(`SELECT host,target FROM edge_services WHERE network_id = $1 AND enabled = 1 AND protocol IN ('http','https') ORDER BY id`), networkID)
+		rows, err := sc.Store.DB.Query(sc.Store.Rebind(`SELECT host,target,protocol,public_port FROM edge_services WHERE network_id = $1 AND enabled = 1 ORDER BY id`), networkID)
 		if err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
@@ -118,10 +128,17 @@ func EdgeRoutes(sc *svc.ServiceContext) http.HandlerFunc {
 		defer rows.Close()
 		routes := []edge.Route{}
 		for rows.Next() {
-			var rt edge.Route
-			if err := rows.Scan(&rt.Host, &rt.Target); err != nil {
+			var host, target, protocol string
+			var port int
+			if err := rows.Scan(&host, &target, &protocol, &port); err != nil {
 				httpx.FailErr(w, http.StatusInternalServerError, err)
 				return
+			}
+			rt := edge.Route{Target: target}
+			if protocol == "tcp" {
+				rt.Port = port
+			} else {
+				rt.Host = host
 			}
 			routes = append(routes, rt)
 		}

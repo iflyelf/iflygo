@@ -32,7 +32,13 @@ func startEdge(cfg edgeConfig) error {
 	table := edge.NewTable(routes)
 	proxy := edge.NewProxy(table)
 
-	// 周期重载路由表（域名/目标变更后无需重启）
+	tcpRouter := edge.NewTCPRouter(routes)
+	tcpProxy := edge.NewTCPProxy(tcpRouter, "")
+	if err := tcpProxy.Sync(); err != nil {
+		return err
+	}
+
+	// 周期重载路由表（域名/TCP 端口变更后无需重启）
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
@@ -42,6 +48,10 @@ func startEdge(cfg edgeConfig) error {
 				continue
 			}
 			table.Set(r)
+			tcpRouter.Set(r)
+			if err := tcpProxy.Sync(); err != nil {
+				log.Printf("⚠️ TCP 转发同步失败: %v", err)
+			}
 			log.Printf("🌐 edge 路由表已重载: %d 条", len(r))
 		}
 	}()

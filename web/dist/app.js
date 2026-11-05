@@ -143,6 +143,8 @@
       h('td', {}, c.name), h('td', {}, c.ipv4 || '—'), h('td', {}, c.ipv6 || '—'),
       h('td', {}, h('span', { class: 'badge ' + (c.status === 'online' ? 'online' : 'offline') }, c.status)),
       h('td', {}, h('button', { class: 'btn sm', onclick: () => getToken(c.id, c.name) }, '安装命令'), ' ',
+        h('button', { class: 'btn sm', onclick: () => renewCert(c.id) }, '续期'), ' ',
+        h('button', { class: 'btn sm', onclick: () => revokeCert(c.id) }, '吊销'), ' ',
         h('button', { class: 'btn danger sm', onclick: () => delClient(c.id) }, '删除'))));
 
     const name = h('input', { placeholder: '名称' });
@@ -239,29 +241,45 @@
   // ---------- 边缘服务 ----------
   function renderEdgeServices() {
     const rows = state.edgeServices.map((s) => h('tr', {},
-      h('td', {}, s.name), h('td', {}, s.host), h('td', {}, s.target), h('td', {}, s.protocol),
+      h('td', {}, s.name),
+      h('td', {}, s.protocol === 'tcp' ? ':' + s.public_port : s.host),
+      h('td', {}, s.target), h('td', {}, s.protocol),
       h('td', {}, h('button', { class: 'btn danger sm', onclick: () => delEdgeService(s.id) }, '删除'))));
 
     const net = netSelect(state.networks[0] ? state.networks[0].id : 0);
     const name = h('input', { placeholder: '名称' });
-    const host = h('input', { placeholder: '域名, 如 nas.example.com' });
+    const proto = h('select', {}, h('option', { value: 'http' }, 'http'), h('option', { value: 'tcp' }, 'tcp'));
+    const host = h('input', { placeholder: '域名 (http), 如 nas.example.com' });
+    const pubPort = h('input', { placeholder: '公网端口 (tcp)', type: 'number' });
     const target = h('input', { placeholder: '目标, 如 10.77.0.2:5000' });
     const create = h('button', { class: 'btn primary', style: 'width:100%' }, '创建域名服务');
     create.onclick = async () => {
-      const r = await api('/api/edge-services', { method: 'POST', body: { network_id: Number(net.value), name: name.value, host: host.value, target: target.value, protocol: 'http' } });
-      if (r.ok) { await loadAll(); setMsg('域名服务已创建', 'ok'); } else setMsg(r.data.message);
+      const r = await api('/api/edge-services', { method: 'POST', body: { network_id: Number(net.value), name: name.value, host: host.value, target: target.value, protocol: proto.value, public_port: Number(pubPort.value || 0) } });
+      if (r.ok) { await loadAll(); setMsg('服务已创建', 'ok'); } else setMsg(r.data.message);
       render();
     };
 
-    return h('div', { class: 'card' }, h('h2', {}, '边缘服务（自定义域名）'),
-      h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, '名称'), h('th', {}, '域名'), h('th', {}, '目标'), h('th', {}, '协议'), h('th', {}))), h('tbody', {}, rows)),
-      h('div', { class: 'muted', style: 'margin-bottom:8px' }, '新建域名服务'), net, name, host, target, create);
+    return h('div', { class: 'card' }, h('h2', {}, '边缘服务（自定义域名 / TCP 端口）'),
+      h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, '名称'), h('th', {}, '入口'), h('th', {}, '目标'), h('th', {}, '协议'), h('th', {}))), h('tbody', {}, rows)),
+      h('div', { class: 'muted', style: 'margin-bottom:8px' }, '新建服务'), net, name, proto, host, pubPort, target, create);
   }
 
   // ---------- 操作 ----------
   async function getToken(id, name) {
     const r = await api('/api/clients/' + id + '/enroll-token', { method: 'POST' });
     if (r.ok) { setMsg(name + ' 安装命令：' + r.data.install_command, 'ok'); try { navigator.clipboard.writeText(r.data.install_command); } catch (_) {} } else setMsg(r.data.message);
+    render();
+  }
+  async function renewCert(id) {
+    if (!confirm('确认续期该客户端证书？')) return;
+    const r = await api('/api/clients/' + id + '/cert/renew', { method: 'POST' });
+    setMsg(r.ok ? '证书已续期' : r.data.message);
+    render();
+  }
+  async function revokeCert(id) {
+    if (!confirm('确认吊销该客户端证书（加入 blocklist）？')) return;
+    const r = await api('/api/clients/' + id + '/revoke', { method: 'POST' });
+    setMsg(r.ok ? '证书已吊销' : r.data.message);
     render();
   }
   async function delClient(id) { if (!confirm('确认删除该客户端？')) return; await api('/api/clients/' + id, { method: 'DELETE' }); await loadAll(); render(); }

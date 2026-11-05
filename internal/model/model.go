@@ -146,13 +146,14 @@ type RouteSpec struct {
 
 // EdgeService 边缘接入服务（自定义域名/二级前缀 → overlay 目标）。
 type EdgeService struct {
-	ID        int64  `json:"id"`
-	NetworkID int64  `json:"network_id"`
-	Name      string `json:"name"`
-	Host      string `json:"host"`
-	Target    string `json:"target"`
-	Protocol  string `json:"protocol"` // http | https | tcp
-	TLSMode   string `json:"tls_mode"` // terminate | passthrough | off
-	Enabled   bool   `json:"enabled"`
-	CreatedAt string `json:"created_at"`
+	ID         int64  `json:"id"`
+	NetworkID  int64  `json:"network_id"`
+	Name       string `json:"name"`
+	Host       string `json:"host"`
+	Target     string `json:"target"`
+	Protocol   string `json:"protocol"`    // http | https | tcp
+	TLSMode    string `json:"tls_mode"`    // terminate | passthrough | off
+	PublicPort int    `json:"public_port"` // tcp 协议的公网监听端口
+	Enabled    bool   `json:"enabled"`
+	CreatedAt  string `json:"created_at"`
 }

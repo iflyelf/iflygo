@@ -35,6 +35,7 @@ jobs:
           TAG="${{ inputs.tag }}"
           if [ -z "$TAG" ]; then TAG=latest; fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -66,6 +67,9 @@ jobs:
           push: true
           provenance: false
           sbom: false
+          build-args: |
+            VERSION=${{ steps.tag.outputs.version }}
+            COMMIT=${{ github.sha }}
           tags: |
             ${{ secrets.DOCKER_USERNAME }}/iflygo:${{ steps.tag.outputs.tag }}
 
@@ -79,5 +83,8 @@ jobs:
           push: true
           provenance: false
           sbom: false
+          build-args: |
+            VERSION=${{ steps.tag.outputs.version }}
+            COMMIT=${{ github.sha }}
           tags: |
             ${{ env.SWR_REGISTRY }}/${{ env.SWR_ORGANIZATION }}/iflygo:${{ steps.tag.outputs.tag }}
