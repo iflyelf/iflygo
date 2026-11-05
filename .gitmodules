@@ -1,0 +1,6 @@
+[submodule "third_party/nebula"]
+	path = third_party/nebula
+	url = https://github.com/slackhq/nebula.git
+[submodule "third_party/upgrade_mgr"]
+	path = third_party/upgrade_mgr
+	url = https://github.com/iflyelf/upgrade_mgr.git
