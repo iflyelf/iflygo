@@ -44,6 +44,9 @@ jobs:
           echo "${{ steps.nebula.outputs.latest }}" > NEBULA_VERSION
 
       - name: 更新 go.mod
+        env:
+          # 允许 tidy 自动升级 go 指令与工具链（上游可能要求更高 Go 版本）
+          GOTOOLCHAIN: auto
         run: |
           go mod edit -require="github.com/slackhq/nebula@${{ steps.nebula.outputs.latest }}"
           go mod tidy
