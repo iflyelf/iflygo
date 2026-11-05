@@ -145,12 +145,20 @@ func (m *Migrator) Up(ctx context.Context) error {
 		return fmt.Errorf("获取迁移锁连接失败: %w", err)
 	}
 	defer conn.Close()
+	useAdvisoryLock := true
 	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", migrateLockKey); err != nil {
-		return fmt.Errorf("获取迁移锁失败: %w", err)
+		if strings.Contains(err.Error(), "no such function") || strings.Contains(err.Error(), "pg_advisory_lock") {
+			// SQLite 无 advisory lock：退化为单写者（WAL + busy_timeout 保证安全）
+			useAdvisoryLock = false
+		} else {
+			return fmt.Errorf("获取迁移锁失败: %w", err)
+		}
 	}
-	defer func() {
-		_, _ = conn.ExecContext(context.Background(), "SELECT pg_advisory_unlock($1)", migrateLockKey)
-	}()
+	if useAdvisoryLock {
+		defer func() {
+			_, _ = conn.ExecContext(context.Background(), "SELECT pg_advisory_unlock($1)", migrateLockKey)
+		}()
+	}
 
 	// 1. 确保 schema_migrations 表存在（以下全部复用持锁连接 conn）
 	if err := ensureMigrationsTable(ctx, conn); err != nil {
