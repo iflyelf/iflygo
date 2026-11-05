@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"log/slog"
@@ -38,6 +39,13 @@ func Run(dir string, interval time.Duration) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// 不安全路由健康管理（探测网关 → 动态热加载）
+	rm := NewRouteManager(dir, ov)
+	if err := rm.Load(); err != nil {
+		log.Printf("⚠️ 加载路由失败: %v", err)
+	}
+	go rm.Run(ctx, interval)
 
 	hb := time.NewTicker(interval)
 	defer hb.Stop()
@@ -95,7 +103,7 @@ func fetchAndApply(c *Client, st *State, dir string) error {
 	return st.Save(dir)
 }
 
-// ApplyBundle 将配置包写入状态目录（证书 + Nebula 配置）。
+// ApplyBundle 将配置包写入状态目录（证书 + Nebula 配置 + 路由描述）。
 func ApplyBundle(dir string, b *model.Bundle) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -113,6 +121,17 @@ func ApplyBundle(dir string, b *model.Bundle) error {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(f.data), f.mode); err != nil {
 			return err
 		}
+	}
+	if len(b.Routes) > 0 {
+		routesJSON, err := json.MarshalIndent(b.Routes, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(dir, "routes.json"), routesJSON, 0o600); err != nil {
+			return err
+		}
+	} else {
+		_ = os.Remove(filepath.Join(dir, "routes.json"))
 	}
 	log.Printf("✅ 配置已应用到 %s", dir)
 	return nil

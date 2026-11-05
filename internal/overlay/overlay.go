@@ -4,6 +4,7 @@ package overlay
 import (
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sync"
@@ -109,6 +110,35 @@ func (o *Overlay) Peers() []Peer {
 		out = append(out, p)
 	}
 	return out
+}
+
+// Reachable 判断与某个 overlay 节点是否已建立隧道。
+func (o *Overlay) Reachable(vpnIP string) bool {
+	o.mu.Lock()
+	ctl := o.ctl
+	o.mu.Unlock()
+	if ctl == nil {
+		return false
+	}
+	addr, err := netip.ParseAddr(vpnIP)
+	if err != nil {
+		return false
+	}
+	hi := ctl.GetHostInfoByVpnAddr(addr, false)
+	return hi != nil && hi.RemoteIndex != 0
+}
+
+// EnsureTunnel 主动触发与某 overlay 节点握手（用于健康探测）。
+func (o *Overlay) EnsureTunnel(vpnIP string) {
+	o.mu.Lock()
+	ctl := o.ctl
+	o.mu.Unlock()
+	if ctl == nil {
+		return
+	}
+	if addr, err := netip.ParseAddr(vpnIP); err == nil {
+		ctl.CreateTunnel(addr)
+	}
 }
 
 // WritePKI 将 CA/证书/私钥写入目录。

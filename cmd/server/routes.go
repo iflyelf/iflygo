@@ -36,6 +36,11 @@ func registerRoutes(mux *http.ServeMux, sc *svc.ServiceContext) {
 	mux.Handle("DELETE /api/server-nodes/{id}", auth(handler.DeleteServerNode(sc)))
 	mux.Handle("GET /api/server-nodes/{id}/bundle", auth(handler.ServerNodeBundle(sc)))
 
+	// 不安全路由（子网路由 + 网关）
+	mux.Handle("GET /api/networks/{id}/routes", auth(handler.ListRoutes(sc)))
+	mux.Handle("POST /api/networks/{id}/routes", auth(handler.CreateRoute(sc)))
+	mux.Handle("DELETE /api/routes/{id}", auth(handler.DeleteRoute(sc)))
+
 	// 客户端
 	mux.Handle("GET /api/clients", auth(handler.ListClients(sc)))
 	mux.Handle("POST /api/clients", auth(handler.CreateClient(sc)))

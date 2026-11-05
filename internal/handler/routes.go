@@ -1,0 +1,172 @@
+package handler
+
+import (
+	"net/http"
+
+	"github.com/iflyelf/iflygo/internal/model"
+	"github.com/iflyelf/iflygo/internal/pkg/httpx"
+	"github.com/iflyelf/iflygo/internal/svc"
+)
+
+type gatewayReq struct {
+	NodeID       int64  `json:"node_id"`
+	OverlayIP    string `json:"overlay_ip"`
+	Weight       int    `json:"weight"`
+	Priority     int    `json:"priority"`
+	HealthTarget string `json:"health_target"`
+	HealthPort   int    `json:"health_port"`
+}
+
+type createRouteReq struct {
+	CIDR          string       `json:"cidr"`
+	MTU           int          `json:"mtu"`
+	Metric        int          `json:"metric"`
+	Mode          string       `json:"mode"`
+	AllDownPolicy string       `json:"all_down_policy"`
+	Description   string       `json:"description"`
+	Gateways      []gatewayReq `json:"gateways"`
+}
+
+// ListRoutes 列出网络的不安全路由（含网关）。
+func ListRoutes(sc *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		nid, err := pathID(r)
+		if err != nil {
+			httpx.Fail(w, http.StatusBadRequest, "id 非法")
+			return
+		}
+		routes, err := loadRoutes(sc, nid)
+		if err != nil {
+			httpx.FailErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		httpx.OK(w, routes)
+	}
+}
+
+// CreateRoute 创建不安全路由及其网关。
+func CreateRoute(sc *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		nid, err := pathID(r)
+		if err != nil {
+			httpx.Fail(w, http.StatusBadRequest, "id 非法")
+			return
+		}
+		var req createRouteReq
+		if err := httpx.DecodeJSON(r, &req); err != nil {
+			httpx.Fail(w, http.StatusBadRequest, "请求体非法")
+			return
+		}
+		if req.CIDR == "" || len(req.Gateways) == 0 {
+			httpx.Fail(w, http.StatusBadRequest, "cidr 与 gateways 必填")
+			return
+		}
+		if req.Mode == "" {
+			req.Mode = "active_active"
+		}
+		if req.AllDownPolicy == "" {
+			req.AllDownPolicy = "fail_closed"
+		}
+
+		now := nowStr()
+		res, err := sc.Store.DB.Exec(sc.Store.Rebind(`INSERT INTO subnet_routes (network_id,cidr,mtu,metric,mode,all_down_policy,enabled,description,created_at) VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8)`),
+			nid, req.CIDR, req.MTU, req.Metric, req.Mode, req.AllDownPolicy, req.Description, now)
+		if err != nil {
+			httpx.FailErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		rid, _ := res.LastInsertId()
+
+		for _, g := range req.Gateways {
+			if g.Weight == 0 {
+				g.Weight = 1
+			}
+			if _, err := sc.Store.DB.Exec(sc.Store.Rebind(`INSERT INTO route_gateways (route_id,node_id,overlay_ip,weight,priority,health_target,health_port,enabled,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,1,$8)`),
+				rid, g.NodeID, g.OverlayIP, g.Weight, g.Priority, g.HealthTarget, g.HealthPort, now); err != nil {
+				httpx.FailErr(w, http.StatusInternalServerError, err)
+				return
+			}
+		}
+
+		routes, err := loadRoutes(sc, nid)
+		if err != nil {
+			httpx.FailErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		for _, rt := range routes {
+			if rt.ID == rid {
+				httpx.OK(w, rt)
+				return
+			}
+		}
+		httpx.OK(w, nil)
+	}
+}
+
+// DeleteRoute 删除路由。
+func DeleteRoute(sc *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := pathID(r)
+		if err != nil {
+			httpx.Fail(w, http.StatusBadRequest, "id 非法")
+			return
+		}
+		if _, err := sc.Store.DB.Exec(sc.Store.Rebind(`DELETE FROM subnet_routes WHERE id = $1`), id); err != nil {
+			httpx.FailErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		httpx.OK(w, nil)
+	}
+}
+
+// loadRoutes 加载网络的路由及其网关。
+func loadRoutes(sc *svc.ServiceContext, networkID int64) ([]model.SubnetRoute, error) {
+	q := sc.Store.Rebind(`SELECT id,network_id,cidr,mtu,metric,mode,all_down_policy,enabled,description,created_at FROM subnet_routes WHERE network_id = $1 AND enabled = 1 ORDER BY id`)
+	rows, err := sc.Store.DB.Query(q, networkID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var routes []model.SubnetRoute
+	for rows.Next() {
+		var rt model.SubnetRoute
+		var enabled int64
+		if err := rows.Scan(&rt.ID, &rt.NetworkID, &rt.CIDR, &rt.MTU, &rt.Metric, &rt.Mode, &rt.AllDownPolicy, &enabled, &rt.Description, &rt.CreatedAt); err != nil {
+			return nil, err
+		}
+		rt.Enabled = enabled != 0
+		routes = append(routes, rt)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	for i := range routes {
+		gws, err := loadGateways(sc, routes[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		routes[i].Gateways = gws
+	}
+	return routes, nil
+}
+
+func loadGateways(sc *svc.ServiceContext, routeID int64) ([]model.RouteGateway, error) {
+	q := sc.Store.Rebind(`SELECT id,route_id,node_id,overlay_ip,weight,priority,health_target,health_port,enabled,created_at FROM route_gateways WHERE route_id = $1 AND enabled = 1 ORDER BY priority, id`)
+	rows, err := sc.Store.DB.Query(q, routeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.RouteGateway
+	for rows.Next() {
+		var g model.RouteGateway
+		var enabled int64
+		if err := rows.Scan(&g.ID, &g.RouteID, &g.NodeID, &g.OverlayIP, &g.Weight, &g.Priority, &g.HealthTarget, &g.HealthPort, &enabled, &g.CreatedAt); err != nil {
+			return nil, err
+		}
+		g.Enabled = enabled != 0
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}

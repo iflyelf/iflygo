@@ -46,16 +46,17 @@ type ClientNode struct {
 
 // Bundle 客户端配置包（证书 + 配置）。
 type Bundle struct {
-	Network   string `json:"network"`
-	IPv4      string `json:"ipv4"`
-	IPv6      string `json:"ipv6"`
-	MTU       int    `json:"mtu"`
-	DNS       string `json:"dns"`
-	CA        string `json:"ca"`
-	Cert      string `json:"cert"`
-	Key       string `json:"key"`
-	Config    string `json:"config"`
-	ConfigRev int64  `json:"config_rev"`
+	Network   string      `json:"network"`
+	IPv4      string      `json:"ipv4"`
+	IPv6      string      `json:"ipv6"`
+	MTU       int         `json:"mtu"`
+	DNS       string      `json:"dns"`
+	CA        string      `json:"ca"`
+	Cert      string      `json:"cert"`
+	Key       string      `json:"key"`
+	Config    string      `json:"config"`
+	ConfigRev int64       `json:"config_rev"`
+	Routes    []RouteSpec `json:"routes,omitempty"`
 }
 
 // ServerNode 服务端节点（lighthouse / relay / edge / gateway）。
@@ -93,4 +94,52 @@ type NebulaSettings struct {
 	LogFormat            string          `json:"log_format,omitempty"`
 	StatsType            string          `json:"stats_type,omitempty"`
 	StatsListen          string          `json:"stats_listen,omitempty"`
+}
+
+// SubnetRoute 不安全路由（子网路由），通过网关节点转发。
+type SubnetRoute struct {
+	ID            int64          `json:"id"`
+	NetworkID     int64          `json:"network_id"`
+	CIDR          string         `json:"cidr"`
+	MTU           int            `json:"mtu"`
+	Metric        int            `json:"metric"`
+	Mode          string         `json:"mode"`
+	AllDownPolicy string         `json:"all_down_policy"`
+	Enabled       bool           `json:"enabled"`
+	Description   string         `json:"description"`
+	CreatedAt     string         `json:"created_at"`
+	Gateways      []RouteGateway `json:"gateways,omitempty"`
+}
+
+// RouteGateway 路由网关（加权，支持优先级分层）。
+type RouteGateway struct {
+	ID           int64  `json:"id"`
+	RouteID      int64  `json:"route_id"`
+	NodeID       int64  `json:"node_id,omitempty"`
+	OverlayIP    string `json:"overlay_ip"`
+	Weight       int    `json:"weight"`
+	Priority     int    `json:"priority"`
+	HealthTarget string `json:"health_target"`
+	HealthPort   int    `json:"health_port"`
+	Enabled      bool   `json:"enabled"`
+	CreatedAt    string `json:"created_at"`
+}
+
+// GatewaySpec 客户端侧网关描述（用于健康探测与动态 reload）。
+type GatewaySpec struct {
+	IP           string `json:"ip"`
+	Weight       int    `json:"weight"`
+	Priority     int    `json:"priority"`
+	HealthTarget string `json:"health_target,omitempty"`
+	HealthPort   int    `json:"health_port,omitempty"`
+}
+
+// RouteSpec 客户端侧路由描述。
+type RouteSpec struct {
+	CIDR          string        `json:"cidr"`
+	MTU           int           `json:"mtu"`
+	Metric        int           `json:"metric"`
+	Mode          string        `json:"mode"`
+	AllDownPolicy string        `json:"all_down_policy"`
+	Gateways      []GatewaySpec `json:"gateways"`
 }

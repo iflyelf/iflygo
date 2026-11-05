@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/iflyelf/iflygo/internal/configgen"
+	"github.com/iflyelf/iflygo/internal/model"
 	"github.com/iflyelf/iflygo/internal/svc"
 )
 
@@ -84,6 +85,11 @@ func buildNebulaInput(sc *svc.ServiceContext, networkID int64, isLighthouse bool
 	relays := append([]string{}, settings.Relays...)
 	relays = append(relays, relayIPs...)
 
+	unsafeRoutes, _, err := loadRouteConfig(sc, networkID)
+	if err != nil {
+		return nil, err
+	}
+
 	var dns []string
 	if net.DNS != "" {
 		dns = strings.Split(net.DNS, ",")
@@ -118,5 +124,40 @@ func buildNebulaInput(sc *svc.ServiceContext, networkID int64, isLighthouse bool
 		LogFormat:            settings.LogFormat,
 		StatsType:            settings.StatsType,
 		StatsListen:          settings.StatsListen,
+		UnsafeRoutes:         unsafeRoutes,
 	}, nil
+}
+
+// loadRouteConfig 将路由表转换为 configgen 配置与客户端 RouteSpec。
+func loadRouteConfig(sc *svc.ServiceContext, networkID int64) ([]configgen.Route, []model.RouteSpec, error) {
+	routes, err := loadRoutes(sc, networkID)
+	if err != nil {
+		return nil, nil, err
+	}
+	var cfgRoutes []configgen.Route
+	var specs []model.RouteSpec
+	for _, rt := range routes {
+		var via any
+		if len(rt.Gateways) == 1 {
+			via = rt.Gateways[0].OverlayIP
+		} else {
+			gws := make([]configgen.Gateway, 0, len(rt.Gateways))
+			for _, g := range rt.Gateways {
+				gws = append(gws, configgen.Gateway{Gateway: g.OverlayIP, Weight: g.Weight})
+			}
+			via = gws
+		}
+		cfgRoutes = append(cfgRoutes, configgen.Route{Route: rt.CIDR, Via: via, MTU: rt.MTU, Metric: rt.Metric})
+
+		spec := model.RouteSpec{
+			CIDR: rt.CIDR, MTU: rt.MTU, Metric: rt.Metric, Mode: rt.Mode, AllDownPolicy: rt.AllDownPolicy,
+		}
+		for _, g := range rt.Gateways {
+			spec.Gateways = append(spec.Gateways, model.GatewaySpec{
+				IP: g.OverlayIP, Weight: g.Weight, Priority: g.Priority, HealthTarget: g.HealthTarget, HealthPort: g.HealthPort,
+			})
+		}
+		specs = append(specs, spec)
+	}
+	return cfgRoutes, specs, nil
 }

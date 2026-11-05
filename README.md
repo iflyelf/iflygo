@@ -35,7 +35,7 @@
 - [x] 客户端 Agent：enroll / run / config / status / service
 - [x] overlay：嵌入 Nebula（证书、完整配置生成、启停、热加载、隧道状态）
 - [x] 服务端节点：lighthouse / relay / edge / gateway 配置生成
-- [ ] 不安全路由 HA（多网关加权 + 健康检查 + 故障切换）
+- [x] 不安全路由 HA：多网关加权 + 健康探测 + 动态热加载（active-active / active-passive / fail-closed）
 - [ ] edge + 自定义域名
 - [ ] 完整配置热加载 / 证书续期
 

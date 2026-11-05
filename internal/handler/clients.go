@@ -263,9 +263,14 @@ func buildBundle(sc *svc.ServiceContext, c *clientRow) (*model.Bundle, error) {
 	if err != nil {
 		return nil, err
 	}
+	_, routeSpecs, err := loadRouteConfig(sc, c.NetworkID)
+	if err != nil {
+		return nil, err
+	}
 	return &model.Bundle{
 		Network: net.Name, IPv4: c.IPv4, IPv6: c.IPv6, MTU: net.MTU, DNS: net.DNS,
 		CA: caCert, Cert: c.CertPEM, Key: c.KeyPEM, Config: string(cfgBytes), ConfigRev: c.ConfigRev,
+		Routes: routeSpecs,
 	}, nil
 }
 
