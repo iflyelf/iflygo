@@ -1,25 +1,118 @@
-name: CI
+name: CI/CD
 
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 permissions:
   contents: read
 
+env:
+  GOPROXY: https://goproxy.cn,direct
+
 jobs:
+  # 测试与静态检查
   test:
+    name: 测试与静态检查
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: iflygo
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d iflygo"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/iflygo?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7.0.1
+
+      - name: 安装 Go
+        uses: actions/setup-go@v7.0.0
         with:
-          go-version: '1.26.x'
-      - name: Vet
+          go-version-file: 'go.mod'
+
+      - name: 前端语法检查
+        run: node --check web/dist/app.js
+
+      - name: Go 静态检查
         run: go vet ./...
-      - name: Test
-        run: go test ./...
-      - name: Build
+
+      - name: 运行测试
+        run: go test -p 1 ./...
+
+  # 多架构二进制（push/tag 作为发布产物，PR 作为编译校验）
+  build:
+    name: 编译 ${{ matrix.os }}/${{ matrix.arch }}
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: linux,   arch: amd64 }
+          - { os: linux,   arch: arm64 }
+          - { os: linux,   arch: arm   }
+          - { os: windows, arch: amd64 }
+          - { os: windows, arch: arm64 }
+          - { os: darwin,  arch: amd64 }
+          - { os: darwin,  arch: arm64 }
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: 安装 Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: 编译 server / client
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
         run: |
-          CGO_ENABLED=0 go build ./cmd/server ./cmd/client
+          mkdir -p bin
+          ext=""
+          [ "${{ matrix.os }}" = "windows" ] && ext=".exe"
+          go build -trimpath -ldflags "-s -w" -o "bin/iflygo-server-${{ matrix.os }}-${{ matrix.arch }}${ext}" ./cmd/server
+          go build -trimpath -ldflags "-s -w" -o "bin/iflygo-client-${{ matrix.os }}-${{ matrix.arch }}${ext}" ./cmd/client
+
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: binaries-${{ matrix.os }}-${{ matrix.arch }}
+          path: bin/*
+
+  # tag 时发布 GitHub Release
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7.0.0
+        with:
+          path: dist
+          merge-multiple: true
+      - name: 生成 sha256
+        run: |
+          cd dist
+          find . -type f -exec sha256sum {} \; > SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**

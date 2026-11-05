@@ -1,9 +1,29 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="warm">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>iFlyGo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#f5efe6">
+  <meta name="color-scheme" content="light dark">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="format-detection" content="telephone=no">
+  <title>iFlyGo 控制台</title>
+  <script>
+    // 防首屏闪烁：渲染前先设置主题（与 app.js 共用 localStorage key）
+    (function () {
+      try {
+        var t = localStorage.getItem('iflygo_theme');
+        if (t !== 'warm' && t !== 'cool' && t !== 'dark') {
+          t = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'warm';
+        }
+        document.documentElement.setAttribute('data-theme', t);
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute('content', t === 'dark' ? '#171a1f' : (t === 'cool' ? '#f4f6f8' : '#f5efe6'));
+      } catch (e) { document.documentElement.setAttribute('data-theme', 'warm'); }
+    })();
+  </script>
   <link rel="stylesheet" href="app.css">
 </head>
 <body>

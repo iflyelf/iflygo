@@ -1,6 +1,26 @@
 (() => {
   'use strict';
 
+  var THEMES = [
+    { value: 'warm', emoji: '🌞', label: '暖沙米' },
+    { value: 'cool', emoji: '🌊', label: '冷蓝' },
+    { value: 'dark', emoji: '🌙', label: '暗黑' },
+  ];
+  var THEME_COLORS = { warm: '#f5efe6', cool: '#f4f6f8', dark: '#171a1f' };
+
+  function syncThemeColor(t) {
+    var meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', THEME_COLORS[t] || THEME_COLORS.warm);
+  }
+  function setTheme(t) {
+    document.documentElement.setAttribute('data-theme', t);
+    try { localStorage.setItem('iflygo_theme', t); } catch (e) {}
+    syncThemeColor(t);
+    render();
+  }
+  function curTheme() { return document.documentElement.getAttribute('data-theme') || 'warm'; }
+  syncThemeColor(curTheme());
+
   const state = {
     user: null,
     view: 'loading',
@@ -101,22 +121,33 @@
     return h('div', { class: 'msg ' + state.msgKind }, state.msg);
   }
 
+  function themeSwitcher() {
+    return h('div', { class: 'theme-switcher' }, THEMES.map((t) =>
+      h('button', {
+        class: 'theme-btn' + (curTheme() === t.value ? ' active' : ''),
+        title: t.label,
+        onclick: () => setTheme(t.value),
+      }, t.emoji)));
+  }
+
+  const SECTION_LABELS = { clients: '客户端', networks: '网络', serverNodes: '节点', routes: '路由', edgeServices: '域名' };
+
   function renderDashboard() {
     const logout = h('button', { class: 'btn sm' }, '退出');
     logout.onclick = async () => { await api('/api/auth/logout', { method: 'POST' }); state.user = null; state.view = 'login'; render(); };
 
-    const tabs = ['clients', 'networks', 'serverNodes', 'routes', 'edgeServices'].map((s) => {
-      const labels = { clients: '客户端', networks: '网络', serverNodes: '节点', routes: '路由', edgeServices: '域名' };
-      const cls = 'btn sm' + (state.section === s ? ' primary' : '');
-      const b = h('button', { class: cls, onclick: () => { state.section = s; render(); } }, labels[s]);
-      return b;
-    });
+    const tabs = h('div', { class: 'tabs' },
+      Object.keys(SECTION_LABELS).map((s) =>
+        h('button', { class: 'tab' + (state.section === s ? ' active' : ''), onclick: () => { state.section = s; render(); } }, SECTION_LABELS[s])));
 
     app.append(
-      h('div', { class: 'topbar' }, h('span', { class: 'brand' }, 'iFlyGo 控制台'),
-        h('div', { class: 'form-row' }, ...tabs, h('span', { class: 'muted' }, state.user.username + ' '), logout)),
-      msgEl(),
-      renderSection(),
+      h('div', { class: 'topbar' },
+        h('span', { class: 'brand' }, 'iFlyGo 控制台'),
+        h('span', { class: 'spacer' }),
+        themeSwitcher(),
+        h('span', { class: 'muted' }, state.user.username),
+        logout),
+      h('div', { class: 'container' }, tabs, msgEl(), renderSection()),
     );
   }
 
@@ -140,8 +171,10 @@
   // ---------- 客户端 ----------
   function renderClients() {
     const rows = state.clients.map((c) => h('tr', {},
-      h('td', {}, c.name), h('td', {}, c.ipv4 || '—'), h('td', {}, c.ipv6 || '—'),
-      h('td', {}, h('span', { class: 'badge ' + (c.status === 'online' ? 'online' : 'offline') }, c.status)),
+      h('td', { 'data-label': '名称' }, c.name),
+      h('td', { 'data-label': 'IPv4' }, c.ipv4 || '—'),
+      h('td', { 'data-label': 'IPv6' }, c.ipv6 || '—'),
+      h('td', { 'data-label': '状态' }, h('span', { class: 'badge ' + (c.status === 'online' ? 'online' : 'offline') }, c.status)),
       h('td', {}, h('button', { class: 'btn sm', onclick: () => getToken(c.id, c.name) }, '安装命令'), ' ',
         h('button', { class: 'btn sm', onclick: () => renewCert(c.id) }, '续期'), ' ',
         h('button', { class: 'btn sm', onclick: () => revokeCert(c.id) }, '吊销'), ' ',
@@ -160,14 +193,17 @@
     };
 
     return h('div', { class: 'card' }, h('h2', {}, '客户端'),
-      h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, '名称'), h('th', {}, 'IPv4'), h('th', {}, 'IPv6'), h('th', {}, '状态'), h('th', {}))), h('tbody', {}, rows)),
+      h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, '名称'), h('th', {}, 'IPv4'), h('th', {}, 'IPv6'), h('th', {}, '状态'), h('th', {}))), h('tbody', {}, rows))),
       h('div', { class: 'muted', style: 'margin-bottom:8px' }, '新建客户端'), net, name, ipv4, ipv6, create);
   }
 
   // ---------- 网络 ----------
   function renderNetworks() {
     const rows = state.networks.map((n) => h('tr', {},
-      h('td', {}, n.name), h('td', {}, n.cidr4), h('td', {}, n.cidr6 || '—'), h('td', {}, n.mtu),
+      h('td', { 'data-label': '名称' }, n.name),
+      h('td', { 'data-label': 'IPv4' }, n.cidr4),
+      h('td', { 'data-label': 'IPv6' }, n.cidr6 || '—'),
+      h('td', { 'data-label': 'MTU' }, n.mtu),
       h('td', {}, h('button', { class: 'btn danger sm', onclick: () => delNetwork(n.id) }, '删除'))));
 
     const name = h('input', { placeholder: '名称' });
@@ -183,14 +219,17 @@
     };
 
     return h('div', { class: 'card' }, h('h2', {}, '网络'),
-      h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, '名称'), h('th', {}, 'IPv4'), h('th', {}, 'IPv6'), h('th', {}, 'MTU'), h('th', {}))), h('tbody', {}, rows)),
+      h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, '名称'), h('th', {}, 'IPv4'), h('th', {}, 'IPv6'), h('th', {}, 'MTU'), h('th', {}))), h('tbody', {}, rows))),
       h('div', { class: 'muted', style: 'margin-bottom:8px' }, '新建网络'), name, cidr4, cidr6, h('div', { class: 'form-row' }, gw4, gw6), create);
   }
 
   // ---------- 服务端节点 ----------
   function renderServerNodes() {
     const rows = state.serverNodes.map((n) => h('tr', {},
-      h('td', {}, n.name), h('td', {}, n.roles), h('td', {}, n.overlay_ip4 || '—'), h('td', {}, n.public_host + (n.public_port ? ':' + n.public_port : '')),
+      h('td', { 'data-label': '名称' }, n.name),
+      h('td', { 'data-label': '角色' }, n.roles),
+      h('td', { 'data-label': 'overlay IP' }, n.overlay_ip4 || '—'),
+      h('td', { 'data-label': '公网入口' }, n.public_host + (n.public_port ? ':' + n.public_port : '')),
       h('td', {}, h('button', { class: 'btn danger sm', onclick: () => delServerNode(n.id) }, '删除'))));
 
     const name = h('input', { placeholder: '名称' });
@@ -208,7 +247,7 @@
     };
 
     return h('div', { class: 'card' }, h('h2', {}, '服务端节点 (lighthouse/relay/edge/gateway)'),
-      h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, '名称'), h('th', {}, '角色'), h('th', {}, 'overlay IP'), h('th', {}, '公网入口'), h('th', {}))), h('tbody', {}, rows)),
+      h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, '名称'), h('th', {}, '角色'), h('th', {}, 'overlay IP'), h('th', {}, '公网入口'), h('th', {}))), h('tbody', {}, rows))),
       h('div', { class: 'muted', style: 'margin-bottom:8px' }, '新建节点'), net, name, roles, ip4, ip6, h('div', { class: 'form-row' }, host, port), create);
   }
 
@@ -217,7 +256,7 @@
     const netSel = netSelect(state.routeNetwork, async () => { await loadRoutes(); render(); });
     const rows = state.routes.map((r) => {
       const gws = r.gateways.map((g) => g.overlay_ip + '(w' + g.weight + ')').join(', ');
-      return h('tr', {}, h('td', {}, r.cidr), h('td', {}, r.mode), h('td', {}, gws),
+      return h('tr', {}, h('td', { 'data-label': 'CIDR' }, r.cidr), h('td', { 'data-label': '模式' }, r.mode), h('td', { 'data-label': '网关(权重)' }, gws),
         h('td', {}, h('button', { class: 'btn danger sm', onclick: () => delRoute(r.id) }, '删除')));
     });
 
@@ -234,16 +273,17 @@
 
     return h('div', { class: 'card' }, h('h2', {}, '不安全路由'),
       netSel,
-      h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'CIDR'), h('th', {}, '模式'), h('th', {}, '网关(权重)'), h('th', {}))), h('tbody', {}, rows)),
+      h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'CIDR'), h('th', {}, '模式'), h('th', {}, '网关(权重)'), h('th', {}))), h('tbody', {}, rows))),
       h('div', { class: 'muted', style: 'margin-bottom:8px' }, '新建路由'), cidr, gws, mode, create);
   }
 
   // ---------- 边缘服务 ----------
   function renderEdgeServices() {
     const rows = state.edgeServices.map((s) => h('tr', {},
-      h('td', {}, s.name),
-      h('td', {}, s.protocol === 'tcp' ? ':' + s.public_port : s.host),
-      h('td', {}, s.target), h('td', {}, s.protocol),
+      h('td', { 'data-label': '名称' }, s.name),
+      h('td', { 'data-label': '入口' }, s.protocol === 'tcp' ? ':' + s.public_port : s.host),
+      h('td', { 'data-label': '目标' }, s.target),
+      h('td', { 'data-label': '协议' }, s.protocol),
       h('td', {}, h('button', { class: 'btn danger sm', onclick: () => delEdgeService(s.id) }, '删除'))));
 
     const net = netSelect(state.networks[0] ? state.networks[0].id : 0);
@@ -252,7 +292,7 @@
     const host = h('input', { placeholder: '域名 (http), 如 nas.example.com' });
     const pubPort = h('input', { placeholder: '公网端口 (tcp)', type: 'number' });
     const target = h('input', { placeholder: '目标, 如 10.77.0.2:5000' });
-    const create = h('button', { class: 'btn primary', style: 'width:100%' }, '创建域名服务');
+    const create = h('button', { class: 'btn primary', style: 'width:100%' }, '创建服务');
     create.onclick = async () => {
       const r = await api('/api/edge-services', { method: 'POST', body: { network_id: Number(net.value), name: name.value, host: host.value, target: target.value, protocol: proto.value, public_port: Number(pubPort.value || 0) } });
       if (r.ok) { await loadAll(); setMsg('服务已创建', 'ok'); } else setMsg(r.data.message);
@@ -260,7 +300,7 @@
     };
 
     return h('div', { class: 'card' }, h('h2', {}, '边缘服务（自定义域名 / TCP 端口）'),
-      h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, '名称'), h('th', {}, '入口'), h('th', {}, '目标'), h('th', {}, '协议'), h('th', {}))), h('tbody', {}, rows)),
+      h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, '名称'), h('th', {}, '入口'), h('th', {}, '目标'), h('th', {}, '协议'), h('th', {}))), h('tbody', {}, rows))),
       h('div', { class: 'muted', style: 'margin-bottom:8px' }, '新建服务'), net, name, proto, host, pubPort, target, create);
   }
 
@@ -286,7 +326,7 @@
   async function delNetwork(id) { if (!confirm('确认删除该网络及其所有资源？')) return; await api('/api/networks/' + id, { method: 'DELETE' }); await loadAll(); render(); }
   async function delServerNode(id) { if (!confirm('确认删除该节点？')) return; await api('/api/server-nodes/' + id, { method: 'DELETE' }); await loadAll(); render(); }
   async function delRoute(id) { if (!confirm('确认删除该路由？')) return; await api('/api/routes/' + id, { method: 'DELETE' }); await loadRoutes(); render(); }
-  async function delEdgeService(id) { if (!confirm('确认删除该域名服务？')) return; await api('/api/edge-services/' + id, { method: 'DELETE' }); await loadAll(); render(); }
+  async function delEdgeService(id) { if (!confirm('确认删除该服务？')) return; await api('/api/edge-services/' + id, { method: 'DELETE' }); await loadAll(); render(); }
 
   boot();
 })();

@@ -20,6 +20,9 @@ test:
 vet:
 	go vet ./...
 
+check-frontend:
+	node --check web/dist/app.js
+
 fmt:
 	gofmt -w .
 
