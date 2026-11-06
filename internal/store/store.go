@@ -161,6 +161,9 @@ func AdaptSQL(d Dialect, sql string) string {
 		b, _ := json.Marshal(vals)
 		return "'" + string(b) + "'"
 	})
+	// BIGSERIAL/SERIAL 主键 → SQLite 自增（用于运行时建表，如 liaison 策略/连接表）
+	sql = strings.ReplaceAll(sql, "BIGSERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT")
+	sql = strings.ReplaceAll(sql, "SERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT")
 	// 去除 ::type 类型转换（::jsonb/::text/::varchar/::int/::text[] 等）
 	castRe := regexp.MustCompile(`::[a-zA-Z_][a-zA-Z0-9_]*(?:\[\])?`)
 	sql = castRe.ReplaceAllString(sql, "")

@@ -22,6 +22,7 @@ import (
 	"github.com/iflyelf/iflygo/internal/auth"
 	"github.com/iflyelf/iflygo/internal/config"
 	"github.com/iflyelf/iflygo/internal/ipam"
+	"github.com/iflyelf/iflygo/internal/liaison"
 	"github.com/iflyelf/iflygo/internal/logic/agentgw"
 	"github.com/iflyelf/iflygo/internal/logic/aitoken"
 	"github.com/iflyelf/iflygo/internal/logic/artifact"
@@ -61,8 +62,9 @@ type ServiceContext struct {
 	Metrics    *metrics.Collector
 	Maintainer *maintenance.Maintainer
 	RBAC       *rbac.Service
-	Audit      *audit.Logger // 审计日志
-	AIToken    *aitoken.Repo // AI 访问令牌
+	Audit      *audit.Logger    // 审计日志
+	AIToken    *aitoken.Repo    // AI 访问令牌
+	Liaison    *liaison.Service // 远程管理套件（Web SSH/文件/DB/LLM/Casbin）
 	// cacheRef 可选 Redis 缓存（单点/集群/哨兵）；未启用时所有读写自动降级。
 	// 用原子指针保存，设置页保存后热替换不会与请求读取产生数据竞争。
 	cacheRef atomic.Pointer[cache.Cache]
@@ -196,6 +198,15 @@ func New(c *config.Config) *ServiceContext {
 		AIToken:       aitoken.NewRepo(db),
 		dbMaxOpenBase: c.Database.MaxOpenConns,
 		dbMaxIdleBase: c.Database.MaxIdleConns,
+	}
+	// 远程管理套件（Liaison）：Casbin RBAC + Web SSH/文件/DB/LLM。
+	liaisonRBAC, err := liaison.NewRBAC(db)
+	if err != nil {
+		log.Printf("⚠️ 初始化 Liaison RBAC 失败（远程管理套件不可用）: %v", err)
+	} else {
+		svc.Liaison = liaison.New(db, liaisonRBAC, func() config.Config {
+			return settings.Snapshot()
+		})
 	}
 	// 可选：Redis（不可用仅降级，不阻塞启动）
 	svc.cacheRef.Store(buildCache(&c.Redis))

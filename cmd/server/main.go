@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/iflyelf/iflygo/internal/config"
+	"github.com/iflyelf/iflygo/internal/ddnsto"
 	"github.com/iflyelf/iflygo/internal/handler"
+	"github.com/iflyelf/iflygo/internal/liaison"
 	"github.com/iflyelf/iflygo/internal/middleware"
 	"github.com/iflyelf/iflygo/internal/overlay"
 	"github.com/iflyelf/iflygo/internal/pkg/netutil"
@@ -81,6 +83,17 @@ func main() {
 	limiters := registerRoutes(mux, sc)
 	// 隧道服务（iflygo）路由 + 数据面角色
 	registerTunnelRoutes(mux, sc)
+	// 远程访问（DDNSTO）与远程管理套件（Liaison）
+	if sc.Liaison != nil {
+		reqAuth := func(h http.HandlerFunc) http.Handler {
+			return middleware.RequireAuth(sc.Auth, h)
+		}
+		reqSuper := func(h http.HandlerFunc) http.Handler {
+			return middleware.RequireAuth(sc.Auth, middleware.RequireSuperAdmin(h))
+		}
+		liaison.RegisterRoutes(mux, sc.Liaison, reqAuth, reqSuper)
+	}
+	ddnsto.RegisterRoutes(mux, sc)
 	startTunnelDataPlane()
 
 	// 访问日志 → CORS → 安全响应头 → CSRF → 请求体限制 → Redis 缓存 → 业务路由。
