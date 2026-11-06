@@ -8,6 +8,8 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
+
+	"github.com/iflyelf/iflygo/internal/migrate"
 )
 
 func openTestDB(t *testing.T) *sql.DB {
@@ -19,6 +21,10 @@ func openTestDB(t *testing.T) *sql.DB {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// 初始化 schema（幂等：advisory lock + 版本检查，多测试共享 PG 无副作用）
+	if err := migrate.AutoMigrate(db, migrate.DialectPostgres); err != nil {
+		t.Fatalf("数据库迁移失败: %v", err)
 	}
 	return db
 }
