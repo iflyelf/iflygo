@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/iflyelf/iflygo/internal/config"
@@ -91,22 +92,27 @@ func sqliteDSN(path string) string {
 }
 
 // registerSQLiteFuncs 为 SQLite 注册 PostgreSQL 兼容函数，使业务 SQL 无需改写即可双库运行。
+// sync.Once 保证幂等（多次 Open / 测试并发 Open 不会重复注册 panic）。
+var registerSQLiteFuncsOnce sync.Once
+
 func registerSQLiteFuncs() {
-	// now()：返回当前 UTC 时间（与 CURRENT_TIMESTAMP 同格式）
-	sqlite.MustRegisterScalarFunction("now", 0, func(_ *sqlite.FunctionContext, _ []driver.Value) (driver.Value, error) {
-		return time.Now().UTC().Format("2006-01-02 15:04:05"), nil
-	})
-	// pg_try_advisory_lock(x)：SQLite 单写者（WAL + busy_timeout），无并发抢占，恒返回 true
-	sqlite.MustRegisterScalarFunction("pg_try_advisory_lock", 1, func(_ *sqlite.FunctionContext, _ []driver.Value) (driver.Value, error) {
-		return true, nil
-	})
-	// pg_advisory_lock(x)：no-op（单写者天然串行）
-	sqlite.MustRegisterScalarFunction("pg_advisory_lock", 1, func(_ *sqlite.FunctionContext, _ []driver.Value) (driver.Value, error) {
-		return nil, nil
-	})
-	// pg_advisory_unlock(x)：恒返回 true
-	sqlite.MustRegisterScalarFunction("pg_advisory_unlock", 1, func(_ *sqlite.FunctionContext, _ []driver.Value) (driver.Value, error) {
-		return true, nil
+	registerSQLiteFuncsOnce.Do(func() {
+		// now()：返回当前 UTC 时间（与 CURRENT_TIMESTAMP 同格式）
+		sqlite.MustRegisterScalarFunction("now", 0, func(_ *sqlite.FunctionContext, _ []driver.Value) (driver.Value, error) {
+			return time.Now().UTC().Format("2006-01-02 15:04:05"), nil
+		})
+		// pg_try_advisory_lock(x)：SQLite 单写者（WAL + busy_timeout），无并发抢占，恒返回 true
+		sqlite.MustRegisterScalarFunction("pg_try_advisory_lock", 1, func(_ *sqlite.FunctionContext, _ []driver.Value) (driver.Value, error) {
+			return true, nil
+		})
+		// pg_advisory_lock(x)：no-op（单写者天然串行）
+		sqlite.MustRegisterScalarFunction("pg_advisory_lock", 1, func(_ *sqlite.FunctionContext, _ []driver.Value) (driver.Value, error) {
+			return nil, nil
+		})
+		// pg_advisory_unlock(x)：恒返回 true
+		sqlite.MustRegisterScalarFunction("pg_advisory_unlock", 1, func(_ *sqlite.FunctionContext, _ []driver.Value) (driver.Value, error) {
+			return true, nil
+		})
 	})
 }
 
