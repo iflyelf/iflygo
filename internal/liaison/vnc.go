@@ -768,9 +768,10 @@ func (v *vncClient) readTightBasic(x, y, w, h int, comp byte) error {
 		if _, err := v.readTightZlib(palette); err != nil {
 			return err
 		}
-		bits := 1
-		for (1 << bits) < ps {
-			bits++
+		// Tight 规范：2 色用 1 bit/像素，否则 8 bit/像素
+		bits := 8
+		if ps == 2 {
+			bits = 1
 		}
 		idxRaw := make([]byte, (w*h*bits+7)/8)
 		if _, err := v.readTightZlib(idxRaw); err != nil {
