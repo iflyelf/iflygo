@@ -264,12 +264,19 @@ func applyMigration(ctx context.Context, q querier, mig Migration, dialect strin
 	}
 	defer tx.Rollback()
 
-	// 分句执行（SQLite 驱动不保证多语句 Exec 可靠；对「列已存在」幂等容错）
-	for _, stmt := range splitStatements(mig.UpSQL) {
-		if _, err := tx.ExecContext(ctx, stmt); err != nil {
-			if dialect == DialectSQLite && isIdempotentErr(err) {
-				continue
+	if dialect == DialectSQLite {
+		// SQLite 分句执行（驱动不保证多语句 Exec 可靠；对「列已存在」幂等容错）
+		for _, stmt := range splitStatements(mig.UpSQL) {
+			if _, err := tx.ExecContext(ctx, stmt); err != nil {
+				if isIdempotentErr(err) {
+					continue
+				}
+				return fmt.Errorf("执行 SQL 失败: %w", err)
 			}
+		}
+	} else {
+		// PostgreSQL 原生支持多语句，直接整段执行（DO $$ 块等 PL/pgSQL 不被切分）
+		if _, err := tx.ExecContext(ctx, mig.UpSQL); err != nil {
 			return fmt.Errorf("执行 SQL 失败: %w", err)
 		}
 	}
