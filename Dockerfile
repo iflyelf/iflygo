@@ -31,7 +31,8 @@ RUN set -eux && \
     mkdir -p /out && \
     LDFLAGS="-s -w \
         -X github.com/iflyelf/iflygo/internal/version.Version=${VERSION} \
-        -X github.com/iflyelf/iflygo/internal/version.Build=${COMMIT}" && \
+        -X github.com/iflyelf/iflygo/internal/version.Build=${COMMIT} \
+        -X github.com/iflyelf/iflygo/internal/version.Commit=${COMMIT}" && \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
         go build -trimpath -ldflags "${LDFLAGS}" -o /out/iflygo-server ./cmd/server && \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \

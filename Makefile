@@ -2,7 +2,8 @@ VERSION ?= $(shell cat VERSION 2>/dev/null || echo 0.1.0)
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 LDFLAGS := -s -w \
 	-X github.com/iflyelf/iflygo/internal/version.Version=$(VERSION) \
-	-X github.com/iflyelf/iflygo/internal/version.Build=$(COMMIT)
+	-X github.com/iflyelf/iflygo/internal/version.Build=$(COMMIT) \
+	-X github.com/iflyelf/iflygo/internal/version.Commit=$(COMMIT)
 
 .PHONY: build build-server build-client cross test vet fmt tidy clean frontend patch-grdp prepare
 
