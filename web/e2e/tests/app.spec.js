@@ -88,3 +88,49 @@ test('隧道管理：五个子页可切换', async ({ page }) => {
     await expect(page.locator('.card h3').first()).toBeVisible();
   }
 });
+
+test('DDNSTO 远程访问：创建客户端并开通子域名', async ({ page }) => {
+  autoAccept(page);
+  await login(page);
+  const suffix = Date.now();
+
+  // 前置：用 API 创建网络 + 客户端（复用会话 Cookie，避免 UI 时序竞态）
+  const pre = await page.evaluate(async (suffix) => {
+    const post = (url, body) => fetch(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(r => r.json());
+    const net = await post('/api/networks', { name: 'ddnsto-net-' + suffix, cidr4: '10.66.0.0/16' });
+    const netId = net && net.data && net.data.id;
+    const cli = await post('/api/clients', { network_id: netId, name: 'home-nas-' + suffix });
+    const clientId = cli && cli.data && cli.data.client && cli.data.client.id;
+    return { netId, clientId };
+  }, suffix);
+  expect(pre.clientId).toBeTruthy();
+
+  // UI 开通远程访问（在「隧道」下拉中）
+  await page.locator('.main-nav .nav-link', { hasText: '隧道' }).click();
+  await page.locator('.main-nav .nav-menu-item', { hasText: '远程访问（DDNSTO）' }).click();
+  await expect(page.getByRole('heading', { name: '远程访问（DDNSTO）', exact: true })).toBeVisible();
+  await page.getByPlaceholder('目标端口，如 5000').fill('5000');
+  await page.getByRole('button', { name: '开通远程访问', exact: true }).click();
+  await expect(page.locator('table')).toContainText('home-nas-' + suffix);
+  await expect(page.locator('table')).toContainText('.ddnsto.');
+});
+
+test('Liaison 远程管理：文件管理浏览目录', async ({ page }) => {
+  await login(page);
+  await page.locator('.main-nav .nav-link', { hasText: '远程管理' }).click();
+  await page.locator('.main-nav .nav-menu-item', { hasText: '文件管理' }).click();
+  await expect(page.getByRole('heading', { name: '文件管理', exact: true })).toBeVisible();
+  // 默认路径 /tmp 下应能列出目录项（非空断言仅验证表格渲染）
+  await expect(page.locator('.card table').first()).toBeVisible();
+});
+
+test('Liaison 远程管理：策略管理可见默认策略', async ({ page }) => {
+  await login(page);
+  await page.locator('.main-nav .nav-link', { hasText: '远程管理' }).click();
+  await page.locator('.main-nav .nav-menu-item', { hasText: '策略管理' }).click();
+  await expect(page.getByRole('heading', { name: 'Casbin 策略管理', exact: true })).toBeVisible();
+  await expect(page.locator('table')).toContainText('superadmin');
+});

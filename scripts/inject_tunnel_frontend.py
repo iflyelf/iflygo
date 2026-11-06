@@ -330,14 +330,251 @@ TUNNEL_JS = r'''
 '''
 
 # 导航下拉菜单（插入到「帮助」菜单前）
+# ---------------------------------------------------------------------------
+# DDNSTO 远程访问 + Liaison 远程管理套件视图 JS 片段
+# ---------------------------------------------------------------------------
+REMOTE_JS = r'''
+  // ===== DDNSTO 远程访问 + Liaison 远程管理（inject_tunnel_frontend.py 注入）=====
+  state.ddnsto = [];
+  state.ddnstoClients = [];
+  state.ddnstoLoading = false;
+  state.liaisonSection = 'files';
+  state.liaisonFiles = [];
+  state.liaisonFilesPath = '/tmp';
+  state.liaisonFileContent = '';
+  state.liaisonDB = [];
+  state.liaisonDBQuery = '';
+  state.liaisonDBResult = null;
+  state.liaisonPolicies = [];
+  state.liaisonLLMModels = null;
+  state.liaisonLLMChat = '';
+  state.liaisonLLMReply = '';
+  state.remoteMsg = '';
+  state.remoteOk = false;
+  state.remoteLoaded = {};
+
+  function remoteSetMsg(ok, text) { state.remoteMsg = text || ''; state.remoteOk = !!ok; }
+  function remoteMsgEl() {
+    if (!state.remoteMsg) return null;
+    return h('div', { class: state.remoteOk ? 'hint' : 'err field', role: 'alert' }, [state.remoteMsg]);
+  }
+
+  // ---------- DDNSTO ----------
+  function loadDDNSTO() {
+    state.ddnstoLoading = true;
+    return Promise.all([
+      api('/api/ddnsto/access').catch(function () { return []; }),
+      api('/api/clients').catch(function () { return []; })
+    ]).then(function (r) {
+      state.ddnsto = r[0] || [];
+      state.ddnstoClients = r[1] || [];
+      state.ddnstoLoading = false;
+    });
+  }
+  function ddnstoView() {
+    var rows = state.ddnsto.map(function (a) {
+      return h('tr', {}, [
+        h('td', {}, [a.name || '']),
+        h('td', {}, [a.host || '']),
+        h('td', {}, [a.target || '']),
+        h('td', {}, [a.protocol || '']),
+        h('td', {}, [a.enabled ? '启用' : '停用']),
+        h('td', {}, [h('button', { class: 'btn sm danger', onclick: function () { ddnstoDel(a.id); } }, ['删除'])])
+      ]);
+    });
+    var clientSel = h('select', { value: state.ddnstoClients.length ? state.ddnstoClients[state.ddnstoClients.length - 1].id : '' }, state.ddnstoClients.map(function (c) {
+      return h('option', { value: c.id }, [c.name + ' (' + (c.ipv4 || '未分配') + ')']);
+    }));
+    var port = h('input', { placeholder: '目标端口，如 5000', type: 'number' }, []);
+    var proto = h('select', {}, [h('option', { value: 'http' }, ['http']), h('option', { value: 'tcp' }, ['tcp'])]);
+    var create = h('button', { class: 'btn primary', onclick: function () {
+      api('/api/ddnsto/access', { method: 'POST', body: JSON.stringify({ client_id: Number(clientSel.value), port: Number(port.value || 80), protocol: proto.value }) })
+        .then(function (a) { remoteSetMsg(true, '已开通远程访问：' + a.host); return loadDDNSTO().then(render); })
+        .catch(function (e) { remoteSetMsg(false, e.message); render(); });
+    } }, ['开通远程访问']);
+    return h('div', { class: 'card' }, [
+      h('div', { class: 'card-head' }, [h('h3', {}, ['远程访问（DDNSTO）'])]),
+      h('div', { class: 'muted' }, ['给客户端自动分配子域名，通过 edge 数据面反向代理到 overlay 目标（无带宽套餐限制）。']),
+      h('div', { class: 'table-wrap' }, [
+        h('table', {}, [
+          h('thead', {}, [h('tr', {}, [h('th', {}, ['名称']), h('th', {}, ['子域名']), h('th', {}, ['目标']), h('th', {}, ['协议']), h('th', {}, ['状态']), h('th', {}, ['操作'])])]),
+          h('tbody', {}, rows)
+        ])
+      ]),
+      field('客户端', clientSel), field('目标端口', port), field('协议', proto), create
+    ]);
+  }
+  function ddnstoDel(id) {
+    if (!window.confirm('确认删除该远程访问？')) return;
+    api('/api/ddnsto/access/' + id, { method: 'DELETE' }).then(function () { remoteSetMsg(true, '已删除'); return loadDDNSTO().then(render); }).catch(function (e) { remoteSetMsg(false, e.message); render(); });
+  }
+
+  // ---------- Liaison ----------
+  function loadLiaison() {
+    var jobs = [];
+    if (state.liaisonSection === 'files') {
+      jobs.push(api('/api/liaison/files?path=' + encodeURIComponent(state.liaisonFilesPath)).then(function (d) { state.liaisonFiles = d || []; }).catch(function () { state.liaisonFiles = []; }));
+    }
+    if (state.liaisonSection === 'db') {
+      jobs.push(api('/api/liaison/db/connections').then(function (d) { state.liaisonDB = d || []; }).catch(function () { state.liaisonDB = []; }));
+    }
+    if (state.liaisonSection === 'policies') {
+      jobs.push(api('/api/liaison/policies').then(function (d) { state.liaisonPolicies = (d && d.policies) || []; }).catch(function () { state.liaisonPolicies = []; }));
+    }
+    if (state.liaisonSection === 'llm') {
+      jobs.push(api('/api/liaison/llm/models').then(function (d) { state.liaisonLLMModels = d || null; }).catch(function () { state.liaisonLLMModels = null; }));
+    }
+    return Promise.all(jobs);
+  }
+  function liaisonView() {
+    if (!state.remoteLoaded[state.liaisonSection]) {
+      state.remoteLoaded[state.liaisonSection] = true;
+      loadLiaison().then(render);
+    }
+    var body;
+    switch (state.liaisonSection) {
+      case 'db': body = liaisonDBView(); break;
+      case 'llm': body = liaisonLLMView(); break;
+      case 'policies': body = liaisonPoliciesView(); break;
+      case 'ssh': body = liaisonSSHView(); break;
+      default: body = liaisonFilesView();
+    }
+    return h('div', {}, [
+      h('div', { class: 'muted' }, ['远程管理套件（受 Casbin RBAC 鉴权）：文件管理 / 数据库 / LLM 对话 / 策略管理 / Web SSH。']),
+      remoteMsgEl(), body
+    ]);
+  }
+  function liaisonFilesView() {
+    var rows = state.liaisonFiles.map(function (f) {
+      var name = f.dir ? f.name + '/' : f.name;
+      var onclick = f.dir
+        ? function () { state.liaisonFilesPath = f.path; state.liaisonFiles = []; state.remoteLoaded.files = false; loadLiaison().then(render); }
+        : function () { state.liaisonFileContent = ''; api('/api/liaison/files/content?path=' + encodeURIComponent(f.path)).then(function (d) { state.liaisonFileContent = d || ''; render(); }).catch(function (e) { remoteSetMsg(false, e.message); render(); }); };
+      return h('tr', {}, [h('td', {}, [h('a', { href: '#', onclick: onclick }, [name])]), h('td', {}, [f.dir ? '目录' : String(f.size)]), h('td', {}, [f.mtime ? new Date(f.mtime * 1000).toLocaleString() : ''])]);
+    });
+    var up = h('button', { class: 'btn sm', onclick: function () {
+      var p = state.liaisonFilesPath.replace(/\/+$/, '').split('/');
+      p.pop();
+      state.liaisonFilesPath = p.join('/') || '/';
+      state.liaisonFiles = []; state.remoteLoaded.files = false; loadLiaison().then(render);
+    } }, ['上一级']);
+    var pathEl = h('input', { value: state.liaisonFilesPath, onchange: function () { state.liaisonFilesPath = pathEl.value || '/'; state.liaisonFiles = []; state.remoteLoaded.files = false; loadLiaison().then(render); } }, []);
+    return h('div', { class: 'card' }, [
+      h('div', { class: 'card-head' }, [h('h3', {}, ['文件管理'])]),
+      h('div', { class: 'form-row2' }, [up, pathEl]),
+      h('div', { class: 'table-wrap' }, [h('table', {}, [h('thead', {}, [h('tr', {}, [h('th', {}, ['名称']), h('th', {}, ['大小']), h('th', {}, ['修改时间'])])]), h('tbody', {}, rows)])]),
+      state.liaisonFileContent !== '' ? h('pre', { class: 'file-content' }, [state.liaisonFileContent]) : null
+    ]);
+  }
+  function liaisonDBView() {
+    var rows = state.liaisonDB.map(function (c) {
+      return h('tr', {}, [h('td', {}, [c.name || '']), h('td', {}, [c.driver || '']), h('td', {}, [c.dsn || '']), h('td', {}, [h('button', { class: 'btn sm danger', onclick: function () { liaisonDBDel(c.id); } }, ['删除'])])]);
+    });
+    var name = h('input', { placeholder: '名称' }, []);
+    var driver = h('select', {}, [h('option', { value: 'postgres' }, ['postgres']), h('option', { value: 'sqlite' }, ['sqlite'])]);
+    var dsn = h('input', { placeholder: 'DSN，如 file:/path/to.db 或 postgresql://...' }, []);
+    var add = h('button', { class: 'btn primary', onclick: function () {
+      api('/api/liaison/db/connections', { method: 'POST', body: JSON.stringify({ name: name.value, driver: driver.value, dsn: dsn.value }) })
+        .then(function () { remoteSetMsg(true, '连接已添加'); state.liaisonDB = []; state.remoteLoaded.db = false; return loadLiaison().then(render); })
+        .catch(function (e) { remoteSetMsg(false, e.message); render(); });
+    } }, ['添加连接']);
+    var connSel = h('select', {}, state.liaisonDB.map(function (c) { return h('option', { value: c.id }, [c.name]); }));
+    var sql = h('textarea', { placeholder: 'SELECT ...' }, []);
+    var run = h('button', { class: 'btn primary', onclick: function () {
+      api('/api/liaison/db/query', { method: 'POST', body: JSON.stringify({ connection_id: Number(connSel.value), sql: sql.value }) })
+        .then(function (d) { state.liaisonDBResult = d; remoteSetMsg(true, '查询完成（' + d.elapsed_ms + 'ms）'); render(); })
+        .catch(function (e) { remoteSetMsg(false, e.message); render(); });
+    } }, ['执行查询']);
+    var resultEl = null;
+    if (state.liaisonDBResult) {
+      var r = state.liaisonDBResult;
+      resultEl = h('div', { class: 'table-wrap' }, [h('table', {}, [
+        h('thead', {}, [h('tr', {}, (r.columns || []).map(function (c) { return h('th', {}, [c]); }))]),
+        h('tbody', {}, (r.rows || []).map(function (row) { return h('tr', {}, row.map(function (v) { return h('td', {}, [v == null ? 'NULL' : String(v)]); })); }))
+      ])]);
+    }
+    return h('div', { class: 'card' }, [
+      h('div', { class: 'card-head' }, [h('h3', {}, ['Web 数据库'])]),
+      h('div', { class: 'table-wrap' }, [h('table', {}, [h('thead', {}, [h('tr', {}, [h('th', {}, ['名称']), h('th', {}, ['驱动']), h('th', {}, ['DSN']), h('th', {}, ['操作'])])]), h('tbody', {}, rows)])]),
+      field('名称', name), field('驱动', driver), field('DSN', dsn), add,
+      field('连接', connSel), field('SQL', sql), run, resultEl
+    ]);
+  }
+  function liaisonDBDel(id) {
+    if (!window.confirm('确认删除该连接？')) return;
+    api('/api/liaison/db/connections/' + id, { method: 'DELETE' }).then(function () { state.liaisonDB = []; state.remoteLoaded.db = false; return loadLiaison().then(render); }).catch(function (e) { remoteSetMsg(false, e.message); render(); });
+  }
+  function liaisonLLMView() {
+    var chat = h('textarea', { placeholder: '输入消息…' }, []);
+    var send = h('button', { class: 'btn primary', onclick: function () {
+      api('/api/liaison/llm/chat', { method: 'POST', body: JSON.stringify({ messages: [{ role: 'user', content: chat.value }] }) })
+        .then(function (d) { state.liaisonLLMReply = d.content || ''; render(); })
+        .catch(function (e) { remoteSetMsg(false, e.message); render(); });
+    } }, ['发送']);
+    var info = state.liaisonLLMModels ? ('模型：' + (state.liaisonLLMModels.model || '未配置')) : '';
+    return h('div', { class: 'card' }, [
+      h('div', { class: 'card-head' }, [h('h3', {}, ['LLM 网关'])]),
+      h('div', { class: 'muted' }, [info]),
+      field('消息', chat), send,
+      state.liaisonLLMReply ? h('pre', { class: 'file-content' }, [state.liaisonLLMReply]) : null
+    ]);
+  }
+  function liaisonPoliciesView() {
+    var rows = state.liaisonPolicies.map(function (p) {
+      return h('tr', {}, [h('td', {}, [p[0] || '']), h('td', {}, [p[1] || '']), h('td', {}, [p[2] || ''])]);
+    });
+    var sub = h('input', { placeholder: 'subject（角色，如 admin / user）' }, []);
+    var obj = h('input', { placeholder: 'object（如 ssh:10.0.0.1 / files:* / *）' }, []);
+    var act = h('input', { placeholder: 'action（如 connect / read / write / exec / *）' }, []);
+    var add = h('button', { class: 'btn primary', onclick: function () {
+      api('/api/liaison/policies', { method: 'POST', body: JSON.stringify({ sub: sub.value, obj: obj.value, act: act.value }) })
+        .then(function () { remoteSetMsg(true, '策略已添加'); state.liaisonPolicies = []; state.remoteLoaded.policies = false; return loadLiaison().then(render); })
+        .catch(function (e) { remoteSetMsg(false, e.message); render(); });
+    } }, ['添加策略']);
+    return h('div', { class: 'card' }, [
+      h('div', { class: 'card-head' }, [h('h3', {}, ['Casbin 策略管理'])]),
+      h('div', { class: 'muted' }, ['默认 superadmin/admin 拥有全部权限；可为普通用户显式授权。']),
+      h('div', { class: 'table-wrap' }, [h('table', {}, [h('thead', {}, [h('tr', {}, [h('th', {}, ['subject']), h('th', {}, ['object']), h('th', {}, ['action'])])]), h('tbody', {}, rows)])]),
+      field('subject', sub), field('object', obj), field('action', act), add
+    ]);
+  }
+  function liaisonSSHView() {
+    return h('div', { class: 'card' }, [
+      h('div', { class: 'card-head' }, [h('h3', {}, ['Web SSH'])]),
+      h('div', { class: 'muted' }, ['Web SSH 终端需要 xterm.js；后端通道（/api/liaison/ws）已就绪，前端终端组件待接入。'])
+    ]);
+  }
+'''
+
+# 远程访问 + 远程管理菜单（插入到「隧道」菜单后）
+REMOTE_NAV = r'''
+        navDropdown('远程管理', [
+          { label: '文件管理', active: state.view === 'liaison' && state.liaisonSection === 'files', onclick: function () { state.liaisonSection = 'files'; switchView('liaison'); } },
+          { label: '数据库', active: state.view === 'liaison' && state.liaisonSection === 'db', onclick: function () { state.liaisonSection = 'db'; switchView('liaison'); } },
+          { label: 'LLM 对话', active: state.view === 'liaison' && state.liaisonSection === 'llm', onclick: function () { state.liaisonSection = 'llm'; switchView('liaison'); } },
+          { label: '策略管理', active: state.view === 'liaison' && state.liaisonSection === 'policies', onclick: function () { state.liaisonSection = 'policies'; switchView('liaison'); } },
+          { label: 'Web SSH', active: state.view === 'liaison' && state.liaisonSection === 'ssh', onclick: function () { state.liaisonSection = 'ssh'; switchView('liaison'); } }
+        ], state.view === 'liaison'),
+'''
+
+REMOTE_CASE = r"""      case 'ddnsto': body = ddnstoView(); break;
+      case 'liaison': body = liaisonView(); break;
+"""
+
+REMOTE_SWITCHVIEW = r"""    else if (v === 'ddnsto') loadDDNSTO().then(render);
+    else if (v === 'liaison') render();
+"""
+
+
 TUNNEL_NAV = r'''
         navDropdown('隧道', [
           { label: '客户端', active: state.view === 'tunnel' && state.tunnelSection === 'clients', onclick: function () { state.tunnelSection = 'clients'; switchView('tunnel'); } },
           { label: '网络', active: state.view === 'tunnel' && state.tunnelSection === 'networks', onclick: function () { state.tunnelSection = 'networks'; switchView('tunnel'); } },
           { label: '服务端节点', active: state.view === 'tunnel' && state.tunnelSection === 'serverNodes', onclick: function () { state.tunnelSection = 'serverNodes'; switchView('tunnel'); } },
           { label: '路由', active: state.view === 'tunnel' && state.tunnelSection === 'routes', onclick: function () { state.tunnelSection = 'routes'; switchView('tunnel'); } },
-          { label: '边缘服务', active: state.view === 'tunnel' && state.tunnelSection === 'edgeServices', onclick: function () { state.tunnelSection = 'edgeServices'; switchView('tunnel'); } }
-        ], state.view === 'tunnel'),
+          { label: '边缘服务', active: state.view === 'tunnel' && state.tunnelSection === 'edgeServices', onclick: function () { state.tunnelSection = 'edgeServices'; switchView('tunnel'); } },
+          { label: '远程访问（DDNSTO）', active: state.view === 'ddnsto', onclick: function () { switchView('ddnsto'); } }
+        ], state.view === 'tunnel' || state.view === 'ddnsto'),
 '''
 
 # switch 分发 case
@@ -350,36 +587,37 @@ TUNNEL_SWITCHVIEW = r"""    else if (v === 'tunnel') render();
 
 
 def inject(app_js):
-    """在三处锚点注入隧道视图代码，返回注入后的内容。"""
+    """在锚点注入隧道 + 远程访问 + 远程管理视图代码，返回注入后的内容。"""
     # 1. state 末尾注入 state 字段 + 视图函数
     anchor_state = "navOpen: null };"
     if anchor_state not in app_js:
         raise RuntimeError("未找到 state 末尾锚点: " + anchor_state)
-    app_js = app_js.replace(anchor_state, anchor_state + "\n" + TUNNEL_JS, 1)
+    app_js = app_js.replace(anchor_state, anchor_state + "\n" + TUNNEL_JS + REMOTE_JS, 1)
 
-    # 2. 导航菜单注入
+    # 2. 导航菜单注入（隧道下拉 + 远程访问 + 远程管理下拉）
     anchor_nav = "navDropdown('帮助', helpItems, false)"
     if anchor_nav not in app_js:
         raise RuntimeError("未找到导航锚点: " + anchor_nav)
-    app_js = app_js.replace(anchor_nav, TUNNEL_NAV.rstrip("\n") + "\n        " + anchor_nav, 1)
+    nav_block = TUNNEL_NAV.rstrip("\n") + "\n" + REMOTE_NAV.rstrip("\n") + "\n        " + anchor_nav
+    app_js = app_js.replace(anchor_nav, nav_block, 1)
 
     # 3. switch case 注入
     anchor_case = "default: body = hostsView();"
     if anchor_case not in app_js:
         raise RuntimeError("未找到 switch 分发锚点: " + anchor_case)
-    app_js = app_js.replace(anchor_case, TUNNEL_CASE.rstrip("\n") + "\n      " + anchor_case, 1)
+    app_js = app_js.replace(anchor_case, TUNNEL_CASE.rstrip("\n") + "\n" + REMOTE_CASE.rstrip("\n") + "\n      " + anchor_case, 1)
 
-    # 4. switchView 分支注入（否则 switchView('tunnel') 落到 else loadHosts()）
+    # 4. switchView 分支注入
     anchor_switchview = "else if (v === 'password') render();"
     if anchor_switchview not in app_js:
         raise RuntimeError("未找到 switchView 锚点: " + anchor_switchview)
-    app_js = app_js.replace(anchor_switchview, anchor_switchview + "\n" + TUNNEL_SWITCHVIEW.rstrip("\n"), 1)
+    app_js = app_js.replace(anchor_switchview, anchor_switchview + "\n" + TUNNEL_SWITCHVIEW.rstrip("\n") + "\n" + REMOTE_SWITCHVIEW.rstrip("\n"), 1)
 
-    # 5. KNOWN_VIEWS 加入 tunnel（hash 路由恢复）
+    # 5. KNOWN_VIEWS 加入 tunnel/ddnsto/liaison（hash 路由恢复）
     anchor_known = "ai: 1, assistant: 1"
     if anchor_known not in app_js:
         raise RuntimeError("未找到 KNOWN_VIEWS 锚点: " + anchor_known)
-    app_js = app_js.replace(anchor_known, anchor_known + ",\n    tunnel: 1", 1)
+    app_js = app_js.replace(anchor_known, anchor_known + ",\n    tunnel: 1, ddnsto: 1, liaison: 1", 1)
 
     return app_js
 
