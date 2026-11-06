@@ -4,7 +4,11 @@ LDFLAGS := -s -w \
 	-X github.com/iflyelf/iflygo/internal/version.Version=$(VERSION) \
 	-X github.com/iflyelf/iflygo/internal/version.Build=$(COMMIT)
 
-.PHONY: build build-server build-client cross test vet fmt tidy clean
+.PHONY: build build-server build-client cross test vet fmt tidy clean frontend
+
+frontend:
+	python3 scripts/inject_tunnel_frontend.py
+	node --check web/dist/assets/app.js
 
 build: build-server build-client
 
@@ -21,7 +25,7 @@ vet:
 	go vet ./...
 
 check-frontend:
-	node --check web/dist/app.js
+	node --check web/dist/assets/app.js
 
 fmt:
 	gofmt -w .

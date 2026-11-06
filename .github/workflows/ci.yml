@@ -50,7 +50,7 @@ jobs:
           go-version-file: 'go.mod'
 
       - name: 前端语法检查
-        run: node --check web/dist/app.js
+        run: node --check web/dist/assets/app.js
 
       - name: Go 静态检查
         run: go vet ./...

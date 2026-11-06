@@ -1,20 +1,22 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-CN" data-theme="warm">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="theme-color" content="#f5efe6">
-  <meta name="color-scheme" content="light dark">
-  <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="format-detection" content="telephone=no">
-  <title>iFlyGo 控制台</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#f5efe6" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="format-detection" content="telephone=no" />
+  <title>升级控制平台</title>
   <script>
-    // 防首屏闪烁：渲染前先设置主题（与 app.js 共用 localStorage key）
+    // 防首屏闪烁：Vue/渲染前先设置主题
     (function () {
       try {
-        var t = localStorage.getItem('iflygo_theme');
+        var legacy = { light: 'warm', blue: 'cool' };
+        var t = localStorage.getItem('upgrade_mgr_theme');
+        if (t && legacy[t]) t = legacy[t];
         if (t !== 'warm' && t !== 'cool' && t !== 'dark') {
           t = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'warm';
         }
@@ -24,10 +26,12 @@
       } catch (e) { document.documentElement.setAttribute('data-theme', 'warm'); }
     })();
   </script>
-  <link rel="stylesheet" href="app.css">
+  <link rel="icon" type="image/x-icon" href="/favicon.ico" sizes="any" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="stylesheet" href="/assets/app.css" />
 </head>
 <body>
   <div id="app"></div>
-  <script src="app.js"></script>
+  <script src="/assets/app.js"></script>
 </body>
 </html>
