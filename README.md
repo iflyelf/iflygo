@@ -26,10 +26,10 @@
 
 ### 远程管理套件（Liaison）
 - ✅ Casbin RBAC 细粒度授权（策略存库，默认 superadmin/admin 全权限）
-- ✅ Web SSH 终端（WebSocket 桥接 x/crypto/ssh）
+- ✅ Web SSH 终端（xterm.js + WebSocket 桥接 x/crypto/ssh）
 - ✅ 文件管理 / Web 数据库查询 / LLM 网关（OpenAI 兼容）
-- ✅ Web VNC 远程桌面（纯 Go RFB 客户端 + canvas 渲染）
-- ⏳ Web RDP（协议栈复杂度高，通道已预留）
+- ✅ Web VNC 远程桌面（纯 Go RFB 客户端 + canvas 渲染，Raw/Hextile/CopyRect/Tight/ZRLE）
+- ✅ Web RDP 远程桌面（fork grdp 移除 CGO + canvas 渲染）
 
 ### 双数据库
 - ✅ **PostgreSQL + SQLite 双库**：同一套代码全功能支持，`$N`/`NOW()`/数组/时间戳/并发原语跨库适配
@@ -158,6 +158,7 @@ docker run --rm iflyelf/iflygo:latest -version
 |---|---|---|---|
 | Nebula | `third_party/nebula`（`go.mod replace`） | 数据面引擎 | 自动：`update-version.yml` 检测最新 release → 更新子模块 + go.mod + `NEBULA_VERSION` → 开 PR |
 | upgrade_mgr | `third_party/upgrade_mgr` | 控制面/前端/CI 对齐参考 | 自动更新子模块开 PR，功能按 diff 手动移植（其 `internal/` 不可跨模块导入） |
+| grdp | `third_party/grdp`（`go.mod replace`，本地 fork） | Web RDP 客户端 | 本地 fork：已移除 CGO（`plugin/channel.go` 的 `import "C"`）与 broken 的 `client/rfb.go`，以支持 `CGO_ENABLED=0` 静态编译 |
 
 **手动同步命令：**
 

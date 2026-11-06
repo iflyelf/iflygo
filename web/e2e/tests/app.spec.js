@@ -134,3 +134,23 @@ test('Liaison 远程管理：策略管理可见默认策略', async ({ page }) =
   await expect(page.getByRole('heading', { name: 'Casbin 策略管理', exact: true })).toBeVisible();
   await expect(page.locator('table')).toContainText('superadmin');
 });
+
+test('Liaison 远程桌面：VNC 与 RDP 页面渲染', async ({ page }) => {
+  await login(page);
+  for (const [label, title] of [['远程桌面（VNC）', '远程桌面（VNC）'], ['远程桌面（RDP）', '远程桌面（RDP）']]) {
+    await page.locator('.main-nav .nav-link', { hasText: '远程管理' }).click();
+    await page.locator('.main-nav .nav-menu-item', { hasText: label }).click();
+    await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '连接', exact: true })).toBeVisible();
+  }
+});
+
+test('Liaison Web SSH：xterm 终端渲染', async ({ page }) => {
+  await login(page);
+  await page.locator('.main-nav .nav-link', { hasText: '远程管理' }).click();
+  await page.locator('.main-nav .nav-menu-item', { hasText: 'Web SSH' }).click();
+  await expect(page.getByRole('heading', { name: 'Web SSH', exact: true })).toBeVisible();
+  // 点击连接（默认 host 无 SSH 凭据），xterm 应渲染并显示错误提示
+  await page.getByRole('button', { name: '连接', exact: true }).click();
+  await expect(page.locator('.xterm')).toBeVisible();
+});
