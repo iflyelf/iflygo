@@ -26,12 +26,10 @@ EXTRA_CSS = """
 /* iflygo 注入视图（隧道/DDNSTO/Liaison）补充样式 */
 .form-row2 { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
 .form-row2 input, .form-row2 select { flex: 1; min-width: 120px; }
-.ssh-term {
-  background: #171a1f; color: #d8dee9; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 13px; line-height: 1.5; padding: 12px; border-radius: 8px;
-  min-height: 280px; max-height: 420px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;
-}
+.ssh-xterm { margin-top: 8px; }
+.ssh-xterm .xterm { padding: 8px; border-radius: 8px; }
 .file-content { background: #f5f2ec; padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 12px; max-height: 360px; }
+.vnc-wrap { margin-top: 8px; }
 """
 
 # ---------------------------------------------------------------------------
@@ -557,47 +555,52 @@ REMOTE_JS = r'''
     var port = h('input', { placeholder: '端口', type: 'number', value: 22 }, []);
     var user = h('input', { placeholder: '用户名', value: 'root' }, []);
     var pass = h('input', { placeholder: '密码', type: 'password' }, []);
-    var term = h('pre', { class: 'ssh-term', id: 'ssh-term' }, ['（输入主机与凭据后点「连接」，回车发送命令）']);
-    var input = h('input', { placeholder: '在此输入命令，回车发送', id: 'ssh-input' }, []);
-    var connectBtn = h('button', { class: 'btn primary', onclick: function () { liaisonSSHConnect(host, port, user, pass, term, input); } }, ['连接']);
+    var termHost = h('div', { class: 'ssh-xterm', id: 'ssh-xterm' }, [h('div', { class: 'muted' }, ['（输入主机与凭据后点「连接」）'])]);
+    var connectBtn = h('button', { class: 'btn primary', onclick: function () { liaisonSSHConnect(host, port, user, pass, termHost); } }, ['连接']);
     return h('div', { class: 'card' }, [
       h('div', { class: 'card-head' }, [h('h3', {}, ['Web SSH'])]),
       h('div', { class: 'form-row2' }, [host, port, user, pass, connectBtn]),
-      term, input
+      termHost
     ]);
   }
-  function liaisonSSHConnect(host, port, user, pass, term, input) {
+  function liaisonSSHConnect(host, port, user, pass, termHost) {
+    if (typeof Terminal === 'undefined' || typeof FitAddon === 'undefined') {
+      termHost.replaceChildren(h('div', { class: 'err field' }, ['xterm.js 未加载']));
+      return;
+    }
+    var term = new Terminal({ cursorBlink: true, fontSize: 13, theme: { background: '#171a1f' }, scrollback: 2000 });
+    var fit = new FitAddon.FitAddon();
+    term.loadAddon(fit);
+    termHost.replaceChildren();
+    term.open(termHost);
+    fit.fit();
+    term.focus();
+    term.writeln('\x1b[33m正在连接 ' + host.value + ':' + port.value + '...\x1b[0m');
     var ws;
     try {
       var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       ws = new WebSocket(proto + '//' + location.host + '/api/liaison/ws');
-    } catch (e) { term.textContent += '\n[WebSocket 创建失败] ' + e.message; return; }
+    } catch (e) { term.writeln('\x1b[31m[连接失败] ' + e.message + '\x1b[0m'); return; }
     ws.binaryType = 'arraybuffer';
-    function append(text) { term.textContent += text; term.scrollTop = term.scrollHeight; }
     ws.onopen = function () {
-      ws.send(JSON.stringify({ kind: 'ssh', host: host.value, port: Number(port.value || 22), user: user.value, password: pass.value, cols: 80, rows: 24 }));
+      ws.send(JSON.stringify({ kind: 'ssh', host: host.value, port: Number(port.value || 22), user: user.value, password: pass.value, cols: term.cols, rows: term.rows }));
     };
     ws.onmessage = function (ev) {
       if (typeof ev.data === 'string') {
         try {
           var m = JSON.parse(ev.data);
-          if (m.type === 'ready') { append('\n[已连接]\n'); input.focus(); }
-          else if (m.type === 'error') { append('\n[错误] ' + m.message + '\n'); }
-        } catch (e) { append(ev.data); }
+          if (m.type === 'ready') { term.writeln('\x1b[32m[已连接]\x1b[0m'); term.focus(); }
+          else if (m.type === 'error') { term.writeln('\x1b[31m[错误] ' + m.message + '\x1b[0m'); }
+        } catch (e) { term.write(ev.data); }
       } else {
-        var dec = new TextDecoder();
-        append(dec.decode(ev.data));
+        term.write(new Uint8Array(ev.data));
       }
     };
-    ws.onclose = function () { append('\n[连接已关闭]\n'); };
-    ws.onerror = function () { append('\n[连接错误]\n'); };
-    input.onkeydown = function (e) {
-      if (e.key === 'Enter' && ws && ws.readyState === 1) {
-        ws.send(input.value + '\r');
-        append('\n$ ' + input.value + '\n');
-        input.value = '';
-      }
-    };
+    ws.onclose = function () { term.writeln('\x1b[33m[连接已关闭]\x1b[0m'); };
+    ws.onerror = function () { term.writeln('\x1b[31m[连接错误]\x1b[0m'); };
+    term.onData(function (data) {
+      if (ws && ws.readyState === 1) ws.send(data);
+    });
   }
   function liaisonVNCView() {
     var host = h('input', { placeholder: '目标主机（overlay IP）', value: '10.66.0.1' }, []);
@@ -774,12 +777,34 @@ def main():
         s = os.path.join(SRC, name)
         if os.path.exists(s):
             shutil.copy2(s, os.path.join(DST, name))
+    # 注入 xterm.js 依赖（Web SSH 终端）
+    index_path = os.path.join(DST, "index.html")
+    with open(index_path, "r", encoding="utf-8") as f:
+        idx = f.read()
+    idx = idx.replace(
+        '<link rel="stylesheet" href="/assets/app.css" />',
+        '<link rel="stylesheet" href="/assets/app.css" />\n  <link rel="stylesheet" href="/assets/vendor/xterm.css" />',
+    )
+    idx = idx.replace(
+        '<script src="/assets/app.js"></script>',
+        '<script src="/assets/vendor/xterm.js"></script>\n  <script src="/assets/vendor/addon-fit.js"></script>\n  <script src="/assets/app.js"></script>',
+    )
+    with open(index_path, "w", encoding="utf-8") as f:
+        f.write(idx)
+
     assets_dst = os.path.join(DST, "assets")
     os.makedirs(assets_dst, exist_ok=True)
     shutil.copy2(os.path.join(SRC, "assets", "app.css"), os.path.join(assets_dst, "app.css"))
     # 追加 iflygo 注入视图的补充样式（表单行/终端）
     with open(os.path.join(assets_dst, "app.css"), "a", encoding="utf-8") as f:
         f.write(EXTRA_CSS)
+    # 复制 iflygo 自有 vendor 资源（xterm.js 等）
+    vendor_dst = os.path.join(assets_dst, "vendor")
+    os.makedirs(vendor_dst, exist_ok=True)
+    vendor_src = os.path.join(ROOT, "web", "vendor")
+    if os.path.isdir(vendor_src):
+        for vf in os.listdir(vendor_src):
+            shutil.copy2(os.path.join(vendor_src, vf), os.path.join(vendor_dst, vf))
 
     # 2. 注入隧道视图
     app_js_path = os.path.join(SRC, "assets", "app.js")

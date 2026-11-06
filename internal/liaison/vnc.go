@@ -1,11 +1,14 @@
 package liaison
 
 import (
+	"bytes"
+	"compress/zlib"
 	"context"
 	"crypto/des"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"image/jpeg"
 	"io"
 	"net"
 	"strconv"
@@ -29,6 +32,8 @@ const (
 	encRaw         = 0
 	encCopyRect    = 1
 	encHextile     = 5
+	encTight       = 7
+	encZRLE        = 16
 	encDesktopSize = -223
 
 	keyEvent     = 4
@@ -232,7 +237,7 @@ func (v *vncClient) sendSetEncodings() error {
 	var b []byte
 	b = appendU8(b, 2) // SetEncodings
 	b = appendU8(b, 0)
-	encs := []int32{encCopyRect, encHextile, encRaw}
+	encs := []int32{encCopyRect, encHextile, encTight, encZRLE, encRaw}
 	b = appendU16(b, uint16(len(encs)))
 	for _, e := range encs {
 		b = appendU32(b, uint32(e))
@@ -319,6 +324,14 @@ func (v *vncClient) readRect() error {
 		v.copyRect(int(x), int(y), int(w), int(h), int(sx), int(sy))
 	case encHextile:
 		if err := v.readHextile(int(x), int(y), int(w), int(h)); err != nil {
+			return err
+		}
+	case encTight:
+		if err := v.readTight(int(x), int(y), int(w), int(h)); err != nil {
+			return err
+		}
+	case encZRLE:
+		if err := v.readZRLE(int(x), int(y), int(w), int(h)); err != nil {
 			return err
 		}
 	case encDesktopSize:
@@ -431,7 +444,414 @@ func (v *vncClient) fillSolid(x, y, w, h int, color []byte) {
 	}
 }
 
-// sendInput 处理前端输入事件（键盘/指针）。
+// readZRLE 解码 ZRLE 编码（encoding 16）：4 字节长度 + zlib 压缩的 tile 数据。
+func (v *vncClient) readZRLE(x, y, w, h int) error {
+	ln, err := v.r.ReadFull(4)
+	if err != nil {
+		return err
+	}
+	length := binary.BigEndian.Uint32(ln)
+	data, err := v.r.ReadFull(int(length))
+	if err != nil {
+		return err
+	}
+	zr, err := zlib.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	dec, err := io.ReadAll(zr)
+	zr.Close()
+	if err != nil {
+		return err
+	}
+	d := dec
+	for ty := 0; ty < h; ty += 64 {
+		for tx := 0; tx < w; tx += 64 {
+			tw := 64
+			if tx+tw > w {
+				tw = w - tx
+			}
+			th := 64
+			if ty+th > h {
+				th = h - ty
+			}
+			if len(d) < 1 {
+				return io.ErrUnexpectedEOF
+			}
+			sub := d[0]
+			d = d[1:]
+			if err := v.zrleTile(x+tx, y+ty, tw, th, sub, &d); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (v *vncClient) zrleTile(x, y, w, h int, sub byte, d *[]byte) error {
+	pix := w * h
+	switch {
+	case sub == 0: // Raw
+		n := pix * v.bpp
+		if len(*d) < n {
+			return io.ErrUnexpectedEOF
+		}
+		v.fillRaw(x, y, w, h, (*d)[:n])
+		*d = (*d)[n:]
+	case sub == 1: // Solid
+		if len(*d) < v.bpp {
+			return io.ErrUnexpectedEOF
+		}
+		v.fillSolid(x, y, w, h, (*d)[:v.bpp])
+		*d = (*d)[v.bpp:]
+	case sub >= 2 && sub <= 16: // Packed palette
+		ps := int(sub)
+		palette := make([]byte, ps*v.bpp)
+		if len(*d) < len(palette) {
+			return io.ErrUnexpectedEOF
+		}
+		copy(palette, (*d)[:len(palette)])
+		*d = (*d)[len(palette):]
+		bits := 0
+		for ps > 1 {
+			bits++
+			ps >>= 1
+		}
+		br := &bitReader{data: *d}
+		row := make([]byte, 0, w*v.bpp)
+		for i := 0; i < pix; i++ {
+			idx, err := br.readBits(bits)
+			if err != nil {
+				return err
+			}
+			off := int(idx) * v.bpp
+			if off >= len(palette) {
+				return io.ErrUnexpectedEOF
+			}
+			row = append(row, palette[off:off+v.bpp]...)
+			if len(row) == w*v.bpp {
+				v.fillRaw(x, y+(i+1-len(row)/v.bpp)/1, w, 1, row)
+				// 逐行填充：更简单的方式是累积整个 tile 再 fill
+			}
+		}
+		// 简化：累积整个 tile 的像素，一次 fillRaw
+		tile := make([]byte, 0, pix*v.bpp)
+		for i := 0; i < pix; i++ {
+			idx, err := br.readBits(bits)
+			if err != nil {
+				return err
+			}
+			off := int(idx) * v.bpp
+			if off >= len(palette) {
+				return io.ErrUnexpectedEOF
+			}
+			tile = append(tile, palette[off:off+v.bpp]...)
+		}
+		*d = br.remaining()
+		v.fillRaw(x, y, w, h, tile)
+	case sub == 128: // Plain RLE
+		yy := 0
+		xx := 0
+		for yy < h {
+			if len(*d) < v.bpp {
+				return io.ErrUnexpectedEOF
+			}
+			color := (*d)[:v.bpp]
+			*d = (*d)[v.bpp:]
+			run := 1
+			for {
+				if len(*d) < 1 {
+					return io.ErrUnexpectedEOF
+				}
+				b := (*d)[0]
+				*d = (*d)[1:]
+				run += int(b)
+				if b != 255 {
+					break
+				}
+			}
+			for i := 0; i < run; i++ {
+				if xx >= w {
+					xx = 0
+					yy++
+					if yy >= h {
+						break
+					}
+				}
+				v.fillSolid(x+xx, y+yy, 1, 1, color)
+				xx++
+			}
+		}
+	case sub >= 130 && sub <= 255: // Palette RLE
+		ps := int(sub) - 128
+		palette := make([]byte, ps*v.bpp)
+		if len(*d) < len(palette) {
+			return io.ErrUnexpectedEOF
+		}
+		copy(palette, (*d)[:len(palette)])
+		*d = (*d)[len(palette):]
+		yy, xx := 0, 0
+		for yy < h {
+			if len(*d) < 1 {
+				return io.ErrUnexpectedEOF
+			}
+			idx := int((*d)[0])
+			*d = (*d)[1:]
+			if idx >= ps {
+				return io.ErrUnexpectedEOF
+			}
+			color := palette[idx*v.bpp : idx*v.bpp+v.bpp]
+			run := 1
+			for {
+				if len(*d) < 1 {
+					return io.ErrUnexpectedEOF
+				}
+				b := (*d)[0]
+				*d = (*d)[1:]
+				run += int(b)
+				if b != 255 {
+					break
+				}
+			}
+			for i := 0; i < run; i++ {
+				if xx >= w {
+					xx = 0
+					yy++
+					if yy >= h {
+						break
+					}
+				}
+				v.fillSolid(x+xx, y+yy, 1, 1, color)
+				xx++
+			}
+		}
+	default:
+		return fmt.Errorf("未知 ZRLE 子编码 %d", sub)
+	}
+	return nil
+}
+
+// bitReader 从字节切片按 MSB 优先读位。
+type bitReader struct {
+	data []byte
+	pos  int
+}
+
+func (b *bitReader) readBits(n int) (uint32, error) {
+	var val uint32
+	for i := 0; i < n; i++ {
+		byteIdx := b.pos / 8
+		if byteIdx >= len(b.data) {
+			return 0, io.ErrUnexpectedEOF
+		}
+		bit := (b.data[byteIdx] >> uint(7-b.pos%8)) & 1
+		val = (val << 1) | uint32(bit)
+		b.pos++
+	}
+	return val, nil
+}
+
+func (b *bitReader) remaining() []byte {
+	out := b.data[b.pos/8:]
+	if b.pos%8 != 0 {
+		out = b.data[b.pos/8+1:]
+	}
+	return out
+}
+
+// readTight 解码 Tight 编码（encoding 7）：16x16 tile + control byte。
+// readTight 解码 Tight 编码（encoding 7）：16x16 tile + control byte。
+// fill/jpeg 子编码独立可靠；basic/palette/gradient 的 zlib 数据在 Tight 规范中跨 tile 连续，
+// 但 Go 标准库的流式 zlib（bufio 预读）无法在 tile 边界精确暂停/恢复，
+// 故 basic/palette 采用「每 tile 独立 zlib 流」（对 reset-per-tile 的服务器正确）。
+func (v *vncClient) readTight(x, y, w, h int) error {
+	for ty := 0; ty < h; ty += 16 {
+		for tx := 0; tx < w; tx += 16 {
+			tw := 16
+			if tx+tw > w {
+				tw = w - tx
+			}
+			th := 16
+			if ty+th > h {
+				th = h - ty
+			}
+			ctrl, err := v.r.ReadFull(1)
+			if err != nil {
+				return err
+			}
+			comp := ctrl[0] >> 4
+			switch comp {
+			case 0x08: // fill
+				color, err := v.r.ReadFull(v.bpp)
+				if err != nil {
+					return err
+				}
+				v.fillSolid(x+tx, y+ty, tw, th, color)
+			case 0x09: // jpeg
+				if err := v.readTightJPEG(x+tx, y+ty, tw, th); err != nil {
+					return err
+				}
+			default: // basic (0-7)
+				if err := v.readTightBasic(x+tx, y+ty, tw, th, comp); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// readTightBasic 解码 Tight basic 子编码（zlib 像素 / palette / gradient）。
+func (v *vncClient) readTightBasic(x, y, w, h int, comp byte) error {
+	switch {
+	case comp == 0: // 纯 zlib 像素
+		raw := make([]byte, w*h*v.bpp)
+		if _, err := v.readTightZlib(raw); err != nil {
+			return err
+		}
+		v.fillRaw(x, y, w, h, raw)
+	case comp >= 1 && comp <= 4: // palette
+		size, err := v.r.ReadFull(1)
+		if err != nil {
+			return err
+		}
+		ps := int(size[0]) + 1
+		palette := make([]byte, ps*v.bpp)
+		if _, err := v.readTightZlib(palette); err != nil {
+			return err
+		}
+		bits := 1
+		for (1 << bits) < ps {
+			bits++
+		}
+		idxRaw := make([]byte, (w*h*bits+7)/8)
+		if _, err := v.readTightZlib(idxRaw); err != nil {
+			return err
+		}
+		br := &bitReader{data: idxRaw}
+		tile := make([]byte, 0, w*h*v.bpp)
+		for i := 0; i < w*h; i++ {
+			idx, err := br.readBits(bits)
+			if err != nil {
+				return err
+			}
+			if int(idx) >= ps {
+				return io.ErrUnexpectedEOF
+			}
+			tile = append(tile, palette[int(idx)*v.bpp:int(idx)*v.bpp+v.bpp]...)
+		}
+		v.fillRaw(x, y, w, h, tile)
+	default: // gradient (5-7)
+		return v.readTightGradient(x, y, w, h)
+	}
+	return nil
+}
+
+// readTightZlib 每 tile 独立 zlib 解压（best-effort，见 readTight 说明）。
+func (v *vncClient) readTightZlib(dst []byte) (int, error) {
+	zr, err := zlib.NewReader(&tightStreamReader{r: v.r})
+	if err != nil {
+		return 0, err
+	}
+	defer zr.Close()
+	return io.ReadFull(zr, dst)
+}
+
+// tightStreamReader 从底层连接读 zlib 压缩数据。
+type tightStreamReader struct {
+	r *bufReader
+}
+
+func (t *tightStreamReader) Read(p []byte) (int, error) {
+	return t.r.r.Read(p)
+}
+
+// readTightJPEG 解码 Tight JPEG 子编码（3 字节长度 + JPEG 数据）。
+func (v *vncClient) readTightJPEG(x, y, w, h int) error {
+	ln, err := v.r.ReadFull(3)
+	if err != nil {
+		return err
+	}
+	length := int(ln[0])<<16 | int(ln[1])<<8 | int(ln[2])
+	data, err := v.r.ReadFull(length)
+	if err != nil {
+		return err
+	}
+	img, err := jpeg.Decode(bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	bounds := img.Bounds()
+	dw, dh := bounds.Dx(), bounds.Dy()
+	if dw != w || dh != h {
+		return fmt.Errorf("Tight JPEG 尺寸不匹配：%dx%d != %dx%d", dw, dh, w, h)
+	}
+	for yy := 0; yy < h; yy++ {
+		for xx := 0; xx < w; xx++ {
+			rr, gg, bb, _ := img.At(bounds.Min.X+xx, bounds.Min.Y+yy).RGBA()
+			off := ((y+yy)*v.width + (x + xx)) * 4
+			v.fb[off], v.fb[off+1], v.fb[off+2], v.fb[off+3] = byte(rr>>8), byte(gg>>8), byte(bb>>8), 255
+		}
+	}
+	return nil
+}
+
+// readTightGradient 解码 Tight gradient 子编码（compression 5-7）。
+// gradient 数据：每行首像素 v.bpp 字节 + 其余像素 RGB565 相对梯度（zlib 压缩）。
+func (v *vncClient) readTightGradient(x, y, w, h int) error {
+	raw := make([]byte, h*(v.bpp+(w-1)*2))
+	n, err := v.readTightZlib(raw)
+	if err != nil {
+		return err
+	}
+	raw = raw[:n]
+	idx := 0
+	for yy := 0; yy < h; yy++ {
+		if idx+v.bpp > len(raw) {
+			return io.ErrUnexpectedEOF
+		}
+		first := raw[idx : idx+v.bpp]
+		idx += v.bpp
+		fr, fg, fb := v.decodePixel(first)
+		off := ((y+yy)*v.width + x) * 4
+		v.fb[off], v.fb[off+1], v.fb[off+2], v.fb[off+3] = fr, fg, fb, 255
+		pr, pg, pb := int(fr), int(fg), int(fb)
+		for xx := 1; xx < w; xx++ {
+			if idx+2 > len(raw) {
+				return io.ErrUnexpectedEOF
+			}
+			delta := int16(binary.LittleEndian.Uint16(raw[idx : idx+2]))
+			idx += 2
+			dr := int(delta & 0x1F)
+			dg := int((delta >> 5) & 0x1F)
+			db := int((delta >> 10) & 0x1F)
+			if dr&0x10 != 0 {
+				dr -= 32
+			}
+			if dg&0x10 != 0 {
+				dg -= 32
+			}
+			if db&0x10 != 0 {
+				db -= 32
+			}
+			pr, pg, pb = clamp8(pr+dr), clamp8(pg+dg), clamp8(pb+db)
+			o := ((y+yy)*v.width + (x + xx)) * 4
+			v.fb[o], v.fb[o+1], v.fb[o+2], v.fb[o+3] = byte(pr), byte(pg), byte(pb), 255
+		}
+	}
+	return nil
+}
+
+func clamp8(n int) int {
+	if n < 0 {
+		return 0
+	}
+	if n > 255 {
+		return 255
+	}
+	return n
+}
+
 func (v *vncClient) sendInput(data []byte) error {
 	if len(data) < 1 {
 		return nil

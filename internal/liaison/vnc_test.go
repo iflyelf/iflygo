@@ -81,3 +81,56 @@ func TestAppendU16(t *testing.T) {
 		t.Errorf("roundtrip = 0x%x", u)
 	}
 }
+
+// newTestClient 构造测试用 vncClient（32bpp big-endian RGB）。
+func newTestClient(w, h int) *vncClient {
+	return &vncClient{
+		width: w, height: h, bpp: 4, bigEnd: true,
+		rShift: 16, gShift: 8, bShift: 0, rMax: 255, gMax: 255, bMax: 255,
+		fb: make([]byte, w*h*4),
+	}
+}
+
+// TestZRLESolid 验证 ZRLE solid 子编码。
+func TestZRLESolid(t *testing.T) {
+	v := newTestClient(2, 1)
+	// solid：sub=1，然后 1 像素颜色（红）
+	data := []byte{0x00, 0xFF, 0x00, 0x00}
+	if err := v.zrleTile(0, 0, 2, 1, 1, &data); err != nil {
+		t.Fatalf("zrleTile solid: %v", err)
+	}
+	if v.fb[0] != 255 || v.fb[1] != 0 || v.fb[2] != 0 {
+		t.Errorf("solid 红色 = (%d,%d,%d), want (255,0,0)", v.fb[0], v.fb[1], v.fb[2])
+	}
+	if v.fb[4] != 255 || v.fb[5] != 0 || v.fb[6] != 0 {
+		t.Errorf("solid 像素1 = (%d,%d,%d), want (255,0,0)", v.fb[4], v.fb[5], v.fb[6])
+	}
+}
+
+// TestZRLERaw 验证 ZRLE raw 子编码。
+func TestZRLERaw(t *testing.T) {
+	v := newTestClient(2, 1)
+	// raw：红 + 蓝
+	data := []byte{0x00, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF}
+	if err := v.zrleTile(0, 0, 2, 1, 0, &data); err != nil {
+		t.Fatalf("zrleTile raw: %v", err)
+	}
+	if v.fb[0] != 255 || v.fb[4] != 0 || v.fb[6] != 255 {
+		t.Errorf("raw 解码错误: 像素0=(%d,%d,%d) 像素1=(%d,%d,%d)", v.fb[0], v.fb[1], v.fb[2], v.fb[4], v.fb[5], v.fb[6])
+	}
+}
+
+// TestBitReader 验证位读取（MSB 优先）。
+func TestBitReader(t *testing.T) {
+	br := &bitReader{data: []byte{0b10110000}}
+	// 读 3 位：101 = 5
+	v, err := br.readBits(3)
+	if err != nil || v != 5 {
+		t.Errorf("readBits(3) = %d, err=%v, want 5", v, err)
+	}
+	// 读 2 位：10 = 2
+	v, _ = br.readBits(2)
+	if v != 2 {
+		t.Errorf("readBits(2) = %d, want 2", v)
+	}
+}

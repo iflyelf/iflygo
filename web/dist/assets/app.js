@@ -601,47 +601,52 @@
     var port = h('input', { placeholder: '端口', type: 'number', value: 22 }, []);
     var user = h('input', { placeholder: '用户名', value: 'root' }, []);
     var pass = h('input', { placeholder: '密码', type: 'password' }, []);
-    var term = h('pre', { class: 'ssh-term', id: 'ssh-term' }, ['（输入主机与凭据后点「连接」，回车发送命令）']);
-    var input = h('input', { placeholder: '在此输入命令，回车发送', id: 'ssh-input' }, []);
-    var connectBtn = h('button', { class: 'btn primary', onclick: function () { liaisonSSHConnect(host, port, user, pass, term, input); } }, ['连接']);
+    var termHost = h('div', { class: 'ssh-xterm', id: 'ssh-xterm' }, [h('div', { class: 'muted' }, ['（输入主机与凭据后点「连接」）'])]);
+    var connectBtn = h('button', { class: 'btn primary', onclick: function () { liaisonSSHConnect(host, port, user, pass, termHost); } }, ['连接']);
     return h('div', { class: 'card' }, [
       h('div', { class: 'card-head' }, [h('h3', {}, ['Web SSH'])]),
       h('div', { class: 'form-row2' }, [host, port, user, pass, connectBtn]),
-      term, input
+      termHost
     ]);
   }
-  function liaisonSSHConnect(host, port, user, pass, term, input) {
+  function liaisonSSHConnect(host, port, user, pass, termHost) {
+    if (typeof Terminal === 'undefined' || typeof FitAddon === 'undefined') {
+      termHost.replaceChildren(h('div', { class: 'err field' }, ['xterm.js 未加载']));
+      return;
+    }
+    var term = new Terminal({ cursorBlink: true, fontSize: 13, theme: { background: '#171a1f' }, scrollback: 2000 });
+    var fit = new FitAddon.FitAddon();
+    term.loadAddon(fit);
+    termHost.replaceChildren();
+    term.open(termHost);
+    fit.fit();
+    term.focus();
+    term.writeln('\x1b[33m正在连接 ' + host.value + ':' + port.value + '...\x1b[0m');
     var ws;
     try {
       var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       ws = new WebSocket(proto + '//' + location.host + '/api/liaison/ws');
-    } catch (e) { term.textContent += '\n[WebSocket 创建失败] ' + e.message; return; }
+    } catch (e) { term.writeln('\x1b[31m[连接失败] ' + e.message + '\x1b[0m'); return; }
     ws.binaryType = 'arraybuffer';
-    function append(text) { term.textContent += text; term.scrollTop = term.scrollHeight; }
     ws.onopen = function () {
-      ws.send(JSON.stringify({ kind: 'ssh', host: host.value, port: Number(port.value || 22), user: user.value, password: pass.value, cols: 80, rows: 24 }));
+      ws.send(JSON.stringify({ kind: 'ssh', host: host.value, port: Number(port.value || 22), user: user.value, password: pass.value, cols: term.cols, rows: term.rows }));
     };
     ws.onmessage = function (ev) {
       if (typeof ev.data === 'string') {
         try {
           var m = JSON.parse(ev.data);
-          if (m.type === 'ready') { append('\n[已连接]\n'); input.focus(); }
-          else if (m.type === 'error') { append('\n[错误] ' + m.message + '\n'); }
-        } catch (e) { append(ev.data); }
+          if (m.type === 'ready') { term.writeln('\x1b[32m[已连接]\x1b[0m'); term.focus(); }
+          else if (m.type === 'error') { term.writeln('\x1b[31m[错误] ' + m.message + '\x1b[0m'); }
+        } catch (e) { term.write(ev.data); }
       } else {
-        var dec = new TextDecoder();
-        append(dec.decode(ev.data));
+        term.write(new Uint8Array(ev.data));
       }
     };
-    ws.onclose = function () { append('\n[连接已关闭]\n'); };
-    ws.onerror = function () { append('\n[连接错误]\n'); };
-    input.onkeydown = function (e) {
-      if (e.key === 'Enter' && ws && ws.readyState === 1) {
-        ws.send(input.value + '\r');
-        append('\n$ ' + input.value + '\n');
-        input.value = '';
-      }
-    };
+    ws.onclose = function () { term.writeln('\x1b[33m[连接已关闭]\x1b[0m'); };
+    ws.onerror = function () { term.writeln('\x1b[31m[连接错误]\x1b[0m'); };
+    term.onData(function (data) {
+      if (ws && ws.readyState === 1) ws.send(data);
+    });
   }
   function liaisonVNCView() {
     var host = h('input', { placeholder: '目标主机（overlay IP）', value: '10.66.0.1' }, []);
