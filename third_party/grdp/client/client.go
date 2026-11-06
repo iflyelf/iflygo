@@ -17,7 +17,6 @@ const (
 
 const (
 	TC_RDP = 0
-	TC_VNC = 1
 )
 
 type Control interface {
@@ -37,7 +36,6 @@ type Client struct {
 	user    string
 	passwd  string
 	ctl     Control
-	tc      int
 	setting *Setting
 }
 
@@ -53,15 +51,8 @@ func NewClient(host, user, passwd string, t int, s *Setting) *Client {
 		host:    host,
 		user:    user,
 		passwd:  passwd,
-		tc:      t,
 		setting: s,
-	}
-
-	switch t {
-	case TC_VNC:
-		c.ctl = newRdpClient(s) // 仅保留 RDP（VNC 由 iflygo 自行实现）
-	default:
-		c.ctl = newRdpClient(s)
+		ctl:     newRdpClient(s),
 	}
 
 	s.SetLogLevel()

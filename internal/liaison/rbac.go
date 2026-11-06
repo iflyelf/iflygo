@@ -78,9 +78,6 @@ func (a *policyAdapter) ensureTable() {
 	})
 }
 
-// loadPolicyLine 读取一行策略，按列数返回字符串切片。
-// （占位，实际加载逻辑在 LoadPolicy 中直接实现）
-
 // LoadPolicy 从库加载全部策略（Casbin 标准接口）。
 func (a *policyAdapter) LoadPolicy(m model.Model) error {
 	a.ensureTable()

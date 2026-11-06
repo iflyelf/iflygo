@@ -106,9 +106,13 @@ func (c *RdpClient) MouseMove(x, y int) {
 func (c *RdpClient) MouseWheel(scroll, x, y int) {
 	p := &pdu.PointerEvent{}
 	p.PointerFlags |= pdu.PTRFLAGS_WHEEL
-	p.XPos = uint16(x)
+	if scroll < 0 {
+		p.PointerFlags |= pdu.PTRFLAGS_WHEEL_NEGATIVE
+		scroll = -scroll
+	}
+	p.XPos = uint16(scroll & 0x01FF) // WheelRotation 编码在 XPos 低位
 	p.YPos = uint16(y)
-	c.pdu.SendInputEvents(pdu.INPUT_EVENT_SCANCODE, []pdu.InputEventsInterface{p})
+	c.pdu.SendInputEvents(pdu.INPUT_EVENT_MOUSE, []pdu.InputEventsInterface{p})
 }
 
 func (c *RdpClient) MouseUp(button int, x, y int) {

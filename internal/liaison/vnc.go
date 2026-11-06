@@ -21,9 +21,8 @@ import (
 
 // Web VNC（RFB 协议客户端）：连接 VNC 服务器，解码 framebuffer，经 WebSocket 桥接到浏览器。
 //
-// 支持：RFB 3.3/3.7/3.8 握手、NoAuth + VNC Auth、Raw/Hextile/CopyRect 编码、
-// 键盘/指针输入。Tight/ZRLE 等压缩编码暂未实现（多数服务器会在编码协商中回退 Raw/Hextile）。
-// RDP 因协议栈复杂度高，暂以同一通道占位（返回明确错误）。
+// 支持：RFB 3.3/3.7/3.8 握手、NoAuth + VNC Auth、Raw/Hextile（含子矩形）/CopyRect/Tight/ZRLE 编码、
+// 键盘/指针输入。RDP 在 rdp.go 中基于 grdp 客户端实现。
 
 const (
 	msgFramebufferUpdate = 0
@@ -395,7 +394,7 @@ func (v *vncClient) copyRect(x, y, w, h, sx, sy int) {
 
 // readHextile 解码 Hextile 编码（最简：支持 raw 子编码 + 背景色）。
 func (v *vncClient) readHextile(x, y, w, h int) error {
-	bg := []byte{}
+	var bg, fg []byte // 背景/前景色跨 tile 持久（未指定时沿用上一个 tile）
 	for ty := 0; ty < h; ty += 16 {
 		for tx := 0; tx < w; tx += 16 {
 			tw := 16
@@ -412,25 +411,64 @@ func (v *vncClient) readHextile(x, y, w, h int) error {
 			}
 			flag := sub[0]
 			if flag&0x01 != 0 { // Raw
-				n := tw * th * v.bpp
-				data, err := v.r.ReadFull(n)
+				data, err := v.r.ReadFull(tw * th * v.bpp)
 				if err != nil {
 					return err
 				}
 				v.fillRaw(x+tx, y+ty, tw, th, data)
-			} else {
-				if flag&0x02 != 0 { // BackgroundSpecified
-					bg, err = v.r.ReadFull(v.bpp)
+				continue
+			}
+			// 非 Raw：背景/前景 + 子矩形
+			if flag&0x02 != 0 { // BackgroundSpecified
+				if bg, err = v.r.ReadFull(v.bpp); err != nil {
+					return err
+				}
+			}
+			if len(bg) > 0 {
+				v.fillSolid(x+tx, y+ty, tw, th, bg)
+			}
+			if flag&0x04 != 0 { // ForegroundSpecified
+				if fg, err = v.r.ReadFull(v.bpp); err != nil {
+					return err
+				}
+			}
+			if flag&0x08 != 0 { // AnySubrects
+				nb, err := v.r.ReadFull(1)
+				if err != nil {
+					return err
+				}
+				n := int(nb[0])
+				coloured := flag&0x10 != 0 // SubrectsColoured
+				for i := 0; i < n; i++ {
+					var color []byte
+					if coloured {
+						if color, err = v.r.ReadFull(v.bpp); err != nil {
+							return err
+						}
+					} else {
+						color = fg
+					}
+					pos, err := v.r.ReadFull(1)
 					if err != nil {
 						return err
 					}
-				}
-				// 用背景色填充
-				if len(bg) > 0 {
-					v.fillSolid(x+tx, y+ty, tw, th, bg)
-				}
-				if flag&0x08 != 0 { // AnySubrects
-					_ = flag // 子矩形暂未实现，接受背景色近似
+					size, err := v.r.ReadFull(1)
+					if err != nil {
+						return err
+					}
+					sx := int(pos[0]>>4) & 0x0F
+					sy := int(pos[0]) & 0x0F
+					sw := int(size[0]>>4)&0x0F + 1
+					sh := int(size[0])&0x0F + 1
+					if sx+sw > tw {
+						sw = tw - sx
+					}
+					if sy+sh > th {
+						sh = th - sy
+					}
+					if len(color) > 0 && sw > 0 && sh > 0 {
+						v.fillSolid(x+tx+sx, y+ty+sy, sw, sh, color)
+					}
 				}
 			}
 		}
@@ -821,7 +859,13 @@ func (v *vncClient) readTightJPEG(x, y, w, h int) error {
 // readTightGradient 解码 Tight gradient 子编码（compression 5-7）。
 // gradient 数据：每行首像素 v.bpp 字节 + 其余像素 RGB565 相对梯度（zlib 压缩）。
 func (v *vncClient) readTightGradient(x, y, w, h int) error {
-	raw := make([]byte, h*(v.bpp+(w-1)*2))
+	// gradient 数据：每行首像素 bpp 字节 + 其余像素相对梯度 delta。
+	// delta 位数：bpp<=2 用 8bit（RGB332，每像素 1 字节）；bpp>=3 用 16bit（RGB565，每像素 2 字节）。
+	deltaBytes := 2
+	if v.bpp <= 2 {
+		deltaBytes = 1
+	}
+	raw := make([]byte, h*(v.bpp+(w-1)*deltaBytes))
 	n, err := v.readTightZlib(raw)
 	if err != nil {
 		return err
@@ -839,24 +883,47 @@ func (v *vncClient) readTightGradient(x, y, w, h int) error {
 		v.fb[off], v.fb[off+1], v.fb[off+2], v.fb[off+3] = fr, fg, fb, 255
 		pr, pg, pb := int(fr), int(fg), int(fb)
 		for xx := 1; xx < w; xx++ {
-			if idx+2 > len(raw) {
-				return io.ErrUnexpectedEOF
+			if deltaBytes == 1 {
+				// 8bit RGB332 delta
+				if idx+1 > len(raw) {
+					return io.ErrUnexpectedEOF
+				}
+				d := raw[idx]
+				idx++
+				dr := int(d>>5) & 0x07
+				dg := int(d>>2) & 0x07
+				db := int(d) & 0x03
+				if dr&0x04 != 0 {
+					dr -= 8
+				}
+				if dg&0x04 != 0 {
+					dg -= 8
+				}
+				if db&0x02 != 0 {
+					db -= 4
+				}
+				pr, pg, pb = clamp8(pr+dr), clamp8(pg+dg), clamp8(pb+db)
+			} else {
+				// 16bit RGB565 delta
+				if idx+2 > len(raw) {
+					return io.ErrUnexpectedEOF
+				}
+				delta := int16(binary.LittleEndian.Uint16(raw[idx : idx+2]))
+				idx += 2
+				dr := int(delta & 0x1F)
+				dg := int((delta >> 5) & 0x1F)
+				db := int((delta >> 10) & 0x1F)
+				if dr&0x10 != 0 {
+					dr -= 32
+				}
+				if dg&0x10 != 0 {
+					dg -= 32
+				}
+				if db&0x10 != 0 {
+					db -= 32
+				}
+				pr, pg, pb = clamp8(pr+dr), clamp8(pg+dg), clamp8(pb+db)
 			}
-			delta := int16(binary.LittleEndian.Uint16(raw[idx : idx+2]))
-			idx += 2
-			dr := int(delta & 0x1F)
-			dg := int((delta >> 5) & 0x1F)
-			db := int((delta >> 10) & 0x1F)
-			if dr&0x10 != 0 {
-				dr -= 32
-			}
-			if dg&0x10 != 0 {
-				dg -= 32
-			}
-			if db&0x10 != 0 {
-				db -= 32
-			}
-			pr, pg, pb = clamp8(pr+dr), clamp8(pg+dg), clamp8(pb+db)
 			o := ((y+yy)*v.width + (x + xx)) * 4
 			v.fb[o], v.fb[o+1], v.fb[o+2], v.fb[o+3] = byte(pr), byte(pg), byte(pb), 255
 		}
