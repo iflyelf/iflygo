@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lib/pq"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // 字段类型。
@@ -32,18 +32,18 @@ const (
 
 // Def 字段定义。
 type Def struct {
-	ID         int64     `json:"id"`
-	FieldKey   string    `json:"fieldKey"`
-	Label      string    `json:"label"`
-	FieldType  string    `json:"fieldType"`
-	Options    string    `json:"options"`
-	ShowInList bool      `json:"showInList"`
-	ShowInForm bool      `json:"showInForm"`
-	Editable   bool      `json:"editable"`
-	Builtin    bool      `json:"builtin"`
-	SortOrder  int       `json:"sortOrder"`
-	CreatedAt  time.Time `json:"createdAt"`
-	UpdatedAt  time.Time `json:"updatedAt"`
+	ID         int64      `json:"id"`
+	FieldKey   string     `json:"fieldKey"`
+	Label      string     `json:"label"`
+	FieldType  string     `json:"fieldType"`
+	Options    string     `json:"options"`
+	ShowInList bool       `json:"showInList"`
+	ShowInForm bool       `json:"showInForm"`
+	Editable   bool       `json:"editable"`
+	Builtin    bool       `json:"builtin"`
+	SortOrder  int        `json:"sortOrder"`
+	CreatedAt  store.Time `json:"createdAt"`
+	UpdatedAt  store.Time `json:"updatedAt"`
 }
 
 // Kinds 支持的字段表。
@@ -191,10 +191,10 @@ func (r *Repo) Update(ctx context.Context, d *Def) error {
 		return err
 	}
 	res, err := r.db.ExecContext(ctx, `
-		UPDATE `+r.table()+` SET
+		UPDATE `+r.table()+store.SQL(` SET
 			field_key=$1, label=$2, field_type=$3, options=$4,
 			show_in_list=$5, show_in_form=$6, editable=$7, sort_order=$8, updated_at=NOW()
-		WHERE id=$9`,
+		WHERE id=$9`),
 		d.FieldKey, d.Label, d.FieldType, d.Options,
 		d.ShowInList, d.ShowInForm, d.Editable, d.SortOrder, d.ID)
 	if err != nil {
@@ -317,8 +317,8 @@ func (r *Repo) UserValuesForUsernames(ctx context.Context, usernames []string) (
 		return out, nil
 	}
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT user_id, field_key, value FROM user_field_values WHERE user_id = ANY($1)`,
-		pq.Array(usernames))
+		store.SQL(`SELECT user_id, field_key, value FROM user_field_values WHERE user_id = ANY($1)`),
+		store.Array(usernames))
 	if err != nil {
 		return nil, err
 	}
@@ -378,10 +378,10 @@ func (r *Repo) SaveUserValues(ctx context.Context, username string, values map[s
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		if _, err := tx.ExecContext(ctx, `
+		if _, err := tx.ExecContext(ctx, store.SQL(`
 			INSERT INTO user_field_values (user_id, field_key, value, updated_at)
 			VALUES ($1,$2,$3,NOW())
-			ON CONFLICT (user_id, field_key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()`,
+			ON CONFLICT (user_id, field_key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()`),
 			username, k, values[k]); err != nil {
 			return err
 		}
@@ -399,9 +399,9 @@ func (r *Repo) SaveHostValues(ctx context.Context, hostID int64, values map[stri
 		return err
 	}
 	res, err := r.db.ExecContext(ctx,
-		`UPDATE hosts SET custom_fields = COALESCE(custom_fields,'{}'::jsonb) || $2::jsonb,
+		store.SQL(`UPDATE hosts SET custom_fields = COALESCE(custom_fields,'{}'::jsonb) || $2::jsonb,
 		        updated_at = NOW()
-		 WHERE id=$1`, hostID, string(b))
+		 WHERE id=$1`), hostID, string(b))
 	if err != nil {
 		return err
 	}

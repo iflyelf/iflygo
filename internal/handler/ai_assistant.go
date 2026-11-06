@@ -15,6 +15,7 @@ import (
 	"github.com/iflyelf/iflygo/internal/config"
 	"github.com/iflyelf/iflygo/internal/pkg/audit"
 	"github.com/iflyelf/iflygo/internal/pkg/httpx"
+	"github.com/iflyelf/iflygo/internal/store"
 	"github.com/iflyelf/iflygo/internal/svc"
 )
 
@@ -100,8 +101,8 @@ type pendingAction struct {
 	Tool       string
 	Args       []byte
 	Summary    string
-	ExpiresAt  time.Time
-	ExecutedAt sql.NullTime
+	ExpiresAt  store.Time
+	ExecutedAt store.NullTime
 }
 
 // loadOwnAction 读取待确认操作并校验归属（本人或 superadmin）、未执行、未过期。
@@ -123,7 +124,7 @@ func loadOwnAction(ctx context.Context, s *svc.ServiceContext, u *auth.User, id 
 	if a.ExecutedAt.Valid {
 		return nil, http.StatusConflict, "该操作已执行或已取消"
 	}
-	if time.Now().After(a.ExpiresAt) {
+	if time.Now().After(a.ExpiresAt.Time) {
 		return nil, http.StatusGone, "操作已过期，请让助手重新生成"
 	}
 	return &a, 0, ""
@@ -154,9 +155,9 @@ func AIExecuteAction(s *svc.ServiceContext) http.HandlerFunc {
 			httpx.Fail(w, code, msg)
 			return
 		}
-		res, err := s.DB.ExecContext(r.Context(), `
+		res, err := s.DB.ExecContext(r.Context(), store.SQL(`
 			UPDATE ai_assistant_actions SET executed_at=NOW(), executed_by=$2
-			WHERE id=$1 AND executed_at IS NULL AND expires_at > NOW()`, id, u.Username)
+			WHERE id=$1 AND executed_at IS NULL AND expires_at > NOW()`), id, u.Username)
 		if err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
@@ -208,9 +209,9 @@ func AICancelAction(s *svc.ServiceContext) http.HandlerFunc {
 			httpx.Fail(w, code, msg)
 			return
 		}
-		if _, err := s.DB.ExecContext(r.Context(), `
+		if _, err := s.DB.ExecContext(r.Context(), store.SQL(`
 			UPDATE ai_assistant_actions SET executed_at=NOW(), executed_by=$2, error='canceled'
-			WHERE id=$1 AND executed_at IS NULL`, id, u.Username); err != nil {
+			WHERE id=$1 AND executed_at IS NULL`), id, u.Username); err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -234,7 +235,7 @@ type PendingAction struct {
 	Title     string         `json:"title"`
 	Args      map[string]any `json:"args"`
 	Summary   string         `json:"summary"`
-	ExpiresAt time.Time      `json:"expires_at"`
+	ExpiresAt store.Time     `json:"expires_at"`
 }
 
 // Step 一次工具调用记录。
@@ -346,9 +347,9 @@ func savePendingAction(ctx context.Context, s *svc.ServiceContext, u *auth.User,
 	if tenant <= 0 {
 		tenant = 1
 	}
-	err = s.DB.QueryRowContext(ctx, `
+	err = s.DB.QueryRowContext(ctx, store.SQL(`
 		INSERT INTO ai_assistant_actions (tenant_id, username, tool, args, summary, expires_at)
-		VALUES ($1,$2,$3,$4,$5,NOW() + $6 * INTERVAL '1 second') RETURNING id, expires_at`,
+		VALUES ($1,$2,$3,$4,$5,NOW() + $6 * INTERVAL '1 second') RETURNING id, expires_at`),
 		tenant, u.Username, tool, argsJSON, summary, int64(ttl/time.Second)).Scan(&pa.ID, &pa.ExpiresAt)
 	if err != nil {
 		return nil, err

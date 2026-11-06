@@ -18,6 +18,7 @@ import (
 	"github.com/iflyelf/iflygo/internal/pkg/audit"
 	"github.com/iflyelf/iflygo/internal/pkg/httpx"
 	"github.com/iflyelf/iflygo/internal/pkg/scope"
+	"github.com/iflyelf/iflygo/internal/store"
 	"github.com/iflyelf/iflygo/internal/svc"
 )
 
@@ -51,7 +52,7 @@ type hostDeleteJob struct {
 	Failed          []hostDeleteFailure `json:"failed"`
 	CancelRequested bool                `json:"cancel_requested"`
 	CreatedBy       string              `json:"created_by"`
-	CreatedAt       time.Time           `json:"created_at"`
+	CreatedAt       store.Time          `json:"created_at"`
 	FinishedAt      *time.Time          `json:"finished_at,omitempty"`
 }
 
@@ -61,7 +62,7 @@ const hostDeleteJobColumns = `id, status, total, processed, deleted, failed_coun
 func scanHostDeleteJob(row interface{ Scan(...any) error }) (*hostDeleteJob, error) {
 	var j hostDeleteJob
 	var failed []byte
-	var finished sql.NullTime
+	var finished store.NullTime
 	if err := row.Scan(&j.ID, &j.Status, &j.Total, &j.Processed, &j.Deleted, &j.FailedCount,
 		&failed, &j.CancelRequested, &j.CreatedBy, &j.CreatedAt, &finished); err != nil {
 		return nil, err
@@ -177,7 +178,7 @@ func HostDeleteJobCreate(s *svc.ServiceContext) http.HandlerFunc {
 			INSERT INTO host_delete_jobs (tenant_id, cross_tenant, created_by, actor_id, actor_ip, ids, total)
 			VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
 			sc.TenantForWrite(), sc.CrossTenant, username, actorID, clientIP(s, r),
-			pq.Array(ids), len(ids)).Scan(&id)
+			store.Array(ids), len(ids)).Scan(&id)
 		if err != nil {
 			var pqErr *pq.Error
 			if errors.As(err, &pqErr) && pqErr.Code == "23505" {
@@ -234,8 +235,8 @@ func HostDeleteJobCancel(s *svc.ServiceContext) http.HandlerFunc {
 		id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		cond, args := hostJobVisibility(r, 2)
 		if _, err := s.DB.ExecContext(r.Context(),
-			`UPDATE host_delete_jobs SET cancel_requested=TRUE, updated_at=NOW()
-			  WHERE id=$1 AND status IN ('pending','running') AND `+cond,
+			store.SQL(`UPDATE host_delete_jobs SET cancel_requested=TRUE, updated_at=NOW()
+			  WHERE id=$1 AND status IN ('pending','running') AND `)+cond,
 			append([]any{id}, args...)...); err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
@@ -307,12 +308,12 @@ func runHostDeleteJobOnce(ctx context.Context, s *svc.ServiceContext) (bool, err
 		processed              int
 		failedRaw              []byte
 	)
-	err = tx.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, store.SQL(`
 		SELECT id, tenant_id, cross_tenant, created_by, actor_id, actor_ip, ids, processed, failed, cancel_requested
 		  FROM host_delete_jobs
 		 WHERE status IN ('pending','running')
-		 ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED`).Scan(
-		&jobID, &tenantID, &cross, &createdBy, &actorID, &ip, pq.Array(&ids), &processed, &failedRaw, &cancel)
+		 ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED`)).Scan(
+		&jobID, &tenantID, &cross, &createdBy, &actorID, &ip, store.Array(&ids), &processed, &failedRaw, &cancel)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -326,7 +327,7 @@ func runHostDeleteJobOnce(ctx context.Context, s *svc.ServiceContext) (bool, err
 			status = "canceled"
 		}
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE host_delete_jobs SET status=$2, finished_at=NOW(), updated_at=NOW() WHERE id=$1`,
+			store.SQL(`UPDATE host_delete_jobs SET status=$2, finished_at=NOW(), updated_at=NOW() WHERE id=$1`),
 			jobID, status); err != nil {
 			return false, err
 		}
@@ -388,11 +389,11 @@ func runHostDeleteJobOnce(ctx context.Context, s *svc.ServiceContext) (bool, err
 		status = "done"
 		finished = time.Now()
 	}
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, store.SQL(`
 		UPDATE host_delete_jobs
 		   SET processed=$2, deleted=deleted+$3, failed_count=failed_count+$4, failed=$5,
 		       status=$6, finished_at=$7, updated_at=NOW()
-		 WHERE id=$1`,
+		 WHERE id=$1`),
 		jobID, end, deleted, len(chunkFailed), storedJSON, status, finished); err != nil {
 		return false, err
 	}

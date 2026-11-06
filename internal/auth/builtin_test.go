@@ -28,10 +28,10 @@ func TestChangePassword(t *testing.T) {
 	db := openTestDB(t)
 	// 关闭必须在其他 t.Cleanup（删测试数据）之后：LIFO 顺序。
 	t.Cleanup(func() { db.Close() })
-	
+
 	ctx := context.Background()
 	b := NewBuiltin(db, "test-secret-32-bytes-long-1234", false)
-	
+
 	// 创建测试用户
 	username := "test_change_pw_" + time.Now().Format("20060102150405")
 	_, err := db.ExecContext(ctx,
@@ -47,13 +47,13 @@ func TestChangePassword(t *testing.T) {
 		t.Fatalf("查询用户 ID 失败: %v", err)
 	}
 	defer db.ExecContext(ctx, `DELETE FROM local_users WHERE id=$1`, userID)
-	
+
 	// 先设置一个已知密码
 	_, _, err = b.Login(ctx, username, "initial-password")
 	if err == nil {
 		t.Fatal("登录应该失败（密码不匹配哈希）")
 	}
-	
+
 	// 更新为已知密码
 	_, err = db.ExecContext(ctx,
 		`UPDATE local_users SET password_hash=$2, updated_at=NOW() WHERE id=$1`,
@@ -61,7 +61,7 @@ func TestChangePassword(t *testing.T) {
 	if err != nil {
 		t.Fatalf("更新密码失败: %v", err)
 	}
-	
+
 	// 登录成功
 	u, token, err := b.Login(ctx, username, "oldpass123")
 	if err != nil {
@@ -71,7 +71,7 @@ func TestChangePassword(t *testing.T) {
 		t.Fatalf("用户名不匹配: got %s, want %s", u.Username, username)
 	}
 	t.Logf("✅ 登录成功: %s (ID=%s, token=%s...)", username, userID, token[:20])
-	
+
 	// 修改密码
 	newToken, err := b.ChangePassword(ctx, userID, "oldpass123", "newpass456")
 	if err != nil {
@@ -81,14 +81,14 @@ func TestChangePassword(t *testing.T) {
 		t.Fatal("新 token 为空")
 	}
 	t.Logf("✅ 密码修改成功，新 token: %s", newToken[:20]+"...")
-	
+
 	// 旧密码应无法登录
 	_, _, err = b.Login(ctx, username, "oldpass123")
 	if err == nil {
 		t.Fatal("旧密码仍能登录")
 	}
 	t.Logf("✅ 旧密码已失效")
-	
+
 	// 新密码应能登录
 	u2, _, err := b.Login(ctx, username, "newpass456")
 	if err != nil {
@@ -98,14 +98,14 @@ func TestChangePassword(t *testing.T) {
 		t.Fatalf("新密码登录用户名不匹配")
 	}
 	t.Logf("✅ 新密码登录成功")
-	
+
 	// 测试错误的旧密码
 	_, err = b.ChangePassword(ctx, userID, "wrongold", "another123")
 	if err != ErrWrongPassword {
 		t.Fatalf("应返回 ErrWrongPassword，实际: %v", err)
 	}
 	t.Logf("✅ 错误旧密码被正确拒绝")
-	
+
 	// 测试密码重用
 	_, err = b.ChangePassword(ctx, userID, "newpass456", "newpass456")
 	if err == nil || err == ErrWrongPassword {
@@ -128,7 +128,7 @@ func TestValidatePassword(t *testing.T) {
 		{"重复", "same123456", "same123456", true},
 		{"空旧密码允许", "", "new123456", false},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := ValidatePassword(tt.old, tt.new)

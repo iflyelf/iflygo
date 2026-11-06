@@ -150,10 +150,10 @@ func New(c *config.Config) *ServiceContext {
 	artRepo.SetLockWait(artifactLockWait(c.Artifact.LockWait))
 	log.Printf("ℹ️ 制品上传配置: 并发上限=%d，跨副本锁等待=%s",
 		c.Artifact.MaxConcurrentUploads, artifactLockWait(c.Artifact.LockWait))
-	gw := agentgw.New(db)
+	gw := agentgw.New(db, st.Dialect)
 	// 读设置时统一走 Snapshot：设置页 Apply 会并发写回 Config，
 	// 直接读 *Config 字段会与写入产生 data race。
-	taskSvc := task.NewService(db, compRepo, artRepo, func() bool {
+	taskSvc := task.NewService(db, st.Dialect, compRepo, artRepo, func() bool {
 		return settings.Snapshot().Agent.AllowExecMode
 	})
 	taskSvc.SetReconciler(gw.ReconcileTasks)

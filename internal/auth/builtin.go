@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lib/pq"
+	"github.com/iflyelf/iflygo/internal/store"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -82,7 +82,7 @@ func (b *Builtin) EnsureAdmin(ctx context.Context, username, password string) er
 		return err
 	}
 	// 首个用户授予 superadmin，确保可访问全局设置与跨租户管理。
-	roles := pq.StringArray{RoleAdmin, RoleSuperAdmin}
+	roles := store.StringArray{RoleAdmin, RoleSuperAdmin}
 	res, err := b.db.ExecContext(ctx,
 		`INSERT INTO local_users (username, password_hash, display_name, is_admin, tenant_id, roles)
 		 VALUES ($1,$2,$3,TRUE,1,$4) ON CONFLICT (username) DO NOTHING`,
@@ -104,21 +104,21 @@ func (b *Builtin) Name() string { return "builtin" }
 // Login 校验用户名+密码，成功返回用户与会话 token。
 func (b *Builtin) Login(ctx context.Context, username, password string) (*User, string, error) {
 	var (
-		id       int64
-		hash     string
-		display  string
-		isAdmin  bool
-		disabled bool
-		tenantID int64
-		roles    pq.StringArray
-		updatedAt time.Time
+		id        int64
+		hash      string
+		display   string
+		isAdmin   bool
+		disabled  bool
+		tenantID  int64
+		roles     store.StringArray
+		updatedAt store.Time
 	)
-	err := b.db.QueryRowContext(ctx,
+	err := b.db.QueryRowContext(ctx, store.SQL(
 		`SELECT id, password_hash, display_name, is_admin, disabled,
 		        COALESCE(tenant_id,1), COALESCE(roles, ARRAY['user']::text[]), updated_at
-		 FROM local_users WHERE username=$1`,
+		 FROM local_users WHERE username=$1`),
 		username).Scan(&id, &hash, &display, &isAdmin, &disabled, &tenantID, &roles, &updatedAt)
-	
+
 	// 防时序侧信道：始终做 bcrypt 比较，避免「用户不存在」比「密码错误」快。
 	cmpErr := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
 	if err == sql.ErrNoRows || hash == "" {
@@ -144,7 +144,7 @@ func (b *Builtin) Login(ctx context.Context, username, password string) (*User, 
 	b.cache[u.ID] = &cachedUser{
 		Username: username, Display: display, IsAdmin: isAdmin,
 		Disabled: false, TenantID: tenantID, Roles: []string(roles),
-		UpdatedAt: updatedAt, CachedAt: time.Now(), PasswordOK: true,
+		UpdatedAt: updatedAt.Time, CachedAt: time.Now(), PasswordOK: true,
 	}
 	b.cacheMu.Unlock()
 	token := b.sc.sign(u)
@@ -210,13 +210,13 @@ func (b *Builtin) defaultLookup(ctx context.Context, idStr string) (*cachedUser,
 		isAdmin   bool
 		disabled  bool
 		tenantID  int64
-		roles     pq.StringArray
-		updatedAt time.Time
+		roles     store.StringArray
+		updatedAt store.Time
 	)
-	err = b.db.QueryRowContext(ctx,
+	err = b.db.QueryRowContext(ctx, store.SQL(
 		`SELECT username, COALESCE(display_name,''), is_admin, disabled,
 		        COALESCE(tenant_id,1), COALESCE(roles, ARRAY['user']::text[]), updated_at
-		 FROM local_users WHERE id=$1`, id).
+		 FROM local_users WHERE id=$1`), id).
 		Scan(&username, &display, &isAdmin, &disabled, &tenantID, &roles, &updatedAt)
 	if err == sql.ErrNoRows {
 		return nil, ErrUnauthorized
@@ -227,7 +227,7 @@ func (b *Builtin) defaultLookup(ctx context.Context, idStr string) (*cachedUser,
 	cu := &cachedUser{
 		Username: username, Display: display, IsAdmin: isAdmin,
 		Disabled: disabled, TenantID: tenantID, Roles: []string(roles),
-		UpdatedAt: updatedAt, CachedAt: time.Now(),
+		UpdatedAt: updatedAt.Time, CachedAt: time.Now(),
 	}
 	b.cacheMu.Lock()
 	b.cache[idStr] = cu
@@ -243,7 +243,7 @@ func (b *Builtin) ChangePassword(ctx context.Context, userID, oldPassword, newPa
 	if err := ValidatePassword(oldPassword, newPassword); err != nil {
 		return "", err
 	}
-	
+
 	// 查询当前密码哈希
 	var currentHash string
 	var disabled bool
@@ -260,24 +260,24 @@ func (b *Builtin) ChangePassword(ctx context.Context, userID, oldPassword, newPa
 	if disabled {
 		return "", ErrUnauthorized
 	}
-	
+
 	// 验证旧密码
 	if err := bcrypt.CompareHashAndPassword([]byte(currentHash), []byte(oldPassword)); err != nil {
 		return "", ErrWrongPassword
 	}
-	
+
 	// 生成新哈希
 	newHash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
 	if err != nil {
 		return "", err
 	}
-	
+
 	// 更新密码（乐观锁：仅当哈希未变时更新，防并发修改）
-	var updatedAt time.Time
-	err = b.db.QueryRowContext(ctx,
+	var updatedAt store.Time
+	err = b.db.QueryRowContext(ctx, store.SQL(
 		`UPDATE local_users SET password_hash=$2, updated_at=NOW()
 		 WHERE id=$1 AND password_hash=$3
-		 RETURNING updated_at`,
+		 RETURNING updated_at`),
 		userID, string(newHash), currentHash).Scan(&updatedAt)
 	if err == sql.ErrNoRows {
 		return "", fmt.Errorf("密码已被修改，请重新登录")
@@ -285,12 +285,12 @@ func (b *Builtin) ChangePassword(ctx context.Context, userID, oldPassword, newPa
 	if err != nil {
 		return "", err
 	}
-	
+
 	// 清除缓存，使旧会话在下次认证时失效
 	b.cacheMu.Lock()
 	delete(b.cache, userID)
 	b.cacheMu.Unlock()
-	
+
 	// 签发新会话，iat 使用 updated_at 确保不早于密码修改时间
 	u, err := b.lookupUser(ctx, userID)
 	if err != nil {
@@ -299,8 +299,8 @@ func (b *Builtin) ChangePassword(ctx context.Context, userID, oldPassword, newPa
 	token := b.sc.signAt(&User{
 		ID: userID, Username: u.Username, DisplayName: u.Display,
 		IsAdmin: u.IsAdmin, TenantID: u.TenantID, Roles: u.Roles,
-	}, updatedAt)
-	
+	}, updatedAt.Time)
+
 	return token, nil
 }
 

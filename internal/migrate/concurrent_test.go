@@ -24,7 +24,7 @@ func TestConcurrentMigrate(t *testing.T) {
 			return
 		}
 		// 关闭必须在其他 t.Cleanup（删测试数据）之后：LIFO 顺序。
-	t.Cleanup(func() { db.Close() })
+		t.Cleanup(func() { db.Close() })
 		_, _ = db.Exec(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`)
 	}
 	cleanup()
@@ -45,7 +45,7 @@ func TestConcurrentMigrate(t *testing.T) {
 				return
 			}
 			// 关闭必须在其他 t.Cleanup（删测试数据）之后：LIFO 顺序。
-	t.Cleanup(func() { db.Close() })
+			t.Cleanup(func() { db.Close() })
 			errs[idx] = AutoMigrate(db)
 		}(i)
 	}

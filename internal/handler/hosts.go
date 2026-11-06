@@ -10,11 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lib/pq"
-
 	synclogic "github.com/iflyelf/iflygo/internal/logic/sync"
 	"github.com/iflyelf/iflygo/internal/pkg/audit"
 	"github.com/iflyelf/iflygo/internal/pkg/httpx"
+	"github.com/iflyelf/iflygo/internal/store"
 	"github.com/iflyelf/iflygo/internal/svc"
 )
 
@@ -167,7 +166,7 @@ func ListHosts(s *svc.ServiceContext) http.HandlerFunc {
 
 		listArgs := append(append([]any{}, args...), size, offset)
 		rows, err := s.DB.QueryContext(r.Context(),
-			`SELECT h.id, h.ip, COALESCE(h.exit_ip,''), COALESCE(h.tunnel_ip,''),
+			store.SQL(`SELECT h.id, h.ip, COALESCE(h.exit_ip,''), COALESCE(h.tunnel_ip,''),
 			        COALESCE(h.server_url_override,''), COALESCE(h.server_url_auto,false),
 			        COALESCE(h.agent_server_url,''), COALESCE(h.agent_default_server_url,''),
 			        h.tunnel_check_ok, COALESCE(h.tunnel_check_source,''), h.tunnel_check_at,
@@ -178,7 +177,7 @@ func ListHosts(s *svc.ServiceContext) http.HandlerFunc {
 			        h.agent_version, COALESCE(h.agent_build_version,''), COALESCE(h.agent_build_hash,''),
 			        COALESCE(h.agent_build_variant,''), h.agent_status, h.source, h.last_seen,
 			        h.maintenance_until, COALESCE(h.maintenance_reason,'')
-			   FROM hosts h`+whereSQL+
+			   FROM hosts h`)+whereSQL+
 				" ORDER BY h.ip LIMIT $"+strconv.Itoa(i)+" OFFSET $"+strconv.Itoa(i+1), listArgs...)
 		if err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
@@ -190,9 +189,9 @@ func ListHosts(s *svc.ServiceContext) http.HandlerFunc {
 		for rows.Next() {
 			var h Host
 			var checkOK sql.NullBool
-			var checkAt sql.NullTime
-			var lastSeen sql.NullTime
-			var maintenanceUntil sql.NullTime
+			var checkAt store.NullTime
+			var lastSeen store.NullTime
+			var maintenanceUntil store.NullTime
 			var customRaw []byte
 			if err := rows.Scan(&h.ID, &h.IP, &h.ExitIP, &h.TunnelIP, &h.ServerURLOverride,
 				&h.ServerURLIsAuto, &h.AgentServerURL, &h.DefaultServerURL,
@@ -257,18 +256,34 @@ func ListHosts(s *svc.ServiceContext) http.HandlerFunc {
 			Status string
 			Stage  string
 			Log    string
-			At     time.Time
+			At     store.NullTime
 		}
 		statuses := map[string]updateInfo{}
 		if len(agentIDs) > 0 {
-			srows, err := s.DB.QueryContext(r.Context(), `
+			q := store.SQL(`
 				SELECT DISTINCT ON (agent_id) agent_id, status,
 				       COALESCE(last_stage,''),
 				       left(COALESCE(log,''), 4096),
 				       COALESCE(finished_at, last_stage_at, created_at)
 				FROM commands
 				WHERE agent_id = ANY($1) AND type='self_update'
-				ORDER BY agent_id, id DESC`, pq.Array(agentIDs))
+				ORDER BY agent_id, id DESC`)
+			if store.CurrentDialect() == store.SQLite {
+				q = `
+				SELECT agent_id, status,
+				       COALESCE(last_stage,''),
+				       substr(COALESCE(log,''), 1, 4096),
+				       COALESCE(finished_at, last_stage_at, created_at)
+				FROM (
+				    SELECT *, row_number() OVER (PARTITION BY agent_id ORDER BY id DESC) AS rn
+				    FROM commands
+				    WHERE type='self_update'
+				      AND agent_id IN (SELECT value FROM json_each($1))
+				) c
+				WHERE c.rn = 1
+				ORDER BY agent_id`
+			}
+			srows, err := s.DB.QueryContext(r.Context(), q, store.Array(agentIDs))
 			if err == nil {
 				defer srows.Close()
 				for srows.Next() {
@@ -284,11 +299,13 @@ func ListHosts(s *svc.ServiceContext) http.HandlerFunc {
 		}
 		for idx := range list {
 			if v, ok := statuses[list[idx].AgentID]; ok {
-				at := v.At
 				list[idx].AgentUpdateStatus = v.Status
 				list[idx].AgentUpdateStage = v.Stage
 				list[idx].AgentUpdateLog = v.Log
-				list[idx].AgentUpdateAt = &at
+				if v.At.Valid {
+					at := v.At.Time
+					list[idx].AgentUpdateAt = &at
+				}
 			}
 		}
 

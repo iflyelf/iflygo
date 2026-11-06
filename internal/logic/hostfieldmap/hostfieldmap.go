@@ -21,7 +21,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"time"
+
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // 来源标识。
@@ -78,16 +79,16 @@ type Option struct {
 
 // Mapping 一条映射规则。
 type Mapping struct {
-	ID         int64     `json:"id"`
-	Source     string    `json:"source"`
-	SourceKey  string    `json:"sourceKey"`
-	TargetKind string    `json:"targetKind"`
-	TargetKey  string    `json:"targetKey"`
-	Enabled    bool      `json:"enabled"`
-	Overwrite  bool      `json:"overwrite"`
-	SortOrder  int       `json:"sortOrder"`
-	CreatedAt  time.Time `json:"createdAt"`
-	UpdatedAt  time.Time `json:"updatedAt"`
+	ID         int64      `json:"id"`
+	Source     string     `json:"source"`
+	SourceKey  string     `json:"sourceKey"`
+	TargetKind string     `json:"targetKind"`
+	TargetKey  string     `json:"targetKey"`
+	Enabled    bool       `json:"enabled"`
+	Overwrite  bool       `json:"overwrite"`
+	SortOrder  int        `json:"sortOrder"`
+	CreatedAt  store.Time `json:"createdAt"`
+	UpdatedAt  store.Time `json:"updatedAt"`
 }
 
 // Repo 映射仓储。
@@ -251,11 +252,11 @@ func (r *Repo) Update(ctx context.Context, m *Mapping) error {
 	if err := validate(m, keys); err != nil {
 		return err
 	}
-	res, err := r.db.ExecContext(ctx, `
+	res, err := r.db.ExecContext(ctx, store.SQL(`
 		UPDATE host_field_mappings SET
 			source=$1, source_key=$2, target_kind=$3, target_key=$4,
 			enabled=$5, overwrite=$6, sort_order=$7, updated_at=NOW()
-		WHERE id=$8`,
+		WHERE id=$8`),
 		m.Source, m.SourceKey, m.TargetKind, m.TargetKey,
 		m.Enabled, m.Overwrite, m.SortOrder, m.ID)
 	if err != nil {

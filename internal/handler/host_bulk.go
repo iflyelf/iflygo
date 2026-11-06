@@ -12,12 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lib/pq"
-
 	"github.com/iflyelf/iflygo/internal/logic/fielddef"
 	"github.com/iflyelf/iflygo/internal/pkg/audit"
 	"github.com/iflyelf/iflygo/internal/pkg/hostnet"
 	"github.com/iflyelf/iflygo/internal/pkg/httpx"
+	"github.com/iflyelf/iflygo/internal/store"
 	"github.com/iflyelf/iflygo/internal/svc"
 )
 
@@ -158,7 +157,7 @@ func HostBatchUpdate(s *svc.ServiceContext) http.HandlerFunc {
 		sets, args, i := hostUpdateSets(fields, custom, 1)
 		sc := reqScope(r)
 		cond, condArgs := sc.Where("", i+1)
-		args = append(args, pq.Array(ids))
+		args = append(args, store.Array(ids))
 		args = append(args, condArgs...)
 		q := "UPDATE hosts SET " + sets + " WHERE id = ANY($" + strconv.Itoa(i) + ") AND " + cond
 		res, err := s.DB.ExecContext(r.Context(), q, args...)
@@ -229,12 +228,12 @@ func HostExportCSV(s *svc.ServiceContext) http.HandlerFunc {
 			return
 		}
 		whereSQL, args, _ := hostListFilter(s, r)
-		rows, err := s.DB.QueryContext(r.Context(), `
+		rows, err := s.DB.QueryContext(r.Context(), store.SQL(`
 			SELECT h.ip, COALESCE(h.exit_ip,''), COALESCE(h.hostname,''), COALESCE(h.account,''),
 			       COALESCE(h.app_code,''), COALESCE(h.biz_group,''), COALESCE(h.department,''),
 			       COALESCE(h.vendor,''), COALESCE(h.host_type,''), COALESCE(h.tunnel_ip,''),
 			       COALESCE(h.server_url_override,''), COALESCE(h.custom_fields,'{}'::jsonb)
-			  FROM hosts h`+whereSQL+` ORDER BY h.ip LIMIT 50000`, args...)
+			  FROM hosts h`)+whereSQL+` ORDER BY h.ip LIMIT 50000`, args...)
 		if err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return

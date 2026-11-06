@@ -10,12 +10,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/lib/pq"
-
 	"github.com/iflyelf/iflygo/internal/auth"
 	"github.com/iflyelf/iflygo/internal/logic/task"
 	"github.com/iflyelf/iflygo/internal/pkg/audit"
 	"github.com/iflyelf/iflygo/internal/pkg/httpx"
+	"github.com/iflyelf/iflygo/internal/store"
 	"github.com/iflyelf/iflygo/internal/svc"
 )
 
@@ -284,8 +283,8 @@ type taskCommandDetail struct {
 	FinishedAt   any             `json:"finished_at"`
 }
 
-// nullableTime 将 sql.NullTime 转为 JSON 可序列化的 nil / time.Time。
-func nullableTime(t sql.NullTime) any {
+// nullableTime 将 store.NullTime 转为 JSON 可序列化的 nil / time.Time。
+func nullableTime(t store.NullTime) any {
 	if t.Valid {
 		return t.Time
 	}
@@ -343,18 +342,18 @@ func TaskDetail(s *svc.ServiceContext) http.HandlerFunc {
 			kind                                                    string
 			componentID                                             int64
 			commandRaw                                              []byte
-			createdAt, updatedAt                                    sql.NullTime
+			createdAt, updatedAt                                    store.NullTime
 			selectorRaw, strategyRaw                                []byte
 		)
 		// 租户隔离：非本租户任务一律视为不存在（不泄露存在性）
 		tCond, tArgs := reqScope(r).Where("t", 2)
-		err := s.DB.QueryRowContext(ctx, `
+		err := s.DB.QueryRowContext(ctx, store.SQL(`
 			SELECT COALESCE(t.kind,'upgrade'), t.name, COALESCE(t.component_id,0), t.version, t.status, COALESCE(t.created_by,''),
 			       t.created_at, t.updated_at, t.selector, t.strategy, COALESCE(t.command,'{}'::jsonb),
 			       COALESCE(c.name,''), COALESCE(c.display_name,'')
 			FROM upgrade_tasks t
 			LEFT JOIN components c ON c.id=t.component_id
-			WHERE t.id=$1 AND `+tCond,
+			WHERE t.id=$1 AND `)+tCond,
 			append([]any{id}, tArgs...)...).
 			Scan(&kind, &name, &componentID, &version, &status, &createdBy,
 				&createdAt, &updatedAt, &selectorRaw, &strategyRaw, &commandRaw, &compName, &compDisplay)
@@ -415,7 +414,7 @@ func TaskDetail(s *svc.ServiceContext) http.HandlerFunc {
 		batches := []taskBatchDetail{}
 		for brows.Next() {
 			var b taskBatchDetail
-			var started, finished sql.NullTime
+			var started, finished store.NullTime
 			if err := brows.Scan(&b.BatchIndex, &b.Status, &b.Total, &b.Success, &b.Failed, &b.Done,
 				&started, &finished); err != nil {
 				brows.Close()
@@ -466,7 +465,7 @@ func TaskDetail(s *svc.ServiceContext) http.HandlerFunc {
 		hostIDs := make([]int64, 0, size)
 		for hrows.Next() {
 			var h taskHostDetail
-			var started, finished sql.NullTime
+			var started, finished store.NullTime
 			if err := hrows.Scan(&h.ID, &h.HostID, &h.IP, &h.Hostname, &h.Batch, &h.Status, &h.Stage,
 				&h.FromVersion, &h.ToVersion, &h.ExitCode, &h.Attempts, &h.Log,
 				&started, &finished, &h.AgentID, &h.AgentStatus); err != nil {
@@ -487,12 +486,12 @@ func TaskDetail(s *svc.ServiceContext) http.HandlerFunc {
 		// 只返回当前页主机的指令日志，避免大任务响应体膨胀。
 		commands := []taskCommandDetail{}
 		if len(hostIDs) > 0 {
-			crows, err := s.DB.QueryContext(ctx, `
+			crows, err := s.DB.QueryContext(ctx, store.SQL(`
 				SELECT id, COALESCE(task_host_id,0), type, status, attempts, COALESCE(log,''), result,
 				       created_at, dispatched_at, started_at, finished_at
 				FROM commands
 				WHERE task_host_id = ANY($1)
-				ORDER BY id`, pq.Array(hostIDs))
+				ORDER BY id`), store.Array(hostIDs))
 			if err != nil {
 				httpx.FailErr(w, http.StatusInternalServerError, err)
 				return
@@ -500,7 +499,7 @@ func TaskDetail(s *svc.ServiceContext) http.HandlerFunc {
 			for crows.Next() {
 				var c taskCommandDetail
 				var result []byte
-				var created, dispatched, started, finished sql.NullTime
+				var created, dispatched, started, finished store.NullTime
 				if err := crows.Scan(&c.ID, &c.TaskHostID, &c.Type, &c.Status, &c.Attempts, &c.Log,
 					&result, &created, &dispatched, &started, &finished); err != nil {
 					crows.Close()

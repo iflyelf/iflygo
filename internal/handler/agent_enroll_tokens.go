@@ -10,12 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lib/pq"
-
 	"github.com/iflyelf/iflygo/internal/auth"
 	"github.com/iflyelf/iflygo/internal/logic/agentgw"
 	"github.com/iflyelf/iflygo/internal/pkg/audit"
 	"github.com/iflyelf/iflygo/internal/pkg/httpx"
+	"github.com/iflyelf/iflygo/internal/store"
 	"github.com/iflyelf/iflygo/internal/svc"
 )
 
@@ -178,12 +177,12 @@ func AutomationEnrollTokenList(s *svc.ServiceContext) http.HandlerFunc {
 				name, prefix, revokedBy, lastUsedIP string
 				createdBy, note                     string
 				enabled                             bool
-				expiresAt, revokedAt, lastUsedAt    sql.NullTime
+				expiresAt, revokedAt, lastUsedAt    store.NullTime
 				cidrs                               []string
-				createdAt                           time.Time
+				createdAt                           store.Time
 			)
 			if err := rows.Scan(&id, &tenantID, &name, &prefix, &expiresAt, &maxUses, &usedCount,
-				&enabled, &revokedAt, &revokedBy, pq.Array(&cidrs),
+				&enabled, &revokedAt, &revokedBy, store.Array(&cidrs),
 				&lastUsedAt, &lastUsedIP, &createdBy, &createdAt, &note); err != nil {
 				httpx.FailErr(w, http.StatusInternalServerError, err)
 				return
@@ -243,12 +242,12 @@ func AutomationEnrollTokenRevoke(s *svc.ServiceContext) http.HandlerFunc {
 			args = append(args, tid)
 		}
 		var name string
-		err = s.DB.QueryRowContext(r.Context(), `
+		err = s.DB.QueryRowContext(r.Context(), store.SQL(`
 			UPDATE enroll_tokens
 			SET enabled=false,
 			    revoked_at=COALESCE(revoked_at,NOW()),
 			    revoked_by=CASE WHEN COALESCE(revoked_by,'')='' THEN $2 ELSE revoked_by END
-			WHERE id=$1 AND token_type='automation'`+tenantSQL+`
+			WHERE id=$1 AND token_type='automation'`)+tenantSQL+`
 			RETURNING name`, args...).Scan(&name)
 		if err == sql.ErrNoRows {
 			httpx.Fail(w, http.StatusNotFound, "自动化令牌不存在")
@@ -314,16 +313,16 @@ func AutomationEnrollTokenRotate(s *svc.ServiceContext) http.HandlerFunc {
 			name, note, createdBy string
 			maxUses               int
 			enabled               bool
-			expiresAt, revokedAt  sql.NullTime
+			expiresAt, revokedAt  store.NullTime
 			cidrs                 []string
 		)
 		err = tx.QueryRowContext(r.Context(), `
 			SELECT tenant_id, name, expires_at, max_uses, allowed_cidrs, COALESCE(note,''),
 			       enabled, revoked_at, COALESCE(created_by,'')
 			  FROM enroll_tokens
-			 WHERE id=$1 AND token_type='automation'`+tenantSQL+`
-			 FOR UPDATE`, args...).Scan(&tenantID, &name, &expiresAt, &maxUses,
-			pq.Array(&cidrs), &note, &enabled, &revokedAt, &createdBy)
+			 WHERE id=$1 AND token_type='automation'`+tenantSQL+store.SQL(`
+			 FOR UPDATE`), args...).Scan(&tenantID, &name, &expiresAt, &maxUses,
+			store.Array(&cidrs), &note, &enabled, &revokedAt, &createdBy)
 		if err == sql.ErrNoRows {
 			httpx.Fail(w, http.StatusNotFound, "自动化令牌不存在")
 			return
@@ -351,10 +350,10 @@ func AutomationEnrollTokenRotate(s *svc.ServiceContext) http.HandlerFunc {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		if _, err := tx.ExecContext(r.Context(), `
+		if _, err := tx.ExecContext(r.Context(), store.SQL(`
 			UPDATE enroll_tokens
 			SET enabled=false, revoked_at=NOW(), revoked_by=$2
-			WHERE id=$1`, id, u.Username); err != nil {
+			WHERE id=$1`), id, u.Username); err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -518,7 +517,7 @@ func insertAutomationToken(ctx context.Context, db automationTokenDB, token, pre
 		cidrs = []string{}
 	}
 	var id int64
-	var createdAt time.Time
+	var createdAt store.Time
 	err := db.QueryRowContext(ctx, `
 		INSERT INTO enroll_tokens
 			(token_hash, token_prefix, token_type, expires_at, max_uses, used_count,
@@ -526,11 +525,11 @@ func insertAutomationToken(ctx context.Context, db automationTokenDB, token, pre
 		VALUES ($1, $2, 'automation', $3, $4, 0, TRUE, $5, $6, $7, $8, $9)
 		RETURNING id, created_at`,
 		agentgw.HashToken(token), prefix, expiresArg, maxUses,
-		pq.Array(cidrs), creator, tenantID, name, note).Scan(&id, &createdAt)
+		store.Array(cidrs), creator, tenantID, name, note).Scan(&id, &createdAt)
 	if err != nil {
 		return 0, time.Time{}, err
 	}
-	return id, createdAt, nil
+	return id, createdAt.Time, nil
 }
 
 func buildAutomationInstallCommand(s *svc.ServiceContext, r *http.Request, token, osName, arch string, force bool) (string, string, error) {

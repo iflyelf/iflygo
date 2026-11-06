@@ -15,9 +15,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/lib/pq"
-
 	"github.com/iflyelf/iflygo/internal/auth"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // 权限常量。
@@ -194,13 +193,13 @@ func trimName(s string) string { return strings.TrimSpace(s) }
 
 // ListRoles 列出角色。
 func (s *Service) ListRoles(ctx context.Context) ([]Role, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.db.QueryContext(ctx, store.SQL(`
 		SELECT r.id, r.name, COALESCE(r.code,''), COALESCE(r.description,''),
 		       COALESCE(r.permissions,'{}'),
 		       TO_CHAR(r.created_at,'YYYY-MM-DD HH24:MI:SS'),
 		       TO_CHAR(r.updated_at,'YYYY-MM-DD HH24:MI:SS'),
 		       (SELECT COUNT(*) FROM team_group_permissions p WHERE r.id = ANY(p.role_ids))
-		FROM roles r WHERE ($1=0 OR r.tenant_id=$1) ORDER BY r.id`, tenantOf(ctx))
+		FROM roles r WHERE ($1=0 OR r.tenant_id=$1) ORDER BY r.id`), tenantOf(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +207,7 @@ func (s *Service) ListRoles(ctx context.Context) ([]Role, error) {
 	out := []Role{}
 	for rows.Next() {
 		var r Role
-		var perms pq.StringArray
+		var perms store.StringArray
 		if err := rows.Scan(&r.ID, &r.Name, &r.Code, &r.Description, &perms,
 			&r.CreatedAt, &r.UpdatedAt, &r.TeamCount); err != nil {
 			return nil, err
@@ -236,7 +235,7 @@ func (s *Service) CreateRole(ctx context.Context, name, code, description string
 	err = s.db.QueryRowContext(ctx, `
 		INSERT INTO roles (name, code, description, permissions, tenant_id)
 		VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-		name, code, trimName(description), pq.Array(p), tenantForWrite(ctx)).Scan(&id)
+		name, code, trimName(description), store.Array(p), tenantForWrite(ctx)).Scan(&id)
 	if err != nil {
 		if isUnique(err) {
 			return 0, fmt.Errorf("角色名称「%s」已存在", name)
@@ -256,10 +255,10 @@ func (s *Service) UpdateRole(ctx context.Context, id int64, name, description st
 	if err != nil {
 		return err
 	}
-	res, err := s.db.ExecContext(ctx, `
+	res, err := s.db.ExecContext(ctx, store.SQL(`
 		UPDATE roles SET name=$2, description=$3, permissions=$4, updated_at=NOW()
-		WHERE id=$1 AND ($5=0 OR tenant_id=$5)`,
-		id, name, trimName(description), pq.Array(p), tenantOf(ctx))
+		WHERE id=$1 AND ($5=0 OR tenant_id=$5)`),
+		id, name, trimName(description), store.Array(p), tenantOf(ctx))
 	if err != nil {
 		if isUnique(err) {
 			return fmt.Errorf("角色名称「%s」已存在", name)
@@ -276,7 +275,7 @@ func (s *Service) UpdateRole(ctx context.Context, id int64, name, description st
 func (s *Service) DeleteRole(ctx context.Context, id int64) error {
 	var refs int
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM team_group_permissions WHERE $1 = ANY(role_ids)`, id).Scan(&refs); err != nil {
+		store.SQL(`SELECT COUNT(*) FROM team_group_permissions WHERE $1 = ANY(role_ids)`), id).Scan(&refs); err != nil {
 		return err
 	}
 	if refs > 0 {
@@ -297,7 +296,7 @@ func (s *Service) DeleteRole(ctx context.Context, id int64) error {
 
 // ListTeams 列出团队。
 func (s *Service) ListTeams(ctx context.Context) ([]Team, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.db.QueryContext(ctx, store.SQL(`
 		SELECT t.id, t.name, COALESCE(t.code,''), COALESCE(t.description,''), t.status,
 		       COALESCE(t.owner_only,'inherit'),
 		       COALESCE(t.created_by,''),
@@ -305,7 +304,7 @@ func (s *Service) ListTeams(ctx context.Context) ([]Team, error) {
 		       TO_CHAR(t.updated_at,'YYYY-MM-DD HH24:MI:SS'),
 		       (SELECT COUNT(*) FROM team_members m WHERE m.team_id=t.id),
 		       (SELECT COUNT(*) FROM team_group_permissions g WHERE g.team_id=t.id)
-		FROM teams t WHERE ($1=0 OR t.tenant_id=$1) ORDER BY t.id`, tenantOf(ctx))
+		FROM teams t WHERE ($1=0 OR t.tenant_id=$1) ORDER BY t.id`), tenantOf(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -405,10 +404,10 @@ func (s *Service) UpdateTeamWithPolicy(ctx context.Context, id int64, name, desc
 	if strings.TrimSpace(ownerOnly) == "" {
 		policy = "" // 不修改
 	}
-	res, err := s.db.ExecContext(ctx, `
+	res, err := s.db.ExecContext(ctx, store.SQL(`
 		UPDATE teams SET name=$2, description=$3, status=$4,
 		       owner_only = COALESCE(NULLIF($5,''), owner_only), updated_at=NOW()
-		WHERE id=$1 AND ($6=0 OR tenant_id=$6)`,
+		WHERE id=$1 AND ($6=0 OR tenant_id=$6)`),
 		id, name, trimName(description), status, policy, tenantOf(ctx))
 	if err != nil {
 		if isUnique(err) {
@@ -440,10 +439,10 @@ func (s *Service) ListMembers(ctx context.Context, teamID int64) ([]Member, erro
 	if err := s.teamInTenant(ctx, teamID); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.db.QueryContext(ctx, store.SQL(`
 		SELECT m.id, m.team_id, m.user_id, COALESCE(m.username,''), COALESCE(m.display_name,''),
 		       TO_CHAR(m.created_at,'YYYY-MM-DD HH24:MI:SS')
-		FROM team_members m WHERE m.team_id=$1 ORDER BY m.id`, teamID)
+		FROM team_members m WHERE m.team_id=$1 ORDER BY m.id`), teamID)
 	if err != nil {
 		return nil, err
 	}
@@ -503,13 +502,13 @@ func (s *Service) RemoveMember(ctx context.Context, teamID int64, userID string)
 
 // ListGroups 列出服务组（含组件）。
 func (s *Service) ListGroups(ctx context.Context) ([]Group, error) {
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.db.QueryContext(ctx, store.SQL(`
 		SELECT g.id, g.name, COALESCE(g.code,''), COALESCE(g.description,''), g.status,
 		       COALESCE(g.created_by,''),
 		       TO_CHAR(g.created_at,'YYYY-MM-DD HH24:MI:SS'),
 		       TO_CHAR(g.updated_at,'YYYY-MM-DD HH24:MI:SS'),
 		       (SELECT COUNT(*) FROM team_group_permissions p WHERE p.group_id=g.id)
-		FROM service_groups g WHERE ($1=0 OR g.tenant_id=$1) ORDER BY g.id`, tenantOf(ctx))
+		FROM service_groups g WHERE ($1=0 OR g.tenant_id=$1) ORDER BY g.id`), tenantOf(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -601,9 +600,9 @@ func (s *Service) UpdateGroup(ctx context.Context, id int64, name, description s
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `
+	res, err := tx.ExecContext(ctx, store.SQL(`
 		UPDATE service_groups SET name=$2, description=$3, updated_at=NOW()
-		WHERE id=$1 AND ($4=0 OR tenant_id=$4)`,
+		WHERE id=$1 AND ($4=0 OR tenant_id=$4)`),
 		id, name, trimName(description), tenantOf(ctx))
 	if err != nil {
 		if isUnique(err) {
@@ -661,14 +660,14 @@ func (s *Service) ListGroupPermissions(ctx context.Context, teamID int64) ([]Gro
 	if err := s.teamInTenant(ctx, teamID); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.db.QueryContext(ctx, store.SQL(`
 		SELECT p.id, p.team_id, p.group_id, COALESCE(g.name,''),
 		       COALESCE(p.permissions,'{}'), COALESCE(p.role_ids,'{}'), COALESCE(p.services,'{}'),
 		       COALESCE(p.host_groups,'{}'),
 		       TO_CHAR(p.created_at,'YYYY-MM-DD HH24:MI:SS')
 		FROM team_group_permissions p
 		LEFT JOIN service_groups g ON g.id = p.group_id
-		WHERE p.team_id=$1 ORDER BY p.group_id`, teamID)
+		WHERE p.team_id=$1 ORDER BY p.group_id`), teamID)
 	if err != nil {
 		return nil, err
 	}
@@ -676,8 +675,8 @@ func (s *Service) ListGroupPermissions(ctx context.Context, teamID int64) ([]Gro
 	out := []GroupPermission{}
 	for rows.Next() {
 		var gp GroupPermission
-		var perms, services, hostGroups pq.StringArray
-		var roleIDs pq.Int64Array
+		var perms, services, hostGroups store.StringArray
+		var roleIDs store.Int64Array
 		if err := rows.Scan(&gp.ID, &gp.TeamID, &gp.GroupID, &gp.GroupName,
 			&perms, &roleIDs, &services, &hostGroups, &gp.CreatedAt); err != nil {
 			return nil, err
@@ -707,8 +706,8 @@ func (s *Service) SetGroupPermission(ctx context.Context, teamID, groupID int64,
 	if len(roleIDs) > 0 {
 		var n int
 		if err := s.db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM roles WHERE id = ANY($1) AND ($2=0 OR tenant_id=$2)`,
-			pq.Array(roleIDs), tenantOf(ctx)).Scan(&n); err != nil {
+			store.SQL(`SELECT COUNT(*) FROM roles WHERE id = ANY($1) AND ($2=0 OR tenant_id=$2)`),
+			store.Array(roleIDs), tenantOf(ctx)).Scan(&n); err != nil {
 			return err
 		}
 		if n != len(uniqueInt64(roleIDs)) {
@@ -735,7 +734,7 @@ func (s *Service) SetGroupPermission(ctx context.Context, teamID, groupID int64,
 			cleanedHosts = append(cleanedHosts, hg)
 		}
 	}
-	_, err = s.db.ExecContext(ctx, `
+	_, err = s.db.ExecContext(ctx, store.SQL(`
 		INSERT INTO team_group_permissions (team_id, group_id, permissions, role_ids, services, host_groups)
 		VALUES ($1,$2,$3,$4,$5,$6)
 		ON CONFLICT (team_id, group_id) DO UPDATE SET
@@ -743,8 +742,8 @@ func (s *Service) SetGroupPermission(ctx context.Context, teamID, groupID int64,
 			role_ids    = EXCLUDED.role_ids,
 			services    = EXCLUDED.services,
 			host_groups = EXCLUDED.host_groups,
-			updated_at  = NOW()`,
-		teamID, groupID, pq.Array(p), pq.Array(roleIDs), pq.Array(cleaned), pq.Array(cleanedHosts))
+			updated_at  = NOW()`),
+		teamID, groupID, store.Array(p), store.Array(roleIDs), store.Array(cleaned), store.Array(cleanedHosts))
 	return err
 }
 
@@ -813,8 +812,8 @@ func (s *Service) EffectivePermissionsWithHosts(ctx context.Context, username st
 	permsOut := map[string]map[string]bool{}
 	hostsOut := map[string]map[string]bool{}
 	for rows.Next() {
-		var perms, services, hostGroups pq.StringArray
-		var roleIDs pq.Int64Array
+		var perms, services, hostGroups store.StringArray
+		var roleIDs store.Int64Array
 		var compID int64
 		var compName string
 		if err := rows.Scan(&perms, &roleIDs, &services, &hostGroups, &compID, &compName); err != nil {
@@ -879,7 +878,7 @@ func (s *Service) rolePermissions(ctx context.Context) (map[int64][]string, erro
 	out := map[int64][]string{}
 	for rows.Next() {
 		var id int64
-		var perms pq.StringArray
+		var perms store.StringArray
 		if err := rows.Scan(&id, &perms); err == nil {
 			out[id] = []string(perms)
 		}

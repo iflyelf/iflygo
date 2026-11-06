@@ -16,6 +16,7 @@ import (
 	"github.com/iflyelf/iflygo/internal/pkg/hostnet"
 	"github.com/iflyelf/iflygo/internal/pkg/httpx"
 	"github.com/iflyelf/iflygo/internal/pkg/scope"
+	"github.com/iflyelf/iflygo/internal/store"
 	"github.com/iflyelf/iflygo/internal/svc"
 )
 
@@ -170,7 +171,7 @@ func HostUpdate(s *svc.ServiceContext) http.HandlerFunc {
 			req.Department, req.Vendor, req.HostType, req.TunnelIP, req.ServerURLOverride,
 			customArg,
 		}, condArgs...)
-		err = s.DB.QueryRowContext(r.Context(), `
+		err = s.DB.QueryRowContext(r.Context(), store.SQL(`
 			UPDATE hosts SET
 				hostname   = COALESCE($2, hostname),
 				account    = COALESCE($3, account),
@@ -187,7 +188,7 @@ func HostUpdate(s *svc.ServiceContext) http.HandlerFunc {
 				custom_fields = CASE WHEN $11::text IS NULL THEN custom_fields
 				                     ELSE COALESCE(custom_fields,'{}'::jsonb) || $11::jsonb END,
 				updated_at = NOW()
-			WHERE id=$1 AND `+cond+`
+			WHERE id=$1 AND `)+cond+`
 			RETURNING ip`, args...).Scan(&ip)
 		if errors.Is(err, sql.ErrNoRows) {
 			opErr = err
@@ -366,8 +367,8 @@ func deleteHostTx(ctx context.Context, tx *sql.Tx, sc scope.Scope, id int64) (st
 	// 若反过来先锁 hosts 再级联删除子表，会与正在落终态的 Agent 上报形成
 	// “上报持有 task_hosts 等 hosts，删除持有 hosts 等 task_hosts”的死锁。
 	for _, q := range []string{
-		`SELECT 1 FROM task_hosts WHERE host_id=$1 FOR UPDATE`,
-		`SELECT 1 FROM commands WHERE host_id=$1 FOR UPDATE`,
+		store.SQL(`SELECT 1 FROM task_hosts WHERE host_id=$1 FOR UPDATE`),
+		store.SQL(`SELECT 1 FROM commands WHERE host_id=$1 FOR UPDATE`),
 	} {
 		rows, qerr := tx.QueryContext(ctx, q, id)
 		if qerr != nil {
@@ -381,7 +382,7 @@ func deleteHostTx(ctx context.Context, tx *sql.Tx, sc scope.Scope, id int64) (st
 
 	// 最后锁主机行并复查，防止检查后被重新注册/改租户。
 	err = tx.QueryRowContext(ctx,
-		`SELECT ip, COALESCE(agent_id,'') FROM hosts WHERE id=$1 AND `+cond+` FOR UPDATE`,
+		`SELECT ip, COALESCE(agent_id,'') FROM hosts WHERE id=$1 AND `+cond+store.SQL(` FOR UPDATE`),
 		append([]any{id}, condArgs...)...).Scan(&ip, &agentID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", hostNotFound(err)

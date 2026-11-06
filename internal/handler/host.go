@@ -24,7 +24,7 @@ func HostUpgradeHistory(s *svc.ServiceContext) http.HandlerFunc {
 			JOIN upgrade_tasks t ON t.id = th.task_id
 			JOIN hosts h ON h.id = th.host_id
 			WHERE h.ip = $1 AND `+hCond+`
-			ORDER BY th.created_at DESC
+			ORDER BY th.id DESC
 			LIMIT 50`, append([]any{ip}, hArgs...)...)
 		if err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)

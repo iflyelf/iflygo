@@ -14,6 +14,7 @@ import (
 	"github.com/iflyelf/iflygo/internal/pkg/pglock"
 	"github.com/iflyelf/iflygo/internal/pkg/scope"
 	"github.com/iflyelf/iflygo/internal/protocol"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // orchestratorLockKey 编排器跨实例互斥键（与迁移、维护、Consul 同步的键区分）。
@@ -286,7 +287,7 @@ func (o *Orchestrator) dispatchBatch(ctx context.Context, taskID, compID int64, 
 	type row struct {
 		thID, hostID  int64
 		arch, os, aid string
-		lastSeen      sql.NullTime
+		lastSeen      store.NullTime
 		agentURL      string
 	}
 	var list []row
@@ -432,7 +433,7 @@ func (o *Orchestrator) dispatchHostWithType(ctx context.Context, taskID, thID, h
 	defer tx.Rollback()
 
 	var status string
-	err = tx.QueryRowContext(ctx, `SELECT status FROM task_hosts WHERE id=$1 FOR UPDATE`, thID).Scan(&status)
+	err = tx.QueryRowContext(ctx, store.SQL(`SELECT status FROM task_hosts WHERE id=$1 FOR UPDATE`), thID).Scan(&status)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -458,17 +459,17 @@ func (o *Orchestrator) dispatchHostWithType(ctx context.Context, taskID, thID, h
 	// 如果历史上已有活动指令但 task_host 仍是 pending，直接接管为 running，
 	// 避免每轮重复尝试 INSERT 并报唯一键冲突。
 	var existing int64
-	err = tx.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, store.SQL(`
 		SELECT id FROM commands
 		WHERE task_host_id=$1
 		  AND status IN ('pending','dispatched','accepted','running')
 		ORDER BY id DESC
 		LIMIT 1
-		FOR UPDATE`, thID).Scan(&existing)
+		FOR UPDATE`), thID).Scan(&existing)
 	if err == nil {
-		if _, err := tx.ExecContext(ctx, `
+		if _, err := tx.ExecContext(ctx, store.SQL(`
 			UPDATE task_hosts SET status='running', started_at=COALESCE(started_at,NOW())
-			WHERE id=$1 AND status='pending'`, thID); err != nil {
+			WHERE id=$1 AND status='pending'`), thID); err != nil {
 			return false, err
 		}
 		return false, tx.Commit()
@@ -484,7 +485,7 @@ func (o *Orchestrator) dispatchHostWithType(ctx context.Context, taskID, thID, h
 		return false, err
 	}
 	res, err := tx.ExecContext(ctx,
-		`UPDATE task_hosts SET status='running', started_at=COALESCE(started_at,NOW()) WHERE id=$1 AND status='pending'`,
+		store.SQL(`UPDATE task_hosts SET status='running', started_at=COALESCE(started_at,NOW()) WHERE id=$1 AND status='pending'`),
 		thID)
 	if err != nil {
 		return false, err
@@ -511,10 +512,10 @@ func (o *Orchestrator) completeBatch(ctx context.Context, taskID int64, batchIdx
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, store.SQL(`
 		UPDATE task_batches SET status=$3::varchar, started_at=COALESCE(started_at,NOW()),
 		 finished_at=CASE WHEN $3::varchar IN ('success','failed') THEN NOW() ELSE finished_at END
-		 WHERE task_id=$1 AND batch_index=$2`, taskID, batchIdx, status); err != nil {
+		 WHERE task_id=$1 AND batch_index=$2`), taskID, batchIdx, status); err != nil {
 		return err
 	}
 	if rollback {
@@ -526,8 +527,8 @@ func (o *Orchestrator) completeBatch(ctx context.Context, taskID int64, batchIdx
 	}
 	if pauseTask {
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE upgrade_tasks SET status='paused', updated_at=NOW()
-			 WHERE id=$1 AND status='running'`, taskID); err != nil {
+			store.SQL(`UPDATE upgrade_tasks SET status='paused', updated_at=NOW()
+			 WHERE id=$1 AND status='running'`), taskID); err != nil {
 			return err
 		}
 	}
@@ -552,16 +553,16 @@ func (o *Orchestrator) finishTask(ctx context.Context, taskID int64, kind string
 	// 允许 paused：auto_promote=false 的末批完成后任务是 paused，
 	// 若不放开这里，任务会永远停在「已暂停」而实际已经全部完成。
 	_, err := o.svc.db.ExecContext(ctx,
-		`UPDATE upgrade_tasks SET status=$2, updated_at=NOW()
-		 WHERE id=$1 AND status IN ('running','paused')`, taskID, status)
+		store.SQL(`UPDATE upgrade_tasks SET status=$2, updated_at=NOW()
+		 WHERE id=$1 AND status IN ('running','paused')`), taskID, status)
 	return err
 }
 
 func (o *Orchestrator) markBatch(ctx context.Context, taskID int64, batchIdx int, status string) error {
 	_, err := o.svc.db.ExecContext(ctx,
-		`UPDATE task_batches SET status=$3::varchar, started_at=COALESCE(started_at,NOW()),
+		store.SQL(`UPDATE task_batches SET status=$3::varchar, started_at=COALESCE(started_at,NOW()),
 		 finished_at=CASE WHEN $3::varchar IN ('success','failed') THEN NOW() ELSE finished_at END
-		 WHERE task_id=$1 AND batch_index=$2`, taskID, batchIdx, status)
+		 WHERE task_id=$1 AND batch_index=$2`), taskID, batchIdx, status)
 	return err
 }
 
@@ -588,8 +589,8 @@ func scriptArtifact(spec protocol.ComponentSpec, version, arch, osFamily string)
 
 func (o *Orchestrator) markHostSkipped(ctx context.Context, thID int64) {
 	_, _ = o.svc.db.ExecContext(ctx,
-		`UPDATE task_hosts SET status='skipped', finished_at=NOW()
-		 WHERE id=$1 AND status='pending'`, thID)
+		store.SQL(`UPDATE task_hosts SET status='skipped', finished_at=NOW()
+		 WHERE id=$1 AND status='pending'`), thID)
 }
 
 // markHostSkippedWithLog 跳过主机并写入原因，任务详情页可直接看到
@@ -597,9 +598,9 @@ func (o *Orchestrator) markHostSkipped(ctx context.Context, thID int64) {
 func (o *Orchestrator) markHostSkippedWithLog(ctx context.Context, thID int64, reason string) {
 	line := fmt.Sprintf("[%s] %s\n", time.Now().Format("2006-01-02 15:04:05"), reason)
 	_, _ = o.svc.db.ExecContext(ctx,
-		`UPDATE task_hosts SET status='skipped', finished_at=NOW(),
+		store.SQL(`UPDATE task_hosts SET status='skipped', finished_at=NOW(),
 		        log=COALESCE(log,'')||$2
-		 WHERE id=$1 AND status='pending'`, thID, line)
+		 WHERE id=$1 AND status='pending'`), thID, line)
 }
 
 // agentSupportsCommand 判断 Agent 是否声明支持 run_command。

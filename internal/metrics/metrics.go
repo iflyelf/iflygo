@@ -10,6 +10,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 var (
@@ -219,10 +221,10 @@ func (c *Collector) collectAgents(ctx context.Context) {
 	}
 
 	// 心跳延迟（在线 Agent）
-	rows, err = c.db.QueryContext(ctx, `
+	rows, err = c.db.QueryContext(ctx, store.SQL(`
 		SELECT EXTRACT(EPOCH FROM (NOW() - last_heartbeat_at))
 		FROM agents WHERE status='online' AND last_heartbeat_at IS NOT NULL
-	`)
+	`))
 	if err != nil {
 		return
 	}

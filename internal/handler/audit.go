@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/iflyelf/iflygo/internal/pkg/httpx"
+	"github.com/iflyelf/iflygo/internal/store"
 	"github.com/iflyelf/iflygo/internal/svc"
 )
 
@@ -18,13 +19,19 @@ func auditFilter(r *http.Request) (string, []any, error) {
 	where := []string{tCond}
 	args := append([]any{}, tArgs...)
 
+	sqlite := store.CurrentDialect() == store.SQLite
+	like := "ILIKE"
+	if sqlite {
+		like = "LIKE"
+	}
+
 	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
 		args = append(args, "%"+q+"%")
 		n := len(args)
 		where = append(where, fmt.Sprintf(
-			"(COALESCE(a.username,'') ILIKE $%d OR COALESCE(a.resource_name,'') ILIKE $%d"+
-				" OR COALESCE(a.resource_id,'') ILIKE $%d OR COALESCE(a.action,'') ILIKE $%d)",
-			n, n, n, n))
+			"(COALESCE(a.username,'') %s $%d OR COALESCE(a.resource_name,'') %s $%d"+
+				" OR COALESCE(a.resource_id,'') %s $%d OR COALESCE(a.action,'') %s $%d)",
+			like, n, like, n, like, n, like, n))
 	}
 	exact := []struct{ param, col string }{
 		{"action", "a.action"},
@@ -43,14 +50,22 @@ func auditFilter(r *http.Request) (string, []any, error) {
 			return "", nil, fmt.Errorf("开始日期格式应为 YYYY-MM-DD")
 		}
 		args = append(args, from)
-		where = append(where, fmt.Sprintf("a.created_at >= $%d::date", len(args)))
+		if sqlite {
+			where = append(where, fmt.Sprintf("a.created_at >= date($%d)", len(args)))
+		} else {
+			where = append(where, fmt.Sprintf("a.created_at >= $%d::date", len(args)))
+		}
 	}
 	if to := strings.TrimSpace(r.URL.Query().Get("to")); to != "" {
 		if _, err := time.Parse("2006-01-02", to); err != nil {
 			return "", nil, fmt.Errorf("结束日期格式应为 YYYY-MM-DD")
 		}
 		args = append(args, to)
-		where = append(where, fmt.Sprintf("a.created_at < ($%d::date + INTERVAL '1 day')", len(args)))
+		if sqlite {
+			where = append(where, fmt.Sprintf("a.created_at < date($%d, '+1 day')", len(args)))
+		} else {
+			where = append(where, fmt.Sprintf("a.created_at < ($%d::date + INTERVAL '1 day')", len(args)))
+		}
 	}
 	return strings.Join(where, " AND "), args, nil
 }
@@ -88,7 +103,7 @@ func AuditLogList(s *svc.ServiceContext) http.HandlerFunc {
 			page = pages
 		}
 		listArgs := append(append([]any{}, args...), size, (page-1)*size)
-		rows, err := s.DB.QueryContext(r.Context(), fmt.Sprintf(`
+		rows, err := s.DB.QueryContext(r.Context(), fmt.Sprintf(store.SQL(`
 			SELECT a.id, COALESCE(a.user_id,''), COALESCE(a.username,''), COALESCE(a.action,''),
 			       COALESCE(a.resource_type,''), COALESCE(a.resource_id,''), COALESCE(a.resource_name,''),
 			       COALESCE(a.ip_address,''), COALESCE(a.status,''), COALESCE(a.error_message,''),
@@ -96,7 +111,7 @@ func AuditLogList(s *svc.ServiceContext) http.HandlerFunc {
 			  FROM audit_logs a
 			 WHERE %s
 			 ORDER BY a.created_at DESC, a.id DESC
-			 LIMIT $%d OFFSET $%d`, whereSQL, len(listArgs)-1, len(listArgs)), listArgs...)
+			 LIMIT $%d OFFSET $%d`), whereSQL, len(listArgs)-1, len(listArgs)), listArgs...)
 		if err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
@@ -109,7 +124,7 @@ func AuditLogList(s *svc.ServiceContext) http.HandlerFunc {
 				userID, username, action, resType, resID, resName string
 				ip, status, errMsg                                string
 				details                                           []byte
-				createdAt                                         time.Time
+				createdAt                                         store.Time
 			)
 			if err := rows.Scan(&id, &userID, &username, &action, &resType, &resID, &resName,
 				&ip, &status, &errMsg, &details, &createdAt); err != nil {
@@ -146,13 +161,13 @@ func AuditLogExport(s *svc.ServiceContext) http.HandlerFunc {
 			httpx.Fail(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		rows, err := s.DB.QueryContext(r.Context(), `
+		rows, err := s.DB.QueryContext(r.Context(), store.SQL(`
 			SELECT COALESCE(a.username,''), COALESCE(a.action,''), COALESCE(a.resource_type,''),
 			       COALESCE(a.resource_id,''), COALESCE(a.resource_name,''), COALESCE(a.status,''),
 			       COALESCE(a.ip_address,''), COALESCE(a.error_message,''),
 			       COALESCE(a.details,'{}'::jsonb), a.created_at
 			  FROM audit_logs a
-			 WHERE `+whereSQL+`
+			 WHERE `)+whereSQL+`
 			 ORDER BY a.created_at DESC, a.id DESC
 			 LIMIT 20000`, args...)
 		if err != nil {
@@ -171,7 +186,7 @@ func AuditLogExport(s *svc.ServiceContext) http.HandlerFunc {
 			var (
 				username, action, resType, resID, resName, status, ip, errMsg string
 				details                                                       []byte
-				createdAt                                                     time.Time
+				createdAt                                                     store.Time
 			)
 			if err := rows.Scan(&username, &action, &resType, &resID, &resName, &status,
 				&ip, &errMsg, &details, &createdAt); err != nil {

@@ -17,6 +17,7 @@ import (
 	"github.com/iflyelf/iflygo/internal/logic/hostfieldmap"
 	"github.com/iflyelf/iflygo/internal/pkg/consul"
 	"github.com/iflyelf/iflygo/internal/pkg/pglock"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // ErrSyncInProgress 同一时刻已有其他实例/请求在执行 Consul 同步。
@@ -287,11 +288,11 @@ func (s *Syncer) upsertCustomFields(ctx context.Context, ip string, resolved hos
 		if err != nil {
 			return err
 		}
-		if _, err := s.db.ExecContext(ctx, `
+		if _, err := s.db.ExecContext(ctx, store.SQL(`
 			UPDATE hosts
 			SET custom_fields = COALESCE(custom_fields,'{}'::jsonb) || $2::jsonb,
 			    updated_at = NOW()
-			WHERE ip = $1`, ip, string(data)); err != nil {
+			WHERE ip = $1`), ip, string(data)); err != nil {
 			return err
 		}
 	}
@@ -302,7 +303,7 @@ func (s *Syncer) upsertCustomFields(ctx context.Context, ip string, resolved hos
 		}
 		// 外部值作为基础，本地非空值覆盖其上：等价于「只填空缺」。
 		// 先剔除空串再合并，让历史遗留的空值也能被外部值补齐。
-		if _, err := s.db.ExecContext(ctx, `
+		if _, err := s.db.ExecContext(ctx, store.SQL(`
 			UPDATE hosts
 			SET custom_fields = $2::jsonb || (
 			        SELECT COALESCE(jsonb_object_agg(k, v), '{}'::jsonb)
@@ -310,7 +311,7 @@ func (s *Syncer) upsertCustomFields(ctx context.Context, ip string, resolved hos
 			        WHERE btrim(v) <> ''
 			    ),
 			    updated_at = NOW()
-			WHERE ip = $1`, ip, string(data)); err != nil {
+			WHERE ip = $1`), ip, string(data)); err != nil {
 			return err
 		}
 	}
@@ -340,14 +341,14 @@ func missingHostCond(syncedAtParam string) string {
 		h.source='consul'
 		AND (h.agent_id IS NULL OR h.agent_id='')
 		AND (h.last_synced_at IS NULL OR h.last_synced_at < ` + syncedAtParam + `)
-		AND (h.last_seen IS NULL OR h.last_seen < ` + syncedAtParam + `)
+		AND (h.last_seen IS NULL OR h.last_seen < ` + syncedAtParam + store.SQL(`)
 		AND (h.maintenance_until IS NULL OR h.maintenance_until <= NOW())
 		AND NOT EXISTS (SELECT 1 FROM agents a WHERE a.ip = h.ip)
 		AND NOT EXISTS (SELECT 1 FROM agents a WHERE a.host_id = h.id)
 		AND NOT EXISTS (SELECT 1 FROM task_hosts th
 		                WHERE th.host_id=h.id AND th.status IN ('pending','running'))
 		AND NOT EXISTS (SELECT 1 FROM commands c
-		                WHERE c.host_id=h.id AND c.status IN ('pending','dispatched','accepted','running'))`
+		                WHERE c.host_id=h.id AND c.status IN ('pending','dispatched','accepted','running'))`)
 }
 
 // cleanupMissingHosts 清理本轮未出现在 Consul 中的纯 Consul 主机。
@@ -421,8 +422,8 @@ func (s *Syncer) deleteMissingHosts(ctx context.Context, syncedAt time.Time, ids
 	for _, id := range ids {
 		// 与 Report/UpdateStage/HostDelete 相同：先锁逐机记录，再锁指令，最后锁主机。
 		for _, q := range []string{
-			`SELECT 1 FROM task_hosts WHERE host_id=$1 FOR UPDATE`,
-			`SELECT 1 FROM commands WHERE host_id=$1 FOR UPDATE`,
+			store.SQL(`SELECT 1 FROM task_hosts WHERE host_id=$1 FOR UPDATE`),
+			store.SQL(`SELECT 1 FROM commands WHERE host_id=$1 FOR UPDATE`),
 		} {
 			rows, err := tx.QueryContext(ctx, q, id)
 			if err != nil {
@@ -435,9 +436,9 @@ func (s *Syncer) deleteMissingHosts(ctx context.Context, syncedAt time.Time, ids
 		}
 
 		// 加锁后复查：期间可能新增 Agent/任务/指令，或主机重新出现在 Consul 中。
-		res, err := tx.ExecContext(ctx, `
+		res, err := tx.ExecContext(ctx, store.SQL(`
 			DELETE FROM hosts h
-			WHERE h.id=$1 AND `+missingHostCond("$2"), id, syncedAt)
+			WHERE h.id=$1 AND `+missingHostCond("$2")), id, syncedAt)
 		if err != nil {
 			return deleted, err
 		}
@@ -460,14 +461,14 @@ func missingMgrHostCond(groupParam, syncedAtParam string) string {
 		AND h.source_group=` + groupParam + `
 		AND (h.agent_id IS NULL OR h.agent_id='')
 		AND (h.last_synced_at IS NULL OR h.last_synced_at < ` + syncedAtParam + `)
-		AND (h.last_seen IS NULL OR h.last_seen < ` + syncedAtParam + `)
+		AND (h.last_seen IS NULL OR h.last_seen < ` + syncedAtParam + store.SQL(`)
 		AND (h.maintenance_until IS NULL OR h.maintenance_until <= NOW())
 		AND NOT EXISTS (SELECT 1 FROM agents a WHERE a.ip = h.ip)
 		AND NOT EXISTS (SELECT 1 FROM agents a WHERE a.host_id = h.id)
 		AND NOT EXISTS (SELECT 1 FROM task_hosts th
 		                WHERE th.host_id=h.id AND th.status IN ('pending','running'))
 		AND NOT EXISTS (SELECT 1 FROM commands c
-		                WHERE c.host_id=h.id AND c.status IN ('pending','dispatched','accepted','running'))`
+		                WHERE c.host_id=h.id AND c.status IN ('pending','dispatched','accepted','running'))`)
 }
 
 // findMissingMgrHosts 无锁挑选 consul_mgr 当前服务组中待清理的主机。
@@ -502,8 +503,8 @@ func (s *Syncer) deleteMissingMgrHosts(ctx context.Context, groupID int64, synce
 	deleted := 0
 	for _, id := range ids {
 		for _, q := range []string{
-			`SELECT 1 FROM task_hosts WHERE host_id=$1 FOR UPDATE`,
-			`SELECT 1 FROM commands WHERE host_id=$1 FOR UPDATE`,
+			store.SQL(`SELECT 1 FROM task_hosts WHERE host_id=$1 FOR UPDATE`),
+			store.SQL(`SELECT 1 FROM commands WHERE host_id=$1 FOR UPDATE`),
 		} {
 			rows, err := tx.QueryContext(ctx, q, id)
 			if err != nil {
@@ -514,9 +515,9 @@ func (s *Syncer) deleteMissingMgrHosts(ctx context.Context, groupID int64, synce
 				return deleted, err
 			}
 		}
-		res, err := tx.ExecContext(ctx, `
+		res, err := tx.ExecContext(ctx, store.SQL(`
 			DELETE FROM hosts h
-			WHERE h.id=$1 AND `+missingMgrHostCond("$2", "$3"), id, groupID, syncedAt)
+			WHERE h.id=$1 AND `+missingMgrHostCond("$2", "$3")), id, groupID, syncedAt)
 		if err != nil {
 			return deleted, err
 		}

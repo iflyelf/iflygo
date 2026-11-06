@@ -18,9 +18,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lib/pq"
-
 	"github.com/iflyelf/iflygo/internal/auth"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // 随机部分字节数（hex 后长度翻倍）；展示前缀额外保留的随机字符数。
@@ -51,7 +50,7 @@ type Token struct {
 	LastUsedAt  *time.Time `json:"last_used_at"`
 	LastUsedIP  string     `json:"last_used_ip"`
 	CreatedBy   string     `json:"created_by"`
-	CreatedAt   time.Time  `json:"created_at"`
+	CreatedAt   store.Time `json:"created_at"`
 	Status      string     `json:"status"`
 }
 
@@ -224,9 +223,9 @@ func (r *Repo) Create(ctx context.Context, actor *auth.User, provider string, in
 	}
 	if p.MaxPerUser > 0 {
 		var cnt int
-		if err := tx.QueryRowContext(ctx, `
+		if err := tx.QueryRowContext(ctx, store.SQL(`
 			SELECT COUNT(*) FROM ai_access_tokens
-			WHERE username=$1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())`,
+			WHERE username=$1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())`),
 			actor.Username).Scan(&cnt); err != nil {
 			return nil, err
 		}
@@ -255,7 +254,7 @@ func (r *Repo) Create(ctx context.Context, actor *auth.User, provider string, in
 		INSERT INTO ai_access_tokens (tenant_id, username, display_name, auth_provider, is_admin, roles,
 		                              name, token_hash, token_prefix, allow_write, expires_at, created_by)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id, created_at`,
-		tenantID, actor.Username, actor.DisplayName, provider, actor.IsAdmin, pq.Array(roles),
+		tenantID, actor.Username, actor.DisplayName, provider, actor.IsAdmin, store.Array(roles),
 		name, Hash(plaintext), out.Prefix, in.AllowWrite, exp, actor.Username,
 	).Scan(&out.ID, &out.CreatedAt); err != nil {
 		return nil, err
@@ -329,8 +328,8 @@ func (r *Repo) List(ctx context.Context, actor *auth.User, o ListOptions) ([]Tok
 	out := []Token{}
 	for rows.Next() {
 		var t Token
-		var roles pq.StringArray
-		var exp, rev, used sql.NullTime
+		var roles store.StringArray
+		var exp, rev, used store.NullTime
 		if err := rows.Scan(&t.ID, &t.TenantID, &t.Username, &t.DisplayName, &t.Provider, &t.IsAdmin, &roles,
 			&t.Name, &t.Prefix, &t.AllowWrite, &exp, &rev, &t.RevokedBy, &used, &t.LastUsedIP,
 			&t.CreatedBy, &t.CreatedAt); err != nil {
@@ -352,11 +351,11 @@ func (r *Repo) Revoke(ctx context.Context, actor *auth.User, id int64) (*Token, 
 	cond, vargs := visibility(actor, 3)
 	args := append([]any{id, actor.Username}, vargs...)
 	var t Token
-	err := r.db.QueryRowContext(ctx, `
+	err := r.db.QueryRowContext(ctx, store.SQL(`
 		UPDATE ai_access_tokens
 		SET revoked_at=COALESCE(revoked_at, NOW()),
 		    revoked_by=CASE WHEN revoked_by='' THEN $2 ELSE revoked_by END
-		WHERE id=$1 AND `+cond+`
+		WHERE id=$1 AND `)+cond+`
 		RETURNING id, username, name`, args...).Scan(&t.ID, &t.Username, &t.Name)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("令牌不存在或无权操作")
@@ -402,8 +401,8 @@ func (r *Repo) Authenticate(ctx context.Context, plaintext string) (*auth.User, 
 		return nil, nil, ErrInvalid
 	}
 	var t Token
-	var roles pq.StringArray
-	var exp, rev sql.NullTime
+	var roles store.StringArray
+	var exp, rev store.NullTime
 	err := r.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, username, display_name, auth_provider, is_admin, roles, name,
 		       token_prefix, allow_write, expires_at, revoked_at
@@ -429,12 +428,12 @@ func (r *Repo) Authenticate(ctx context.Context, plaintext string) (*auth.User, 
 		isAdmin  bool
 		disabled bool
 		tenantID int64
-		uroles   pq.StringArray
+		uroles   store.StringArray
 	)
-	err = r.db.QueryRowContext(ctx, `
+	err = r.db.QueryRowContext(ctx, store.SQL(`
 		SELECT id, COALESCE(display_name,''), is_admin, disabled, COALESCE(tenant_id,1),
 		       COALESCE(roles, ARRAY['user']::text[])
-		FROM local_users WHERE username=$1`, t.Username).Scan(&uid, &display, &isAdmin, &disabled, &tenantID, &uroles)
+		FROM local_users WHERE username=$1`), t.Username).Scan(&uid, &display, &isAdmin, &disabled, &tenantID, &uroles)
 	switch {
 	case err == nil:
 		if disabled {
@@ -478,11 +477,11 @@ func (r *Repo) Touch(tokenID int64, ip string, interval time.Duration) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_, _ = r.db.ExecContext(ctx,
-			`UPDATE ai_access_tokens SET last_used_at=NOW(), last_used_ip=$2 WHERE id=$1`, tokenID, ip)
+			store.SQL(`UPDATE ai_access_tokens SET last_used_at=NOW(), last_used_ip=$2 WHERE id=$1`), tokenID, ip)
 	}()
 }
 
-func nullTime(t sql.NullTime) *time.Time {
+func nullTime(t store.NullTime) *time.Time {
 	if !t.Valid {
 		return nil
 	}

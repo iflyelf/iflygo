@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/iflyelf/iflygo/internal/pkg/flyiam"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // Department 本地组织节点（FlyIAM 组织树快照）。
@@ -43,14 +44,14 @@ func (s *Service) ReplaceDepartments(ctx context.Context, deps []flyiam.Departme
 			continue
 		}
 		seen[deptID] = true
-		if _, err := tx.ExecContext(ctx, `
+		if _, err := tx.ExecContext(ctx, store.SQL(`
 			INSERT INTO org_departments
 			    (dept_id, dept_name, parent_id, level, full_path, user_count, synced_at, updated_at, tenant_id)
 			VALUES ($1,$2,$3,$4,$5,$6,NOW(),NOW(),$7)
 			ON CONFLICT (tenant_id, dept_id) DO UPDATE SET
 			    dept_name=EXCLUDED.dept_name, parent_id=EXCLUDED.parent_id,
 			    level=EXCLUDED.level, full_path=EXCLUDED.full_path,
-			    user_count=EXCLUDED.user_count, synced_at=NOW(), updated_at=NOW()`,
+			    user_count=EXCLUDED.user_count, synced_at=NOW(), updated_at=NOW()`),
 			deptID,
 			cutRunes(strings.TrimSpace(d.DeptName), 300),
 			cutRunes(strings.TrimSpace(d.ParentID), 200),

@@ -16,6 +16,7 @@ import (
 
 	"github.com/iflyelf/iflygo/internal/pkg/signer"
 	"github.com/iflyelf/iflygo/internal/protocol"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // HashToken 对高熵随机 token 做 SHA-256 哈希（token 为 256bit 随机，无需慢哈希）。
@@ -47,6 +48,7 @@ func (g *Gateway) VerifyToken(ctx context.Context, agentID, token string) error 
 // Gateway Agent 网关。
 type Gateway struct {
 	db       *sql.DB
+	dialect  store.Dialect
 	consulMu sync.RWMutex
 	consul   ConsulWriter // 可选：升级成功回写 Consul Meta（需加锁保护）
 }
@@ -57,7 +59,10 @@ type ConsulWriter interface {
 }
 
 // New 创建网关。
-func New(db *sql.DB) *Gateway { return &Gateway{db: db} }
+func New(db *sql.DB, dialect store.Dialect) *Gateway { return &Gateway{db: db, dialect: dialect} }
+
+// sql 将 SQL 适配为当前方言（PostgreSQL 原样，SQLite 转换语法）。
+func (g *Gateway) sql(q string) string { return store.AdaptSQL(g.dialect, q) }
 
 // SetConsul 设置 Consul 客户端（可选，svc 初始化后注入）。
 func (g *Gateway) SetConsul(c ConsulWriter) {
@@ -126,12 +131,12 @@ func (g *Gateway) Dequeue(ctx context.Context, agentID string) (*protocol.Comman
 		typ     string
 		payload []byte
 	)
-	err = tx.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, g.sql(`
 		SELECT id, type, payload FROM commands
 		WHERE agent_id=$1 AND status='pending' AND (expire_at IS NULL OR expire_at > NOW())
 		ORDER BY id
 		FOR UPDATE SKIP LOCKED
-		LIMIT 1`, agentID).Scan(&id, &typ, &payload)
+		LIMIT 1`), agentID).Scan(&id, &typ, &payload)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -141,13 +146,13 @@ func (g *Gateway) Dequeue(ctx context.Context, agentID string) (*protocol.Comman
 
 	// 标记 dispatched + 租约。租约用数据库时间写入并回读，
 	// 保证 Agent 拿到的过期时间与 ReapExpired 的 NOW() 判断使用同一时钟。
-	var lease time.Time
-	err = tx.QueryRowContext(ctx, `
+	var lease store.Time
+	err = tx.QueryRowContext(ctx, g.sql(`
 		UPDATE commands
 		SET status='dispatched', dispatched_at=NOW(),
 		    lease_expire_at=NOW() + INTERVAL '30 minutes', attempts=attempts+1
 		WHERE id=$1
-		RETURNING lease_expire_at`, id).Scan(&lease)
+		RETURNING lease_expire_at`), id).Scan(&lease)
 	if err != nil {
 		return nil, err
 	}
@@ -237,9 +242,9 @@ func (g *Gateway) Ack(ctx context.Context, agentID, cmdID, status, reason string
 		attempts int
 		dbStatus string
 	)
-	err = tx.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, g.sql(`
 		SELECT attempts, status FROM commands
-		WHERE id=$1 AND agent_id=$2 FOR UPDATE`, cmdID, agentID).Scan(&attempts, &dbStatus)
+		WHERE id=$1 AND agent_id=$2 FOR UPDATE`), cmdID, agentID).Scan(&attempts, &dbStatus)
 	if err == sql.ErrNoRows {
 		return fmt.Errorf("指令不存在或不属于当前 Agent")
 	}
@@ -261,7 +266,7 @@ func (g *Gateway) Ack(ctx context.Context, agentID, cmdID, status, reason string
 	// 仅探测一次：第一次拒绝若确为签名路径不匹配，则切换 legacy 签名路径并重排。
 	if attempts <= 1 && strings.Contains(reason, "签名不匹配") {
 		var modes string
-		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(signature_modes,'') FROM agents WHERE agent_id=$1 FOR UPDATE`, agentID).Scan(&modes); err == nil {
+		if err := tx.QueryRowContext(ctx, g.sql(`SELECT COALESCE(signature_modes,'') FROM agents WHERE agent_id=$1 FOR UPDATE`), agentID).Scan(&modes); err == nil {
 			normalized := protocol.NormalizeSignatureModes(strings.Split(modes, ","))
 			// 只切换“明确只有一种 legacy 能力”的旧 Agent；同时支持 id+signed_path 的
 			// 新 Agent 不应因单次 v2 校验失败被降级。
@@ -290,7 +295,7 @@ func (g *Gateway) Ack(ctx context.Context, agentID, cmdID, status, reason string
 
 	line := fmt.Sprintf("[%s] Agent 拒绝指令：%s\n", time.Now().Format("2006-01-02 15:04:05"), truncateReason(reason))
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE commands SET status=$2, finished_at=NOW(), log=COALESCE(log,'')||$3 WHERE id=$1`,
+		store.SQL(`UPDATE commands SET status=$2, finished_at=NOW(), log=COALESCE(log,'')||$3 WHERE id=$1`),
 		cmdID, protocol.CmdFailed, line); err != nil {
 		return err
 	}
@@ -390,10 +395,10 @@ func (g *Gateway) UpdateStage(ctx context.Context, agentID, cmdID, stage, messag
 	var lockedID int64
 	if taskHostID.Valid {
 		err = tx.QueryRowContext(ctx,
-			`SELECT id FROM task_hosts WHERE id=$1 FOR UPDATE`, taskHostID.Int64).Scan(&lockedID)
+			g.sql(`SELECT id FROM task_hosts WHERE id=$1 FOR UPDATE`), taskHostID.Int64).Scan(&lockedID)
 	} else {
 		err = tx.QueryRowContext(ctx,
-			`SELECT id FROM commands WHERE id=$1 FOR UPDATE`, cmdID).Scan(&lockedID)
+			g.sql(`SELECT id FROM commands WHERE id=$1 FOR UPDATE`), cmdID).Scan(&lockedID)
 	}
 	if err == sql.ErrNoRows {
 		return tx.Commit()
@@ -444,7 +449,7 @@ func (g *Gateway) UpdateStage(ctx context.Context, agentID, cmdID, stage, messag
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, g.sql(`
 		UPDATE commands
 		SET status=CASE WHEN status IN ('pending','dispatched','accepted') THEN 'running' ELSE status END,
 		    started_at=COALESCE(started_at,NOW()),
@@ -453,7 +458,7 @@ func (g *Gateway) UpdateStage(ctx context.Context, agentID, cmdID, stage, messag
 		                         ELSE GREATEST(lease_expire_at, NOW() + INTERVAL '30 minutes') END,
 		    log=COALESCE(log,'')||$4
 		WHERE id=$1 AND agent_id=$2
-		  AND status NOT IN ('success','failed','rolled_back','timeout','expired','canceled')`,
+		  AND status NOT IN ('success','failed','rolled_back','timeout','expired','canceled')`),
 		cmdID, agentID, stage, line); err != nil {
 		return err
 	}
@@ -476,18 +481,18 @@ func (g *Gateway) UpdateStage(ctx context.Context, agentID, cmdID, stage, messag
 	if finalStatus != "" {
 		note := fmt.Sprintf("[%s] 服务端根据终态阶段自动标记为 %s（最终结果上报会自动覆盖/补充）\n",
 			time.Now().Format("2006-01-02 15:04:05"), finalStatus)
-		toVersion := cmdPayloadVersion(ctx, tx, cmdID)
+		toVersion := g.cmdPayloadVersion(ctx, tx, cmdID)
 		if finalStatus == protocol.CmdSuccess {
 			if v := versionFromSuccessMessage(message); v != "" {
 				toVersion = v
 			}
 		}
 		if taskHostID.Valid {
-			if _, err := tx.ExecContext(ctx, `
+			if _, err := tx.ExecContext(ctx, store.SQL(`
 				UPDATE task_hosts
 				SET status=$2, stage=$3, to_version=CASE WHEN $4<>'' THEN $4 ELSE to_version END,
 				    finished_at=NOW(), log=COALESCE(log,'')||$5
-				WHERE id=$1 AND status NOT IN ('success','failed','rolled_back','timeout','canceled')`,
+				WHERE id=$1 AND status NOT IN ('success','failed','rolled_back','timeout','canceled')`),
 				taskHostID.Int64, finalStatus, stage, toVersion, note); err != nil {
 				return err
 			}
@@ -496,12 +501,12 @@ func (g *Gateway) UpdateStage(ctx context.Context, agentID, cmdID, stage, messag
 			"status": finalStatus, "stage": stage, "to_version": toVersion,
 			"auto_finalized": true,
 		})
-		if _, err := tx.ExecContext(ctx, `
+		if _, err := tx.ExecContext(ctx, store.SQL(`
 			UPDATE commands
 			SET status=$2, last_stage=$3, last_stage_at=NOW(), finished_at=NOW(),
 			    result=COALESCE(result, $4), log=COALESCE(log,'')||$5
 			WHERE id=$1 AND agent_id=$6
-			  AND status NOT IN ('success','failed','rolled_back','timeout','expired','canceled')`,
+			  AND status NOT IN ('success','failed','rolled_back','timeout','expired','canceled')`),
 			cmdID, finalStatus, stage, result, note, agentID); err != nil {
 			return err
 		}
@@ -516,10 +521,10 @@ func (g *Gateway) UpdateStage(ctx context.Context, agentID, cmdID, stage, messag
 }
 
 // cmdPayloadVersion 读取指令下发时的目标版本（用于自动终态时补 to_version）。
-func cmdPayloadVersion(ctx context.Context, tx *sql.Tx, cmdID string) string {
+func (g *Gateway) cmdPayloadVersion(ctx context.Context, tx *sql.Tx, cmdID string) string {
 	var v string
 	_ = tx.QueryRowContext(ctx,
-		`SELECT COALESCE(payload->>'to_version','') FROM commands WHERE id=$1`, cmdID).Scan(&v)
+		g.sql(`SELECT COALESCE(payload->>'to_version','') FROM commands WHERE id=$1`), cmdID).Scan(&v)
 	return normalizeVersion(v)
 }
 
@@ -570,10 +575,10 @@ func (g *Gateway) Report(ctx context.Context, agentID, cmdIDStr string, req prot
 	var lockedID int64
 	if taskHostID.Valid {
 		err = tx.QueryRowContext(ctx,
-			`SELECT id FROM task_hosts WHERE id=$1 FOR UPDATE`, taskHostID.Int64).Scan(&lockedID)
+			g.sql(`SELECT id FROM task_hosts WHERE id=$1 FOR UPDATE`), taskHostID.Int64).Scan(&lockedID)
 	} else {
 		err = tx.QueryRowContext(ctx,
-			`SELECT id FROM commands WHERE id=$1 FOR UPDATE`, cmdID).Scan(&lockedID)
+			g.sql(`SELECT id FROM commands WHERE id=$1 FOR UPDATE`), cmdID).Scan(&lockedID)
 	}
 	if err == sql.ErrNoRows {
 		return tx.Commit()
@@ -650,12 +655,12 @@ func (g *Gateway) Report(ctx context.Context, agentID, cmdIDStr string, req prot
 	// 锁顺序与 Cancel/UpdateStage 一致：先 task_hosts，再 commands。
 	if taskHostID.Valid && final && cmdActive {
 		// 防止覆盖终态：租约回收可能已置为 timeout
-		_, err = tx.ExecContext(ctx, `
+		_, err = tx.ExecContext(ctx, store.SQL(`
 			UPDATE task_hosts
 			SET status=$2, stage=COALESCE(NULLIF($3,''),stage),
 			    to_version=CASE WHEN $4<>'' THEN $4 ELSE to_version END,
 			    exit_code=$5, log=$6, finished_at=NOW()
-			WHERE id=$1 AND status NOT IN ('success','failed','rolled_back','timeout','canceled')`,
+			WHERE id=$1 AND status NOT IN ('success','failed','rolled_back','timeout','canceled')`),
 			taskHostID.Int64, req.Status, req.Stage, req.ToVersion, req.ExitCode, req.Log)
 		if err != nil {
 			return err
@@ -665,22 +670,22 @@ func (g *Gateway) Report(ctx context.Context, agentID, cmdIDStr string, req prot
 		result, _ := json.Marshal(req)
 		if final {
 			// 防止覆盖终态：租约回收可能已置为 timeout/expired
-			_, err = tx.ExecContext(ctx, `
+			_, err = tx.ExecContext(ctx, store.SQL(`
 				UPDATE commands SET status=$2, result=$3,
 				       last_stage=COALESCE(NULLIF($5,''),last_stage),
 				       last_stage_at=NOW(),
 				       log=COALESCE(log,'')||$4, finished_at=NOW()
-				WHERE id=$1 AND status NOT IN ('success','failed','rolled_back','timeout','expired','canceled')`,
+				WHERE id=$1 AND status NOT IN ('success','failed','rolled_back','timeout','expired','canceled')`),
 				cmdID.Int64, req.Status, result, req.Log, req.Stage)
 		} else {
-			_, err = tx.ExecContext(ctx, `
+			_, err = tx.ExecContext(ctx, g.sql(`
 				UPDATE commands SET status='running',
 				       last_stage=COALESCE(NULLIF($3,''),last_stage),
 				       last_stage_at=NOW(),
 				       lease_expire_at=CASE WHEN lease_expire_at IS NULL THEN NULL
 				                            ELSE GREATEST(lease_expire_at, NOW() + INTERVAL '30 minutes') END,
 				       log=COALESCE(log,'')||$2
-				WHERE id=$1 AND status NOT IN ('success','failed','rolled_back','timeout','expired','canceled')`,
+				WHERE id=$1 AND status NOT IN ('success','failed','rolled_back','timeout','expired','canceled')`),
 				cmdID.Int64, req.Log, req.Stage)
 		}
 		if err != nil {

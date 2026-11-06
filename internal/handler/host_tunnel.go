@@ -15,6 +15,7 @@ import (
 	"github.com/iflyelf/iflygo/internal/pkg/hostnet"
 	"github.com/iflyelf/iflygo/internal/pkg/httpx"
 	"github.com/iflyelf/iflygo/internal/pkg/tunnelprobe"
+	"github.com/iflyelf/iflygo/internal/store"
 	"github.com/iflyelf/iflygo/internal/svc"
 )
 
@@ -104,11 +105,11 @@ func HostTunnelTest(s *svc.ServiceContext) http.HandlerFunc {
 			opErr = errors.New("隧道拨测未通过")
 		}
 		// 手动拨测同时更新主机上的自检状态，列表标红/转绿与手动结果一致。
-		if _, err := s.DB.ExecContext(r.Context(), `
+		if _, err := s.DB.ExecContext(r.Context(), store.SQL(`
 			UPDATE hosts
 			SET tunnel_check_ok=$2, tunnel_check_source='platform',
 			    tunnel_check_at=NOW(), tunnel_check_latency_ms=$3, tunnel_check_detail=$4
-			WHERE id=$1`, id, result.OK, result.LatencyMS, tunnelCheckDetail(result)); err != nil {
+			WHERE id=$1`), id, result.OK, result.LatencyMS, tunnelCheckDetail(result)); err != nil {
 			log.Printf("⚠️ 保存手动拨测结果失败 host=%d: %v", id, err)
 		}
 		httpx.OK(w, map[string]any{

@@ -6,9 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/lib/pq"
-
 	"github.com/iflyelf/iflygo/internal/pkg/scope"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // RetryRequest 重新执行请求。
@@ -87,7 +86,7 @@ func (s *Service) Retry(ctx context.Context, sc scope.Scope, taskID int64, req R
 	// 锁顺序与 Cancel/Delete 保持一致：批次 -> 逐机 -> 指令 -> 任务，
 	// 避免与编排器/取消操作互相等待。
 	if _, err := tx.ExecContext(ctx,
-		`SELECT 1 FROM task_batches WHERE task_id=$1 FOR UPDATE`, taskID); err != nil {
+		store.SQL(`SELECT 1 FROM task_batches WHERE task_id=$1 FOR UPDATE`), taskID); err != nil {
 		return res, err
 	}
 
@@ -96,17 +95,17 @@ func (s *Service) Retry(ctx context.Context, sc scope.Scope, taskID int64, req R
 		       EXISTS(SELECT 1 FROM commands c
 		              WHERE c.task_host_id=th.id AND c.status IN (` + activeCommandStatuses() + `)) AS has_active,
 		       EXISTS(SELECT 1 FROM commands c
-		              WHERE c.task_host_id=th.id AND c.status IN (` + activeCommandStatuses() + `)
+		              WHERE c.task_host_id=th.id AND c.status IN (` + activeCommandStatuses() + store.SQL(`)
 		                AND c.lease_expire_at IS NOT NULL AND c.lease_expire_at > NOW()) AS has_live
 		FROM task_hosts th
 		JOIN hosts h ON h.id=th.host_id
-		WHERE th.task_id=$1`
+		WHERE th.task_id=$1`)
 	args := []any{taskID}
 	if len(req.TaskHostIDs) > 0 {
-		q += ` AND th.id = ANY($2)`
-		args = append(args, pq.Array(req.TaskHostIDs))
+		q += store.SQL(` AND th.id = ANY($2)`)
+		args = append(args, store.Array(req.TaskHostIDs))
 	}
-	q += ` ORDER BY th.id FOR UPDATE OF th`
+	q += store.SQL(` ORDER BY th.id FOR UPDATE OF th`)
 
 	rows, err := tx.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -206,16 +205,16 @@ func (s *Service) Retry(ctx context.Context, sc scope.Scope, taskID int64, req R
 		time.Now().Format("2006-01-02 15:04:05"))
 
 	// 先取消旧活动指令，释放唯一索引；旧 Agent 的迟到上报会被终态保护忽略。
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, store.SQL(`
 		UPDATE commands
 		SET status='canceled', finished_at=NOW(), log=COALESCE(log,'')||$2
 		WHERE task_host_id = ANY($1)
-		  AND status IN (`+activeCommandStatuses()+`)`,
-		pq.Array(resetIDs), line); err != nil {
+		  AND status IN (`)+activeCommandStatuses()+`)`,
+		store.Array(resetIDs), line); err != nil {
 		return res, err
 	}
 
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, store.SQL(`
 		UPDATE task_hosts
 		SET status='pending', stage='', exit_code=0,
 		    -- 用 started_at 作为“本次重试基线”：SyncTaskHostsFromCommands 会忽略
@@ -223,7 +222,7 @@ func (s *Service) Retry(ctx context.Context, sc scope.Scope, taskID int64, req R
 		    started_at=NOW(), finished_at=NULL,
 		    attempts=attempts+1,
 		    log=COALESCE(log,'')||$2
-		WHERE id = ANY($1)`, pq.Array(resetIDs), line); err != nil {
+		WHERE id = ANY($1)`), store.Array(resetIDs), line); err != nil {
 		return res, err
 	}
 
@@ -231,21 +230,21 @@ func (s *Service) Retry(ctx context.Context, sc scope.Scope, taskID int64, req R
 	for b := range batchSet {
 		batches = append(batches, b)
 	}
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, store.SQL(`
 		UPDATE task_batches
 		SET status='pending', started_at=NULL, finished_at=NULL
-		WHERE task_id=$1 AND batch_index = ANY($2) AND status <> 'pending'`,
-		taskID, pq.Array(batches)); err != nil {
+		WHERE task_id=$1 AND batch_index = ANY($2) AND status <> 'pending'`),
+		taskID, store.Array(batches)); err != nil {
 		return res, err
 	}
 
 	// 终态任务重新回到 running，让编排器继续推进。
 	res.TaskStatus = "running"
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, store.SQL(`
 		UPDATE upgrade_tasks
 		SET status='running', updated_at=NOW(),
 		    updated_by=COALESCE(NULLIF($2,''), updated_by)
-		WHERE id=$1 AND status IN ('running','paused','failed','success','canceled','rolled_back')`,
+		WHERE id=$1 AND status IN ('running','paused','failed','success','canceled','rolled_back')`),
 		taskID, actorUsername(ctx)); err != nil {
 		return res, err
 	}

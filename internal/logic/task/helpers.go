@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/lib/pq"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 func join(parts []string, sep string) string { return strings.Join(parts, sep) }
@@ -24,4 +24,4 @@ func sortHosts(h []hostRow) {
 }
 
 // arrayWrapper 返回 pq.Array 以便作为 SQL 参数传入 ANY($n)。
-func arrayWrapper(vals []string) any { return pq.Array(vals) }
+func arrayWrapper(vals []string) any { return store.Array(vals) }

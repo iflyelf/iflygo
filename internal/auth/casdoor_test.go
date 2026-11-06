@@ -37,7 +37,7 @@ func newTestCasdoor(endpoint, org string) *Casdoor {
 	return NewCasdoor(CasdoorOptions{
 		Endpoint: endpoint, ClientID: "cid", ClientSecret: "csecret",
 		Organization: org, Application: "app",
-		RedirectURI: "http://localhost/api/auth/callback",
+		RedirectURI:   "http://localhost/api/auth/callback",
 		SessionSecret: "test-secret-at-least-16-bytes-long",
 	})
 }

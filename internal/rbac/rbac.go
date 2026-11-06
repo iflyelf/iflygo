@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/lib/pq"
+	"github.com/iflyelf/iflygo/internal/store"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/iflyelf/iflygo/internal/auth"
@@ -23,6 +23,15 @@ type Service struct{ db *sql.DB }
 
 // NewService 创建服务。
 func NewService(db *sql.DB) *Service { return &Service{db: db} }
+
+// notAdminCond 返回「目标用户不是 admin/superadmin」的复查条件（按方言）。
+// PG 用数组重叠运算符 &&；SQLite 的 roles 列存 JSON 文本，用 json_each 判定。
+func notAdminCond() string {
+	if store.CurrentDialect() == store.SQLite {
+		return `NOT EXISTS (SELECT 1 FROM json_each(COALESCE(roles, '["user"]')) WHERE value IN ('admin','superadmin'))`
+	}
+	return store.SQL(`NOT (COALESCE(roles, ARRAY['user']::text[]) && ARRAY['admin','superadmin']::text[])`)
+}
 
 // validRoles 允许分配的角色白名单。
 // superadmin 具备跨租户权限，必须显式列出，防止任意字符串被写入 roles。
@@ -71,9 +80,9 @@ type UserInfo struct {
 
 // List 列出用户。非 superadmin 只能看到本租户用户。
 func (s *Service) List(ctx context.Context, actor *auth.User) ([]UserInfo, error) {
-	q := `SELECT id, username, COALESCE(display_name,''), COALESCE(tenant_id,1),
+	q := store.SQL(`SELECT id, username, COALESCE(display_name,''), COALESCE(tenant_id,1),
 	             COALESCE(roles, ARRAY['user']::text[]), is_admin, disabled
-	      FROM local_users`
+	      FROM local_users`)
 	var args []any
 	if actor == nil || !actor.IsSuperAdmin() {
 		tid := int64(-1) // fail-close：身份缺失时返回空集
@@ -85,7 +94,7 @@ func (s *Service) List(ctx context.Context, actor *auth.User) ([]UserInfo, error
 	}
 	q += ` ORDER BY username`
 
-	rows, err := s.db.QueryContext(ctx, q, args...)
+	rows, err := s.db.QueryContext(ctx, store.SQL(q), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +102,7 @@ func (s *Service) List(ctx context.Context, actor *auth.User) ([]UserInfo, error
 	out := []UserInfo{}
 	for rows.Next() {
 		var u UserInfo
-		var roles pq.StringArray
+		var roles store.StringArray
 		if err := rows.Scan(&u.ID, &u.Username, &u.Display, &u.TenantID, &roles,
 			&u.IsAdmin, &u.Disabled); err != nil {
 			return nil, err
@@ -143,7 +152,7 @@ func (s *Service) Create(ctx context.Context, actor *auth.User, req CreateReques
 	err = s.db.QueryRowContext(ctx, `
 		INSERT INTO local_users (username, password_hash, display_name, is_admin, tenant_id, roles)
 		VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-		req.Username, string(hash), req.Display, isAdmin, tenantID, pq.Array(roles)).Scan(&id)
+		req.Username, string(hash), req.Display, isAdmin, tenantID, store.Array(roles)).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
@@ -176,13 +185,13 @@ func (s *Service) SetTenantRoles(ctx context.Context, actor *auth.User, username
 		}
 	}
 	isAdmin := containsRole(norm, auth.RoleAdmin) || containsRole(norm, auth.RoleSuperAdmin)
-	q := `UPDATE local_users SET tenant_id=$2, roles=$3, is_admin=$4, updated_at=NOW()
-		WHERE username=$1`
-	args := []any{username, target, pq.Array(norm), isAdmin}
+	q := store.SQL(`UPDATE local_users SET tenant_id=$2, roles=$3, is_admin=$4, updated_at=NOW()
+		WHERE username=$1`)
+	args := []any{username, target, store.Array(norm), isAdmin}
 	if nonSuper {
 		// 复查条件写进 UPDATE，防止校验后目标角色被并发提升。
 		q += ` AND COALESCE(tenant_id,1)=$5
-		   AND NOT (COALESCE(roles, ARRAY['user']::text[]) && ARRAY['admin','superadmin']::text[])`
+		   AND ` + notAdminCond()
 		args = append(args, actor.TenantID)
 	}
 	res, err := s.db.ExecContext(ctx, q, args...)
@@ -198,10 +207,10 @@ func (s *Service) SetTenantRoles(ctx context.Context, actor *auth.User, username
 // targetAccount 返回用户所属租户与当前角色。
 func (s *Service) targetAccount(ctx context.Context, username string) (int64, []string, error) {
 	var tenantID int64
-	var roles pq.StringArray
+	var roles store.StringArray
 	err := s.db.QueryRowContext(ctx,
-		`SELECT COALESCE(tenant_id,1), COALESCE(roles, ARRAY['user']::text[])
-		   FROM local_users WHERE username=$1`, username).Scan(&tenantID, &roles)
+		store.SQL(`SELECT COALESCE(tenant_id,1), COALESCE(roles, ARRAY['user']::text[])
+		   FROM local_users WHERE username=$1`), username).Scan(&tenantID, &roles)
 	if err == sql.ErrNoRows {
 		return 0, nil, fmt.Errorf("用户不存在")
 	}
@@ -221,7 +230,7 @@ func (s *Service) SetDisabled(ctx context.Context, actor *auth.User, username st
 	if actor != nil && actor.Username == username && disabled {
 		return fmt.Errorf("不能禁用当前登录账号")
 	}
-	q := `UPDATE local_users SET disabled=$2, updated_at=NOW() WHERE username=$1`
+	q := store.SQL(`UPDATE local_users SET disabled=$2, updated_at=NOW() WHERE username=$1`)
 	args := []any{username, disabled}
 	nonSuper := actor == nil || !actor.IsSuperAdmin()
 	if nonSuper {
@@ -242,7 +251,7 @@ func (s *Service) SetDisabled(ctx context.Context, actor *auth.User, username st
 		}
 		// 复查条件写进 UPDATE，防止校验后目标被并发提升为管理员。
 		q += ` AND COALESCE(tenant_id,1)=$3
-		   AND NOT (COALESCE(roles, ARRAY['user']::text[]) && ARRAY['admin','superadmin']::text[])`
+		   AND ` + notAdminCond()
 		args = append(args, tid)
 	}
 	res, err := s.db.ExecContext(ctx, q, args...)
@@ -316,10 +325,10 @@ func (s *Service) Delete(ctx context.Context, actor *auth.User, username string)
 		return fmt.Errorf("不能删除当前登录账号")
 	}
 	var tenantID int64
-	var roles pq.StringArray
+	var roles store.StringArray
 	err := s.db.QueryRowContext(ctx,
-		`SELECT COALESCE(tenant_id,1), COALESCE(roles, ARRAY['user']::text[])
-		   FROM local_users WHERE username=$1`, username).Scan(&tenantID, &roles)
+		store.SQL(`SELECT COALESCE(tenant_id,1), COALESCE(roles, ARRAY['user']::text[])
+		   FROM local_users WHERE username=$1`), username).Scan(&tenantID, &roles)
 	if err == sql.ErrNoRows {
 		return fmt.Errorf("用户不存在")
 	}
@@ -374,10 +383,10 @@ func (s *Service) ResetPassword(ctx context.Context, actor *auth.User, username,
 		return err
 	}
 	var tenantID int64
-	var roles pq.StringArray
+	var roles store.StringArray
 	err := s.db.QueryRowContext(ctx,
-		`SELECT COALESCE(tenant_id,1), COALESCE(roles, ARRAY['user']::text[])
-		   FROM local_users WHERE username=$1`, username).Scan(&tenantID, &roles)
+		store.SQL(`SELECT COALESCE(tenant_id,1), COALESCE(roles, ARRAY['user']::text[])
+		   FROM local_users WHERE username=$1`), username).Scan(&tenantID, &roles)
 	if err == sql.ErrNoRows {
 		return fmt.Errorf("用户不存在")
 	}
@@ -403,7 +412,7 @@ func (s *Service) ResetPassword(ctx context.Context, actor *auth.User, username,
 		return err
 	}
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE local_users SET password_hash=$2, updated_at=NOW() WHERE username=$1`,
+		store.SQL(`UPDATE local_users SET password_hash=$2, updated_at=NOW() WHERE username=$1`),
 		username, string(hash))
 	if err != nil {
 		return err

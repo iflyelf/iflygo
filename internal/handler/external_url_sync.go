@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/iflyelf/iflygo/internal/store"
 	"github.com/iflyelf/iflygo/internal/svc"
 )
 
@@ -41,7 +42,7 @@ func SyncExternalURLToAgents(ctx context.Context, s *svc.ServiceContext, target 
 		return n, nil
 	}
 
-	res, err := s.DB.ExecContext(ctx, `
+	res, err := s.DB.ExecContext(ctx, store.SQL(`
 		UPDATE hosts
 		SET server_url_override = $1,
 		    server_url_auto = TRUE,
@@ -52,7 +53,7 @@ func SyncExternalURLToAgents(ctx context.Context, s *svc.ServiceContext, target 
 		    tunnel_check_detail = '等待主机侧自检…',
 		    tunnel_check_requested_at = NOW()
 		WHERE COALESCE(agent_id,'') <> ''
-		  AND (server_url_auto = TRUE OR COALESCE(server_url_override,'') = '')`, target)
+		  AND (server_url_auto = TRUE OR COALESCE(server_url_override,'') = '')`), target)
 	if err != nil {
 		return 0, err
 	}

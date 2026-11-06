@@ -40,8 +40,8 @@ type Migration struct {
 
 // Migrator 迁移管理器。
 type Migrator struct {
-	db       *sql.DB
-	dialect  string
+	db         *sql.DB
+	dialect    string
 	migrations []Migration
 }
 

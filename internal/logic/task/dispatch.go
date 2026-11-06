@@ -8,6 +8,7 @@ import (
 	"github.com/iflyelf/iflygo/internal/logic/component"
 	"github.com/iflyelf/iflygo/internal/pkg/scope"
 	"github.com/iflyelf/iflygo/internal/protocol"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // Start 启动任务：将 draft 置为 running，并为首批 pending 主机生成 commands。
@@ -50,7 +51,7 @@ func (s *Service) Start(ctx context.Context, sc scope.Scope, taskID int64) error
 	args := append([]any{taskID}, tArgs...)
 	args, byExpr := updatedByArg(ctx, args)
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE upgrade_tasks SET status='running', updated_at=NOW(), `+byExpr+`
+		store.SQL(`UPDATE upgrade_tasks SET status='running', updated_at=NOW(), `)+byExpr+`
 		 WHERE id=$1 AND `+tCond+` AND status IN ('draft','paused')`, args...)
 	if err != nil {
 		return err
@@ -84,14 +85,14 @@ func (s *Service) Promote(ctx context.Context, sc scope.Scope, taskID int64) err
 
 	// 先锁失败批次，再恢复任务；与 completeBatch 的加锁顺序一致。
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE task_batches SET status='skipped', finished_at=COALESCE(finished_at,NOW())
-		 WHERE task_id=$1 AND status='failed'`, taskID); err != nil {
+		store.SQL(`UPDATE task_batches SET status='skipped', finished_at=COALESCE(finished_at,NOW())
+		 WHERE task_id=$1 AND status='failed'`), taskID); err != nil {
 		return err
 	}
 	args := append([]any{taskID}, tArgs...)
 	args, byExpr := updatedByArg(ctx, args)
 	res, err := tx.ExecContext(ctx,
-		`UPDATE upgrade_tasks SET status='running', updated_at=NOW(), `+byExpr+`
+		store.SQL(`UPDATE upgrade_tasks SET status='running', updated_at=NOW(), `)+byExpr+`
 		 WHERE id=$1 AND `+tCond+` AND status='paused'`, args...)
 	if err != nil {
 		return err
@@ -111,7 +112,7 @@ func (s *Service) Pause(ctx context.Context, sc scope.Scope, taskID int64) error
 	args := append([]any{taskID}, tArgs...)
 	args, byExpr := updatedByArg(ctx, args)
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE upgrade_tasks SET status='paused', updated_at=NOW(), `+byExpr+`
+		store.SQL(`UPDATE upgrade_tasks SET status='paused', updated_at=NOW(), `)+byExpr+`
 		 WHERE id=$1 AND `+tCond+` AND status='running'`, args...)
 	if err != nil {
 		return err
@@ -155,28 +156,28 @@ func (s *Service) Cancel(ctx context.Context, sc scope.Scope, taskID int64) erro
 	//    与 completeBatch（batch -> task_hosts -> task）、dispatchHost/Report/
 	//    UpdateStage（task_hosts -> commands）保持一致。先锁逐机记录可阻止
 	//    dispatchHost 在取消过程中继续插入新指令，也避免事务互相等待。
-	_, err = tx.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, store.SQL(`
 		UPDATE task_batches
 		SET status='canceled', finished_at=NOW()
-		WHERE task_id=$1 AND status IN ('pending','running')`, taskID)
+		WHERE task_id=$1 AND status IN ('pending','running')`), taskID)
 	if err != nil {
 		return err
 	}
 
 	// 3. 取消逐机记录。
-	_, err = tx.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, store.SQL(`
 		UPDATE task_hosts
 		SET status='canceled', finished_at=NOW()
-		WHERE task_id=$1 AND status IN ('pending','running')`, taskID)
+		WHERE task_id=$1 AND status IN ('pending','running')`), taskID)
 	if err != nil {
 		return err
 	}
 
 	// 4. 取消未完成的 commands（pending/dispatched/accepted/running）
-	_, err = tx.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, store.SQL(`
 		UPDATE commands
 		SET status='canceled', finished_at=NOW()
-		WHERE task_id=$1 AND status IN ('pending','dispatched','accepted','running')`, taskID)
+		WHERE task_id=$1 AND status IN ('pending','dispatched','accepted','running')`), taskID)
 	if err != nil {
 		return err
 	}
@@ -186,7 +187,7 @@ func (s *Service) Cancel(ctx context.Context, sc scope.Scope, taskID int64) erro
 	args := append([]any{taskID}, tArgs...)
 	args, byExpr := updatedByArg(ctx, args)
 	res, err := tx.ExecContext(ctx,
-		`UPDATE upgrade_tasks SET status='canceled', updated_at=NOW(), `+byExpr+`
+		store.SQL(`UPDATE upgrade_tasks SET status='canceled', updated_at=NOW(), `)+byExpr+`
 		 WHERE id=$1 AND `+tCond+` AND status IN ('draft','running','paused')`, args...)
 	if err != nil {
 		return err

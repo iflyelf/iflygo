@@ -113,7 +113,7 @@ func expandCIDR(part string, maxExpand int) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("非法 CIDR %q: %w", part, err)
 	}
-	
+
 	// 预先计算数量，避免 /8 等大段直接展开导致 OOM
 	ones, bits := ipnet.Mask.Size()
 	hostBits := bits - ones

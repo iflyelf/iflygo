@@ -18,6 +18,7 @@ import (
 	"github.com/iflyelf/iflygo/internal/config"
 	"github.com/iflyelf/iflygo/internal/pkg/corsx"
 	"github.com/iflyelf/iflygo/internal/pkg/extbin"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // Item 可配置项定义。
@@ -947,8 +948,8 @@ func (s *Service) Apply(ctx context.Context, kv map[string]string) ([]string, er
 	defer tx.Rollback()
 	for _, p := range pending {
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO app_settings (key, value, updated_at) VALUES ($1,$2,NOW())
-			 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+			store.SQL(`INSERT INTO app_settings (key, value, updated_at) VALUES ($1,$2,NOW())
+			 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`),
 			p.key, p.val); err != nil {
 			return nil, fmt.Errorf("保存设置 %s 失败: %w", p.key, err)
 		}

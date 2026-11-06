@@ -21,6 +21,7 @@ import (
 	"github.com/iflyelf/iflygo/internal/pkg/safepath"
 	"github.com/iflyelf/iflygo/internal/pkg/scope"
 	"github.com/iflyelf/iflygo/internal/storage"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // Artifact 制品元数据。
@@ -486,7 +487,7 @@ func (r *Repo) Delete(ctx context.Context, sc scope.Scope, id int64) (*Artifact,
 	defer lock.Unlock()
 
 	var inUse bool
-	if err := r.db.QueryRowContext(ctx, `
+	if err := r.db.QueryRowContext(ctx, store.SQL(`
 		SELECT EXISTS (
 			SELECT 1 FROM upgrade_tasks
 			 WHERE component_id=$1 AND version=$2 AND status IN ('running','paused')
@@ -494,7 +495,7 @@ func (r *Repo) Delete(ctx context.Context, sc scope.Scope, id int64) (*Artifact,
 			SELECT 1 FROM commands
 			 WHERE status IN ('pending','dispatched','accepted','running')
 			   AND payload->'artifact'->>'id' = $3
-		)`, a.ComponentID, a.Version, fmt.Sprint(id)).Scan(&inUse); err != nil {
+		)`), a.ComponentID, a.Version, fmt.Sprint(id)).Scan(&inUse); err != nil {
 		return a, err
 	}
 	if inUse {

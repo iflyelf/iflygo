@@ -8,10 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lib/pq"
-
 	"github.com/iflyelf/iflygo/internal/pkg/scope"
 	"github.com/iflyelf/iflygo/internal/protocol"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // EnqueueRequest 管理端下发 Agent 自升级的请求。
@@ -81,20 +80,20 @@ func Enqueue(ctx context.Context, db *sql.DB, sc scope.Scope, resolver *Resolver
 	if req.Force && len(req.HostIDs) > 0 {
 		tCond, tArgs := sc.Where("h", 3)
 		args := append([]any{
-			pq.Array(req.HostIDs),
+			store.Array(req.HostIDs),
 			fmt.Sprintf("[%s] 管理员强制重新下发 Agent 自升级，取消旧指令\n",
 				time.Now().Format("2006-01-02 15:04:05")),
 		}, tArgs...)
-		if _, err := db.ExecContext(ctx, `
+		if _, err := db.ExecContext(ctx, store.SQL(`
 			UPDATE commands c
 			SET status='canceled', finished_at=NOW(),
-			    log=COALESCE(c.log,'')||$2
+			    log=COALESCE(log,'')||$2
 			FROM hosts h
 			WHERE c.host_id=h.id AND c.agent_id=h.agent_id
 			  AND c.type='self_update'
 			  AND c.status IN ('pending','dispatched','accepted','running')
 			  AND h.id = ANY($1)
-			  AND `+tCond,
+			  AND `)+tCond,
 			args...); err != nil {
 			return res, err
 		}
@@ -106,7 +105,7 @@ func Enqueue(ctx context.Context, db *sql.DB, sc scope.Scope, resolver *Resolver
 	i := len(tArgs) + 1
 	if len(req.HostIDs) > 0 {
 		where = append(where, fmt.Sprintf("hosts.id = ANY($%d)", i))
-		args = append(args, pq.Array(req.HostIDs))
+		args = append(args, store.Array(req.HostIDs))
 	}
 	rows, err := db.QueryContext(ctx, `
 		SELECT hosts.id, hosts.ip, COALESCE(hosts.hostname,''), hosts.agent_id,
@@ -189,7 +188,7 @@ func AutoEnqueue(ctx context.Context, db *sql.DB, agentID string, resolver *Reso
 	}
 
 	var lastStatus string
-	var lastCreated time.Time
+	var lastCreated store.Time
 	err = db.QueryRowContext(ctx, `
 		SELECT status, created_at FROM commands
 		WHERE agent_id=$1 AND type='self_update'
@@ -198,7 +197,7 @@ func AutoEnqueue(ctx context.Context, db *sql.DB, agentID string, resolver *Reso
 		if isActiveStatus(lastStatus) {
 			return false, nil
 		}
-		if time.Since(lastCreated) < 30*time.Minute {
+		if time.Since(lastCreated.Time) < 30*time.Minute {
 			return false, nil
 		}
 	} else if err != sql.ErrNoRows {
@@ -248,14 +247,14 @@ func insertCommand(ctx context.Context, db *sql.DB, h hostRow, target Target) (b
 	}
 	logLine := fmt.Sprintf("[%s] 已下发 Agent 自升级：%s -> %s（%s）\n",
 		time.Now().Format("2006-01-02 15:04:05"), target.Version, target.Filename(), shortHash(target.SHA256))
-	res, err := db.ExecContext(ctx, `
+	res, err := db.ExecContext(ctx, store.SQL(`
 		INSERT INTO commands (host_id, agent_id, type, payload, status, expire_at, log)
 		SELECT $1::bigint,$2::varchar(64),'self_update',$3::jsonb,'pending',NOW()+INTERVAL '24 hours',$4::text
 		WHERE NOT EXISTS (
 			SELECT 1 FROM commands
 			WHERE agent_id=$2::varchar(64) AND status IN ('pending','dispatched','accepted','running')
 		)
-		ON CONFLICT DO NOTHING`,
+		ON CONFLICT DO NOTHING`),
 		h.ID, h.AgentID, string(payload), logLine)
 	if err != nil {
 		return false, err

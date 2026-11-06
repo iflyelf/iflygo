@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/iflyelf/iflygo/internal/logic/agentupdate"
+	"github.com/iflyelf/iflygo/internal/store"
 	"github.com/iflyelf/iflygo/internal/svc"
 )
 
@@ -62,7 +63,7 @@ func markSelfUpdateSuccess(ctx context.Context, db *sql.DB, agentID, buildHash s
 		return 0
 	}
 	line := fmt.Sprintf("[%s] Agent 已以新版本上线，自升级完成\n", time.Now().Format("2006-01-02 15:04:05"))
-	res, err := db.ExecContext(ctx, `
+	res, err := db.ExecContext(ctx, store.SQL(`
 		UPDATE commands
 		SET status='success', finished_at=NOW(),
 		    last_stage='done', last_stage_at=NOW(),
@@ -71,7 +72,7 @@ func markSelfUpdateSuccess(ctx context.Context, db *sql.DB, agentID, buildHash s
 		    log=COALESCE(log,'')||$3
 		WHERE agent_id=$1 AND type='self_update'
 		  AND status IN ('dispatched','accepted','running')
-		  AND payload->'artifact'->>'sha256'=$2`,
+		  AND payload->'artifact'->>'sha256'=$2`),
 		agentID, buildHash, line)
 	if err != nil {
 		log.Printf("⚠️ 更新 Agent 自升级指令状态失败: %v", err)

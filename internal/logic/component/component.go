@@ -9,9 +9,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/lib/pq"
-
 	"github.com/iflyelf/iflygo/internal/pkg/scope"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // Component 组件定义（与 components 表对应）。
@@ -86,8 +85,8 @@ func (r *Repo) Create(ctx context.Context, sc scope.Scope, c *Component) (int64,
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30)
 		RETURNING id`,
 		c.Name, c.DisplayName, c.DeployMode, c.BinaryName, c.InstallPath,
-		c.BackupDir, c.ExecPath, pq.Array(c.ExecArgs), c.ExecAsUser, defExecTimeout(c.ExecTimeout),
-		pq.Array(c.ExecEnv), c.WorkDir, c.IgnoreError, jsonArr(c.PreInstall), jsonArr(c.PostInstall),
+		c.BackupDir, c.ExecPath, store.Array(c.ExecArgs), c.ExecAsUser, defExecTimeout(c.ExecTimeout),
+		store.Array(c.ExecEnv), c.WorkDir, c.IgnoreError, jsonArr(c.PreInstall), jsonArr(c.PostInstall),
 		c.PostInstallScript, c.ServiceName, c.ServiceMgr, jsonArr(c.StopCmd), jsonArr(c.StartCmd), jsonArr(c.RestartCmd),
 		jsonArr(c.VersionCmd), c.VersionRegex, jsonArr(c.HealthCmd),
 		c.ConsulMaint, c.OSMatch, c.ArchMatch, c.Enabled, c.ScriptURL, sc.TenantForWrite(),
@@ -137,18 +136,18 @@ func (r *Repo) Update(ctx context.Context, sc scope.Scope, c *Component) error {
 		return err
 	}
 	cond, targs := sc.Where("", 30)
-	res, err := r.db.ExecContext(ctx, `
+	res, err := r.db.ExecContext(ctx, store.SQL(`
 		UPDATE components SET display_name=$2, deploy_mode=$3, binary_name=$4, install_path=$5,
 			backup_dir=$6, exec_path=$7, exec_args=$8, exec_as_user=$9, exec_timeout=$10, exec_env=$11,
 			work_dir=$12, ignore_error=$13, pre_install=$14, post_install=$15, post_install_script=$16,
 			service_name=$17, service_mgr=$18, stop_cmd=$19, start_cmd=$20, restart_cmd=$21,
 			version_cmd=$22, version_regex=$23, health_cmd=$24, consul_maint=$25, os_match=$26,
 			arch_match=$27, enabled=$28, script_url=$29, updated_at=NOW()
-		WHERE id=$1 AND `+cond,
+		WHERE id=$1 AND `)+cond,
 		append([]any{
 			c.ID, c.DisplayName, c.DeployMode, c.BinaryName, c.InstallPath,
-			c.BackupDir, c.ExecPath, pq.Array(c.ExecArgs), c.ExecAsUser, defExecTimeout(c.ExecTimeout),
-			pq.Array(c.ExecEnv), c.WorkDir, c.IgnoreError, jsonArr(c.PreInstall), jsonArr(c.PostInstall),
+			c.BackupDir, c.ExecPath, store.Array(c.ExecArgs), c.ExecAsUser, defExecTimeout(c.ExecTimeout),
+			store.Array(c.ExecEnv), c.WorkDir, c.IgnoreError, jsonArr(c.PreInstall), jsonArr(c.PostInstall),
 			c.PostInstallScript, c.ServiceName, c.ServiceMgr, jsonArr(c.StopCmd), jsonArr(c.StartCmd),
 			jsonArr(c.RestartCmd), jsonArr(c.VersionCmd), c.VersionRegex, jsonArr(c.HealthCmd),
 			c.ConsulMaint, c.OSMatch, c.ArchMatch, c.Enabled, c.ScriptURL,
@@ -251,7 +250,7 @@ func (r *Repo) delete(ctx context.Context, sc scope.Scope, id int64, cascadeTask
 	cCond, cArgs := sc.Where("", 2)
 	var locked int
 	err = tx.QueryRowContext(ctx,
-		`SELECT 1 FROM components WHERE id=$1 AND `+cCond+` FOR UPDATE`,
+		`SELECT 1 FROM components WHERE id=$1 AND `+cCond+store.SQL(` FOR UPDATE`),
 		append([]any{id}, cArgs...)...).Scan(&locked)
 	if err == sql.ErrNoRows {
 		return 0, fmt.Errorf("组件不存在或无权访问")
@@ -265,7 +264,7 @@ func (r *Repo) delete(ctx context.Context, sc scope.Scope, id int64, cascadeTask
 	// 在事务内重新核对引用：预检之后仍可能有新任务创建（或草稿任务启动）。
 	// 注意：FOR UPDATE 不能与聚合函数同用，这里先锁行再在内存中统计。
 	rows, err := tx.QueryContext(ctx,
-		`SELECT status FROM upgrade_tasks WHERE component_id=$1 AND `+tCond+` FOR UPDATE`,
+		`SELECT status FROM upgrade_tasks WHERE component_id=$1 AND `+tCond+store.SQL(` FOR UPDATE`),
 		append([]any{id}, tArgs...)...)
 	if err != nil {
 		return 0, err
@@ -343,8 +342,8 @@ func scanRow(s scanner) (*Component, error) {
 	var c Component
 	var pre, post, stop, start, restart, ver, health []byte
 	err := s.Scan(&c.ID, &c.TenantID, &c.Name, &c.DisplayName, &c.DeployMode, &c.BinaryName, &c.InstallPath,
-		&c.BackupDir, &c.ExecPath, pq.Array(&c.ExecArgs), &c.ExecAsUser, &c.ExecTimeout,
-		pq.Array(&c.ExecEnv), &c.WorkDir, &c.IgnoreError, &pre, &post, &c.PostInstallScript,
+		&c.BackupDir, &c.ExecPath, store.Array(&c.ExecArgs), &c.ExecAsUser, &c.ExecTimeout,
+		store.Array(&c.ExecEnv), &c.WorkDir, &c.IgnoreError, &pre, &post, &c.PostInstallScript,
 		&c.ServiceName, &c.ServiceMgr, &stop, &start, &restart, &ver, &c.VersionRegex, &health,
 		&c.ConsulMaint, &c.OSMatch, &c.ArchMatch, &c.Enabled, &c.ScriptURL)
 	if err == sql.ErrNoRows {

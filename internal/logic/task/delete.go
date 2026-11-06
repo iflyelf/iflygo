@@ -6,9 +6,8 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/lib/pq"
-
 	"github.com/iflyelf/iflygo/internal/pkg/scope"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // MaxBatchDelete 单次批量删除的任务数上限。
@@ -146,9 +145,9 @@ func (s *Service) deleteChunkTx(ctx context.Context, tx *sql.Tx, sc scope.Scope,
 	}
 	found := make(map[int64]taskInfo, len(ids))
 	rows, err := tx.QueryContext(ctx,
-		`SELECT id, status, COALESCE(created_by,'') FROM upgrade_tasks
-		  WHERE id = ANY($1) AND `+tCond,
-		append([]any{pq.Array(ids)}, tArgs...)...)
+		store.SQL(`SELECT id, status, COALESCE(created_by,'') FROM upgrade_tasks
+		  WHERE id = ANY($1) AND `)+tCond,
+		append([]any{store.Array(ids)}, tArgs...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -190,14 +189,14 @@ func (s *Service) deleteChunkTx(ctx context.Context, tx *sql.Tx, sc scope.Scope,
 	if len(candidates) == 0 {
 		return nil, nil
 	}
-	arr := pq.Array(candidates)
+	arr := store.Array(candidates)
 
 	// 2. 批量加锁：顺序与 Cancel / completeBatch / dispatchHost 一致，
 	// ORDER BY 保证多个批量删除并发时加锁顺序相同。
 	for _, query := range []string{
-		`SELECT 1 FROM task_batches WHERE task_id = ANY($1) ORDER BY task_id, id FOR UPDATE`,
-		`SELECT 1 FROM task_hosts WHERE task_id = ANY($1) ORDER BY task_id, id FOR UPDATE`,
-		`SELECT 1 FROM commands WHERE task_id = ANY($1) ORDER BY task_id, id FOR UPDATE`,
+		store.SQL(`SELECT 1 FROM task_batches WHERE task_id = ANY($1) ORDER BY task_id, id FOR UPDATE`),
+		store.SQL(`SELECT 1 FROM task_hosts WHERE task_id = ANY($1) ORDER BY task_id, id FOR UPDATE`),
+		store.SQL(`SELECT 1 FROM commands WHERE task_id = ANY($1) ORDER BY task_id, id FOR UPDATE`),
 	} {
 		lr, err := tx.QueryContext(ctx, query, arr)
 		if err != nil {
@@ -212,8 +211,8 @@ func (s *Service) deleteChunkTx(ctx context.Context, tx *sql.Tx, sc scope.Scope,
 	// 3. 锁任务并复查状态，防止预查后被启动/暂停。
 	locked := make(map[int64]string, len(candidates))
 	rows, err = tx.QueryContext(ctx,
-		`SELECT id, status FROM upgrade_tasks
-		  WHERE id = ANY($1) AND `+tCond+` ORDER BY id FOR UPDATE`,
+		store.SQL(`SELECT id, status FROM upgrade_tasks
+		  WHERE id = ANY($1) AND `)+tCond+store.SQL(` ORDER BY id FOR UPDATE`),
 		append([]any{arr}, tArgs...)...)
 	if err != nil {
 		return nil, err
@@ -235,10 +234,10 @@ func (s *Service) deleteChunkTx(ctx context.Context, tx *sql.Tx, sc scope.Scope,
 
 	// 一次聚合统计每个任务的未完成指令数。
 	active := map[int64]int{}
-	rows, err = tx.QueryContext(ctx, `
+	rows, err = tx.QueryContext(ctx, store.SQL(`
 		SELECT task_id, COUNT(*) FROM commands
 		 WHERE task_id = ANY($1) AND status IN ('pending','dispatched','accepted','running')
-		 GROUP BY task_id`, arr)
+		 GROUP BY task_id`), arr)
 	if err != nil {
 		return nil, err
 	}
@@ -278,8 +277,8 @@ func (s *Service) deleteChunkTx(ctx context.Context, tx *sql.Tx, sc scope.Scope,
 	// 4. 一条 DELETE 删除整批，子表经外键 ON DELETE CASCADE 清理。
 	deleted := make([]int64, 0, len(final))
 	rows, err = tx.QueryContext(ctx,
-		`DELETE FROM upgrade_tasks WHERE id = ANY($1) AND `+tCond+` RETURNING id`,
-		append([]any{pq.Array(final)}, tArgs...)...)
+		store.SQL(`DELETE FROM upgrade_tasks WHERE id = ANY($1) AND `)+tCond+` RETURNING id`,
+		append([]any{store.Array(final)}, tArgs...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -354,9 +353,9 @@ func (s *Service) Delete(ctx context.Context, sc scope.Scope, taskID int64) erro
 		return rows.Err()
 	}
 	for _, query := range []string{
-		`SELECT 1 FROM task_batches WHERE task_id=$1 FOR UPDATE`,
-		`SELECT 1 FROM task_hosts WHERE task_id=$1 FOR UPDATE`,
-		`SELECT 1 FROM commands WHERE task_id=$1 FOR UPDATE`,
+		store.SQL(`SELECT 1 FROM task_batches WHERE task_id=$1 FOR UPDATE`),
+		store.SQL(`SELECT 1 FROM task_hosts WHERE task_id=$1 FOR UPDATE`),
+		store.SQL(`SELECT 1 FROM commands WHERE task_id=$1 FOR UPDATE`),
 	} {
 		if err := lockRows(query); err != nil {
 			return err
@@ -365,7 +364,7 @@ func (s *Service) Delete(ctx context.Context, sc scope.Scope, taskID int64) erro
 
 	// 最后锁任务并复查状态，防止检查后被启动/暂停。
 	err = tx.QueryRowContext(ctx,
-		`SELECT status FROM upgrade_tasks WHERE id=$1 AND `+tCond+` FOR UPDATE`,
+		`SELECT status FROM upgrade_tasks WHERE id=$1 AND `+tCond+store.SQL(` FOR UPDATE`),
 		append([]any{taskID}, tArgs...)...).Scan(&status)
 	if err == sql.ErrNoRows {
 		return fmt.Errorf("任务不存在")

@@ -10,6 +10,7 @@ import (
 
 	"github.com/iflyelf/iflygo/internal/pkg/hostnet"
 	"github.com/iflyelf/iflygo/internal/pkg/tunnelprobe"
+	"github.com/iflyelf/iflygo/internal/store"
 	"github.com/iflyelf/iflygo/internal/svc"
 )
 
@@ -29,12 +30,12 @@ const (
 // 注意：这里不能用请求的 context（响应返回后会被取消），改用独立超时 context。
 func triggerTunnelCheck(s *svc.ServiceContext, hostID int64) {
 	// 先写入「待检查」状态，让列表立刻显示进度而不是旧结论。
-	if _, err := s.DB.Exec(`
+	if _, err := s.DB.Exec(store.SQL(`
 		UPDATE hosts
 		SET tunnel_check_ok=NULL, tunnel_check_source='', tunnel_check_at=NULL,
 		    tunnel_check_latency_ms=0, tunnel_check_detail='平台侧拨测中…',
 		    tunnel_check_requested_at=NOW()
-		WHERE id=$1`, hostID); err != nil {
+		WHERE id=$1`), hostID); err != nil {
 		log.Printf("⚠️ 初始化隧道自检状态失败 host=%d: %v", hostID, err)
 		return
 	}
@@ -89,11 +90,11 @@ func runPlatformTunnelCheck(s *svc.ServiceContext, hostID int64) {
 //
 // 若主机侧自检已回报（source=agent），保留主机侧结论——它比平台侧更有说服力。
 func savePlatformTunnelCheck(ctx context.Context, db *sql.DB, hostID int64, res tunnelprobe.Result) {
-	if _, err := db.ExecContext(ctx, `
+	if _, err := db.ExecContext(ctx, store.SQL(`
 		UPDATE hosts
 		SET tunnel_check_ok=$2, tunnel_check_source='platform',
 		    tunnel_check_at=NOW(), tunnel_check_latency_ms=$3, tunnel_check_detail=$4
-		WHERE id=$1 AND COALESCE(tunnel_check_source,'') <> 'agent'`,
+		WHERE id=$1 AND COALESCE(tunnel_check_source,'') <> 'agent'`),
 		hostID, res.OK, res.LatencyMS, tunnelCheckDetail(res)); err != nil {
 		log.Printf("⚠️ 保存隧道拨测结果失败 host=%d: %v", hostID, err)
 	}
@@ -101,12 +102,12 @@ func savePlatformTunnelCheck(ctx context.Context, db *sql.DB, hostID int64, res 
 
 // saveAgentTunnelCheck 写入主机侧自检结果，并清除待检查标记。
 func saveAgentTunnelCheck(ctx context.Context, db *sql.DB, agentID string, res tunnelprobe.Result) {
-	if _, err := db.ExecContext(ctx, `
+	if _, err := db.ExecContext(ctx, store.SQL(`
 		UPDATE hosts
 		SET tunnel_check_ok=$2, tunnel_check_source='agent',
 		    tunnel_check_at=NOW(), tunnel_check_latency_ms=$3, tunnel_check_detail=$4,
 		    tunnel_check_requested_at=NULL
-		WHERE agent_id=$1`,
+		WHERE agent_id=$1`),
 		agentID, res.OK, res.LatencyMS, tunnelCheckDetail(res)); err != nil {
 		log.Printf("⚠️ 保存主机侧自检结果失败 agent=%s: %v", agentID, err)
 	}

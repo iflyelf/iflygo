@@ -9,11 +9,11 @@ import (
 
 var (
 	// 敏感信息匹配模式
-	pathPattern     = regexp.MustCompile(`/[\w\-./]+`)                    // 文件路径
-	ipPattern       = regexp.MustCompile(`\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}`) // IP 地址
-	sqlPattern      = regexp.MustCompile(`(?i)(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE)\s+\S+`) // SQL 片段
-	dbConnPattern   = regexp.MustCompile(`postgresql://[^\s]+`)          // 数据库连接串
-	tokenPattern    = regexp.MustCompile(`token[=:]\s*[\w\-]+`)          // token 值
+	pathPattern   = regexp.MustCompile(`/[\w\-./]+`)                                         // 文件路径
+	ipPattern     = regexp.MustCompile(`\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}`)                 // IP 地址
+	sqlPattern    = regexp.MustCompile(`(?i)(SELECT|INSERT|UPDATE|DELETE|FROM|WHERE)\s+\S+`) // SQL 片段
+	dbConnPattern = regexp.MustCompile(`postgresql://[^\s]+`)                                // 数据库连接串
+	tokenPattern  = regexp.MustCompile(`token[=:]\s*[\w\-]+`)                                // token 值
 )
 
 // Sanitize 过滤错误消息中的敏感信息（供返回给客户端）。
@@ -23,7 +23,7 @@ func Sanitize(err error) string {
 		return ""
 	}
 	msg := err.Error()
-	
+
 	// 数据库错误
 	if strings.Contains(msg, "pq:") || strings.Contains(msg, "sql:") {
 		return "数据库操作失败"
@@ -31,29 +31,29 @@ func Sanitize(err error) string {
 	if dbConnPattern.MatchString(msg) {
 		return "数据库连接失败"
 	}
-	
+
 	// 文件系统错误
 	if strings.Contains(msg, "no such file") || strings.Contains(msg, "permission denied") {
 		return "文件操作失败"
 	}
-	
+
 	// 过滤具体路径
 	msg = pathPattern.ReplaceAllString(msg, "/***")
-	
+
 	// 过滤 IP 地址（保留格式）
 	msg = ipPattern.ReplaceAllString(msg, "***.***.***.***")
-	
+
 	// 过滤 SQL 片段
 	msg = sqlPattern.ReplaceAllString(msg, "SQL查询")
-	
+
 	// 过滤 token
 	msg = tokenPattern.ReplaceAllString(msg, "token=***")
-	
+
 	// 通用错误消息（超过 200 字符截断）
 	if len(msg) > 200 {
 		msg = msg[:200] + "..."
 	}
-	
+
 	return msg
 }
 
@@ -74,7 +74,7 @@ func IsNotFound(err error) bool {
 		return false
 	}
 	msg := err.Error()
-	return strings.Contains(msg, "不存在") || 
-	       strings.Contains(msg, "not found") ||
-	       strings.Contains(msg, "no rows")
+	return strings.Contains(msg, "不存在") ||
+		strings.Contains(msg, "not found") ||
+		strings.Contains(msg, "no rows")
 }

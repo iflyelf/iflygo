@@ -15,6 +15,7 @@ import (
 	"github.com/iflyelf/iflygo/internal/pkg/ipx"
 	"github.com/iflyelf/iflygo/internal/pkg/scope"
 	"github.com/iflyelf/iflygo/internal/protocol"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 const (
@@ -86,6 +87,7 @@ type Task struct {
 // Service 任务服务。
 type Service struct {
 	db       *sql.DB
+	dialect  store.Dialect
 	compRepo *component.Repo
 	artRepo  *artifact.Repo
 	// allowExecMode 是否允许下发 exec/replace_exec/script 模式（默认 false，安全）。
@@ -301,12 +303,15 @@ func (s *Service) ownerChecker(ctx context.Context) func(createdBy string) error
 }
 
 // NewService 创建任务服务。allowExecMode 为 nil 时视为禁止。
-func NewService(db *sql.DB, compRepo *component.Repo, artRepo *artifact.Repo, allowExecMode func() bool) *Service {
+func NewService(db *sql.DB, dialect store.Dialect, compRepo *component.Repo, artRepo *artifact.Repo, allowExecMode func() bool) *Service {
 	if allowExecMode == nil {
 		allowExecMode = func() bool { return false }
 	}
-	return &Service{db: db, compRepo: compRepo, artRepo: artRepo, allowExecMode: allowExecMode}
+	return &Service{db: db, dialect: dialect, compRepo: compRepo, artRepo: artRepo, allowExecMode: allowExecMode}
 }
+
+// sql 将 SQL 适配为当前方言（PostgreSQL 原样，SQLite 转换语法）。
+func (s *Service) sql(q string) string { return store.AdaptSQL(s.dialect, q) }
 
 // SetReconciler 注入指令/逐机状态对账函数（由服务端启动时设置）。
 func (s *Service) SetReconciler(fn func(context.Context) (int, error)) {

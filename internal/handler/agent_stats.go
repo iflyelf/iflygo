@@ -9,6 +9,7 @@ import (
 
 	"github.com/iflyelf/iflygo/internal/logic/agentupdate"
 	"github.com/iflyelf/iflygo/internal/pkg/httpx"
+	"github.com/iflyelf/iflygo/internal/store"
 	"github.com/iflyelf/iflygo/internal/svc"
 )
 
@@ -39,7 +40,10 @@ func AgentStats(s *svc.ServiceContext) http.HandlerFunc {
 		if err != nil || d < 1*time.Second {
 			d = 1 * time.Minute
 		}
-		offlineInterval := fmt.Sprintf("'%.0f seconds'", d.Seconds())
+		offlineExpr := fmt.Sprintf("NOW() - INTERVAL '%.0f seconds'", d.Seconds())
+		if store.CurrentDialect() == store.SQLite {
+			offlineExpr = fmt.Sprintf("datetime('now', '-%.0f seconds')", d.Seconds())
+		}
 
 		tCond, tArgs := reqScope(r).Where("h", 1)
 		// 兼容历史数据：早期注册未回填 agents.host_id，此时按 agent_id 关联主机；
@@ -50,7 +54,7 @@ func AgentStats(s *svc.ServiceContext) http.HandlerFunc {
 		//
 		// offline 判定：agent.status='offline' 或心跳超时（last_heartbeat_at 为空
 		// 或超过配置的 offline_after 阈值）。
-		rows, err := s.DB.QueryContext(r.Context(), `
+		q := `
 			SELECT COALESCE(NULLIF(a.build_version,''), NULLIF(a.agent_version,''), '') AS version,
 			       COALESCE(a.os,''), COALESCE(a.arch,''),
 			       CASE WHEN COALESCE(a.build_variant,'')=''
@@ -61,13 +65,14 @@ func AgentStats(s *svc.ServiceContext) http.HandlerFunc {
 			       COUNT(*) FILTER (
 			           WHERE a.status='offline'
 			              OR a.last_heartbeat_at IS NULL
-			              OR a.last_heartbeat_at < NOW() - INTERVAL `+offlineInterval+`
+			              OR a.last_heartbeat_at < ` + offlineExpr + `
 			       ) AS offline
 			  FROM agents a
 			  JOIN hosts h ON h.id = a.host_id OR (a.host_id IS NULL AND h.agent_id = a.agent_id)
-			 WHERE `+tCond+`
+			 WHERE ` + tCond + `
 			 GROUP BY 1,2,3,4,5
-			 ORDER BY total DESC`, tArgs...)
+			 ORDER BY total DESC`
+		rows, err := s.DB.QueryContext(r.Context(), store.SQL(q), tArgs...)
 		if err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return

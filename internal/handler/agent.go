@@ -28,6 +28,7 @@ import (
 	"github.com/iflyelf/iflygo/internal/pkg/safepath"
 	"github.com/iflyelf/iflygo/internal/pkg/tunnelprobe"
 	"github.com/iflyelf/iflygo/internal/protocol"
+	"github.com/iflyelf/iflygo/internal/store"
 	"github.com/iflyelf/iflygo/internal/svc"
 )
 
@@ -117,7 +118,7 @@ func AgentRegister(s *svc.ServiceContext) http.HandlerFunc {
 
 		// upsert 主机拿到 host_id；冲突且租户不同则不返回行。
 		var hostID int64
-		err = tx.QueryRowContext(ctx, `INSERT INTO hosts (ip, hostname, os_family, os_version, arch, kernel, agent_id, agent_version,
+		err = tx.QueryRowContext(ctx, store.SQL(`INSERT INTO hosts (ip, hostname, os_family, os_version, arch, kernel, agent_id, agent_version,
 				agent_build_version, agent_build_hash, agent_build_variant, exit_ip, agent_status, supervisor, source, last_seen, tenant_id)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'online',$13,'agent',NOW(),$14)
 			ON CONFLICT (ip) DO UPDATE SET hostname=EXCLUDED.hostname, os_family=COALESCE(NULLIF(EXCLUDED.os_family,''),hosts.os_family),
@@ -130,7 +131,7 @@ func AgentRegister(s *svc.ServiceContext) http.HandlerFunc {
 				agent_status='online', supervisor=EXCLUDED.supervisor,
 				source='agent', last_seen=NOW()
 			WHERE hosts.tenant_id = EXCLUDED.tenant_id
-			RETURNING id`,
+			RETURNING id`),
 			ip, hostname, osName, osVersion, arch, kernel, agentID, agentVersion,
 			buildVersion, buildHash, buildVariant, exitIP, supervisor, tenantID).Scan(&hostID)
 		if err == sql.ErrNoRows {
@@ -156,8 +157,8 @@ func AgentRegister(s *svc.ServiceContext) http.HandlerFunc {
 		}
 
 		// 安全：token 仅存哈希（SHA-256，token 为 256bit 随机，抗爆破）；明文只回给 Agent 一次。
-		_, err = tx.ExecContext(ctx, `INSERT INTO agents (agent_id, host_id, ip, token_hash, secret, arch, os, agent_version, supervisor, signature_modes, capabilities, build_version, build_hash, build_variant, status, last_heartbeat_at)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'online',NOW())`,
+		_, err = tx.ExecContext(ctx, store.SQL(`INSERT INTO agents (agent_id, host_id, ip, token_hash, secret, arch, os, agent_version, supervisor, signature_modes, capabilities, build_version, build_hash, build_variant, status, last_heartbeat_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'online',NOW())`),
 			agentID, hostID, ip, agentgw.HashToken(token), secret, arch, osName, agentVersion, supervisor,
 			strings.Join(signatureModes, ","), strings.Join(capabilities, ","), buildVersion, buildHash, buildVariant)
 		if err != nil {
@@ -211,9 +212,9 @@ func AgentHeartbeat(s *svc.ServiceContext) http.HandlerFunc {
 		// hosts -> agents 加锁顺序一致，避免与注册并发时形成死锁环。
 		var (
 			serverURLOverride string
-			checkRequested    sql.NullTime
+			checkRequested    store.NullTime
 		)
-		_ = s.DB.QueryRowContext(r.Context(), `UPDATE hosts SET last_seen=NOW(),
+		_ = s.DB.QueryRowContext(r.Context(), store.SQL(`UPDATE hosts SET last_seen=NOW(),
 			agent_status=CASE WHEN maintenance_until IS NOT NULL AND maintenance_until>NOW() THEN agent_status ELSE $2 END,
 			agent_version=CASE WHEN $3<>'' THEN $3 ELSE agent_version END,
 			agent_build_version=CASE WHEN $3<>'' THEN $3 ELSE agent_build_version END,
@@ -223,13 +224,13 @@ func AgentHeartbeat(s *svc.ServiceContext) http.HandlerFunc {
 			agent_server_url=CASE WHEN $7<>'' THEN $7 ELSE agent_server_url END,
 			agent_default_server_url=CASE WHEN $8<>'' THEN $8 ELSE agent_default_server_url END
 			WHERE agent_id=$1
-			RETURNING COALESCE(server_url_override,''), tunnel_check_requested_at`, agentID, status, buildVersion, buildHash, buildVariant,
+			RETURNING COALESCE(server_url_override,''), tunnel_check_requested_at`), agentID, status, buildVersion, buildHash, buildVariant,
 			hostnet.NormalizeExitIP(req.ExitIP),
 			normalizeServerURL(req.AgentServerURL), normalizeServerURL(req.AgentDefaultServerURL)).
 			Scan(&serverURLOverride, &checkRequested)
 		// 旧 Agent 不上报 build_hash：不能用空值覆盖已有构建信息。
 		// 新 Agent 上报 build_hash 后，即使 variant 为空也会写回（普通构建）。
-		_, _ = s.DB.ExecContext(r.Context(), `UPDATE agents SET last_heartbeat_at=NOW(), status=$2,
+		_, _ = s.DB.ExecContext(r.Context(), store.SQL(`UPDATE agents SET last_heartbeat_at=NOW(), status=$2,
 			agent_version=CASE WHEN $3<>'' THEN $3 ELSE agent_version END,
 			host_id=COALESCE(host_id,(SELECT id FROM hosts WHERE agent_id=$1 ORDER BY id LIMIT 1)),
 			signature_modes=CASE WHEN $6<>'' THEN $6 ELSE signature_modes END,
@@ -237,7 +238,7 @@ func AgentHeartbeat(s *svc.ServiceContext) http.HandlerFunc {
 			build_version=CASE WHEN $3<>'' THEN $3 ELSE build_version END,
 			build_hash=CASE WHEN $4<>'' THEN $4 ELSE build_hash END,
 			build_variant=CASE WHEN $4<>'' THEN $5 ELSE build_variant END
-			WHERE agent_id=$1`, agentID, status, buildVersion, buildHash, buildVariant, modes, caps)
+			WHERE agent_id=$1`), agentID, status, buildVersion, buildHash, buildVariant, modes, caps)
 		// 历史数据修正：旧版本经 Nginx 注册时 hosts.ip 可能被写成 127.0.0.1。
 		// 若本次心跳已能解析出真实来源 IP，自动把该主机的注册来源迁移过去，
 		// 无需删除主机后重新注册。
@@ -667,7 +668,7 @@ func consumeEnrollTokenTx(ctx context.Context, tx *sql.Tx, token, clientIP strin
 		}
 	}
 	var tenantID int64
-	err := tx.QueryRowContext(ctx, `
+	err := tx.QueryRowContext(ctx, store.SQL(`
 		UPDATE enroll_tokens
 		SET used_at = CASE WHEN token_type='one_time' THEN NOW() ELSE used_at END,
 		    used_by_ip = CASE WHEN token_type='one_time' THEN $2 ELSE used_by_ip END,
@@ -686,7 +687,7 @@ func consumeEnrollTokenTx(ctx context.Context, tx *sql.Tx, token, clientIP strin
 		        cardinality(allowed_cidrs)=0
 		     OR NULLIF($3,'')::inet <<= ANY(allowed_cidrs::cidr[])
 		  )
-		RETURNING COALESCE(tenant_id,1)`,
+		RETURNING COALESCE(tenant_id,1)`),
 		agentgw.HashToken(token), ip, ipForCIDR).Scan(&tenantID)
 	if err != nil || tenantID <= 0 {
 		return 0, false

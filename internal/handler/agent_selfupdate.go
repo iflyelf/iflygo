@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"database/sql"
 	"fmt"
 	"net/http"
 	"time"
@@ -9,6 +8,7 @@ import (
 	"github.com/iflyelf/iflygo/internal/logic/agentupdate"
 	"github.com/iflyelf/iflygo/internal/pkg/audit"
 	"github.com/iflyelf/iflygo/internal/pkg/httpx"
+	"github.com/iflyelf/iflygo/internal/store"
 	"github.com/iflyelf/iflygo/internal/svc"
 )
 
@@ -57,7 +57,7 @@ type selfUpdateRecent struct {
 	Status     string     `json:"status"`
 	ToVersion  string     `json:"to_version"`
 	Log        string     `json:"log"`
-	CreatedAt  time.Time  `json:"created_at"`
+	CreatedAt  store.Time `json:"created_at"`
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
 }
 
@@ -69,13 +69,13 @@ func AgentSelfUpdateStatus(s *svc.ServiceContext) http.HandlerFunc {
 		resolver := agentUpdateResolver(s)
 
 		hCond, hArgs := reqScope(r).Where("h", 1)
-		rows, err := s.DB.QueryContext(r.Context(), `
+		rows, err := s.DB.QueryContext(r.Context(), store.SQL(`
 			SELECT c.id, c.agent_id, h.ip, COALESCE(h.hostname,''), c.status,
 			       COALESCE(c.payload->>'to_version',''), COALESCE(c.log,''),
 			       c.created_at, c.finished_at
 			FROM commands c
 			JOIN hosts h ON h.agent_id = c.agent_id
-			WHERE c.type='self_update' AND `+hCond+`
+			WHERE c.type='self_update' AND `)+hCond+`
 			ORDER BY c.id DESC LIMIT 50`, hArgs...)
 		if err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
@@ -87,7 +87,7 @@ func AgentSelfUpdateStatus(s *svc.ServiceContext) http.HandlerFunc {
 		for rows.Next() {
 			var (
 				it       selfUpdateRecent
-				finished sql.NullTime
+				finished store.NullTime
 			)
 			if err := rows.Scan(&it.ID, &it.AgentID, &it.IP, &it.Hostname, &it.Status,
 				&it.ToVersion, &it.Log, &it.CreatedAt, &finished); err != nil {

@@ -23,14 +23,14 @@ func TestSafeSegment(t *testing.T) {
 
 func TestSanitizeFilename(t *testing.T) {
 	cases := map[string]string{
-		"normal.bin":        "normal.bin",
-		"../../etc/passwd":  "passwd",
-		"/abs/path/x.tar":   "x.tar",
-		"a b c.txt":         "a_b_c.txt",
-		"..":                "file",
-		"":                  "file",
-		"a\"b.js":           "a_b.js",
-		"....hidden":        "hidden",
+		"normal.bin":       "normal.bin",
+		"../../etc/passwd": "passwd",
+		"/abs/path/x.tar":  "x.tar",
+		"a b c.txt":        "a_b_c.txt",
+		"..":               "file",
+		"":                 "file",
+		"a\"b.js":          "a_b.js",
+		"....hidden":       "hidden",
 	}
 	for in, want := range cases {
 		if got := SanitizeFilename(in); got != want {

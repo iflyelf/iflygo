@@ -14,6 +14,7 @@ import (
 
 	"github.com/iflyelf/iflygo/internal/auth"
 	"github.com/iflyelf/iflygo/internal/pkg/scope"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // maxJobFailureDetails 作业里保留的失败明细上限；总数见 FailedCount。
@@ -33,7 +34,7 @@ type DeleteJob struct {
 	Failed          []BatchDeleteFailure `json:"failed"`
 	CancelRequested bool                 `json:"cancel_requested"`
 	CreatedBy       string               `json:"created_by"`
-	CreatedAt       time.Time            `json:"created_at"`
+	CreatedAt       store.Time           `json:"created_at"`
 	FinishedAt      *time.Time           `json:"finished_at,omitempty"`
 }
 
@@ -97,7 +98,7 @@ func (s *Service) CreateDeleteJob(ctx context.Context, sc scope.Scope, ip string
 		                              actor_roles, actor_ip, ids, total)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
 		sc.TenantForWrite(), sc.CrossTenant, username, isAdmin,
-		pq.Array(roles), ip, pq.Array(uniq), len(uniq)).Scan(&id); err != nil {
+		store.Array(roles), ip, store.Array(uniq), len(uniq)).Scan(&id); err != nil {
 		var pqErr *pq.Error
 		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
 			return nil, fmt.Errorf("已有删除作业正在执行，请等待完成或先停止")
@@ -124,7 +125,7 @@ const deleteJobColumns = `id, status, total, processed, deleted, failed_count, f
 func scanDeleteJob(row interface{ Scan(...any) error }) (*DeleteJob, error) {
 	var j DeleteJob
 	var failed []byte
-	var finished sql.NullTime
+	var finished store.NullTime
 	if err := row.Scan(&j.ID, &j.Status, &j.Total, &j.Processed, &j.Deleted, &j.FailedCount,
 		&failed, &j.CancelRequested, &j.CreatedBy, &j.CreatedAt, &finished); err != nil {
 		return nil, err
@@ -176,8 +177,8 @@ func (s *Service) ActiveDeleteJob(ctx context.Context, sc scope.Scope) (*DeleteJ
 func (s *Service) CancelDeleteJob(ctx context.Context, sc scope.Scope, id int64) (*DeleteJob, error) {
 	cond, args := jobVisibility(ctx, sc, 2)
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE task_delete_jobs SET cancel_requested=TRUE, updated_at=NOW()
-		  WHERE id=$1 AND status IN ('pending','running') AND `+cond,
+		store.SQL(`UPDATE task_delete_jobs SET cancel_requested=TRUE, updated_at=NOW()
+		  WHERE id=$1 AND status IN ('pending','running') AND `)+cond,
 		append([]any{id}, args...)...)
 	if err != nil {
 		return nil, err
@@ -245,14 +246,14 @@ func (s *Service) runDeleteJobOnce(ctx context.Context) (bool, error) {
 		processed, total       int
 		failedRaw              []byte
 	)
-	err = tx.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, s.sql(`
 		SELECT id, tenant_id, cross_tenant, created_by, actor_is_admin, actor_roles, actor_ip,
 		       ids, processed, total, failed, cancel_requested
 		  FROM task_delete_jobs
 		 WHERE status IN ('pending','running')
-		 ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED`).Scan(
-		&jobID, &tenantID, &cross, &createdBy, &isAdmin, pq.Array(&roles), &ip,
-		pq.Array(&ids), &processed, &total, &failedRaw, &cancel)
+		 ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED`)).Scan(
+		&jobID, &tenantID, &cross, &createdBy, &isAdmin, store.Array(&roles), &ip,
+		store.Array(&ids), &processed, &total, &failedRaw, &cancel)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -265,8 +266,8 @@ func (s *Service) runDeleteJobOnce(ctx context.Context) (bool, error) {
 		if cancel && processed < len(ids) {
 			status = "canceled"
 		}
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE task_delete_jobs SET status=$2, finished_at=NOW(), updated_at=NOW() WHERE id=$1`,
+		if _, err := tx.ExecContext(ctx, store.SQL(`
+			UPDATE task_delete_jobs SET status=$2, finished_at=NOW(), updated_at=NOW() WHERE id=$1`),
 			jobID, status); err != nil {
 			return false, err
 		}
@@ -332,11 +333,11 @@ func (s *Service) runDeleteJobOnce(ctx context.Context) (bool, error) {
 		status = "done"
 		finished = time.Now()
 	}
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, store.SQL(`
 		UPDATE task_delete_jobs
 		   SET processed=$2, deleted=deleted+$3, failed_count=failed_count+$4, failed=$5,
 		       status=$6, finished_at=$7, updated_at=NOW()
-		 WHERE id=$1`,
+		 WHERE id=$1`),
 		jobID, newProcessed, len(deleted), len(chunkFailed), storedJSON, status, finished); err != nil {
 		return false, err
 	}

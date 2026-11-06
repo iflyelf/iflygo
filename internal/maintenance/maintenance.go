@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"log"
 	"time"
+
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // Maintainer 数据库维护器。
@@ -37,10 +39,10 @@ func (m *Maintainer) CleanupAITokens(ctx context.Context) (int64, error) {
 	if days <= 0 {
 		return 0, nil
 	}
-	res, err := m.db.ExecContext(ctx, `
+	res, err := m.db.ExecContext(ctx, store.SQL(`
 		DELETE FROM ai_access_tokens
 		WHERE (revoked_at IS NOT NULL AND revoked_at < NOW() - ($1 || ' days')::interval)
-		   OR (expires_at IS NOT NULL AND expires_at < NOW() - ($1 || ' days')::interval)`, days)
+		   OR (expires_at IS NOT NULL AND expires_at < NOW() - ($1 || ' days')::interval)`), days)
 	if err != nil {
 		return 0, err
 	}
@@ -54,10 +56,10 @@ func (m *Maintainer) CleanupAIActions(ctx context.Context) (int64, error) {
 	if m.aiTokenRetention != nil {
 		days = m.aiTokenRetention()
 	}
-	res, err := m.db.ExecContext(ctx, `
+	res, err := m.db.ExecContext(ctx, store.SQL(`
 		DELETE FROM ai_assistant_actions
 		WHERE (executed_at IS NULL AND expires_at < NOW())
-		   OR ($1 > 0 AND COALESCE(executed_at, expires_at) < NOW() - ($1 || ' days')::interval)`, days)
+		   OR ($1 > 0 AND COALESCE(executed_at, expires_at) < NOW() - ($1 || ' days')::interval)`), days)
 	if err != nil {
 		return 0, err
 	}
@@ -159,11 +161,11 @@ func (m *Maintainer) runMaintenance(ctx context.Context) {
 // cleanupExpiredData 清理过期数据。
 func (m *Maintainer) cleanupExpiredData(ctx context.Context) {
 	// 清理过期未取的指令
-	result, err := m.db.ExecContext(ctx, `
+	result, err := m.db.ExecContext(ctx, store.SQL(`
 		DELETE FROM commands 
 		WHERE status = 'pending' 
 		AND expire_at < NOW() - INTERVAL '7 days'
-	`)
+	`))
 	if err != nil {
 		log.Printf("⚠️ 清理过期指令失败: %v", err)
 		return
@@ -173,11 +175,11 @@ func (m *Maintainer) cleanupExpiredData(ctx context.Context) {
 	}
 
 	// 清理僵尸维护窗口（超过 24 小时）
-	result, err = m.db.ExecContext(ctx, `
+	result, err = m.db.ExecContext(ctx, store.SQL(`
 		UPDATE hosts 
 		SET maintenance_until = NULL, maintenance_reason = '' 
 		WHERE maintenance_until < NOW() - INTERVAL '1 day'
-	`)
+	`))
 	if err != nil {
 		log.Printf("⚠️ 清理维护窗口失败: %v", err)
 		return
@@ -189,11 +191,11 @@ func (m *Maintainer) cleanupExpiredData(ctx context.Context) {
 
 // cleanupOldCommands 清理旧指令（保留 30 天）。
 func (m *Maintainer) cleanupOldCommands(ctx context.Context) {
-	result, err := m.db.ExecContext(ctx, `
+	result, err := m.db.ExecContext(ctx, store.SQL(`
 		DELETE FROM commands 
 		WHERE status IN ('success', 'failed', 'rolled_back', 'timeout', 'expired', 'canceled') 
 		AND finished_at < NOW() - INTERVAL '30 days'
-	`)
+	`))
 	if err != nil {
 		log.Printf("⚠️ 清理旧指令失败: %v", err)
 		return
@@ -211,9 +213,9 @@ func (m *Maintainer) cleanupAuditLogs(ctx context.Context) {
 			days = v
 		}
 	}
-	result, err := m.db.ExecContext(ctx, `
+	result, err := m.db.ExecContext(ctx, store.SQL(`
 		DELETE FROM audit_logs
-		WHERE created_at < NOW() - ($1 || ' days')::interval`, days)
+		WHERE created_at < NOW() - ($1 || ' days')::interval`), days)
 	if err != nil {
 		log.Printf("⚠️ 清理审计日志失败: %v", err)
 		return
@@ -227,12 +229,12 @@ func (m *Maintainer) cleanupAuditLogs(ctx context.Context) {
 func (m *Maintainer) archiveOldTasks(ctx context.Context) {
 	// 标记 90 天前完成的任务（实际可移到 upgrade_tasks_archive 表）
 	// 注意：upgrade_tasks 无 finished_at 字段，终态时间以 updated_at 为准。
-	result, err := m.db.ExecContext(ctx, `
+	result, err := m.db.ExecContext(ctx, store.SQL(`
 		UPDATE upgrade_tasks
 		SET status = 'archived'
 		WHERE status IN ('success', 'failed', 'canceled', 'rolled_back')
 		  AND updated_at < NOW() - INTERVAL '90 days'
-	`)
+	`))
 	if err != nil {
 		log.Printf("⚠️ 归档旧任务失败: %v", err)
 		return
@@ -297,11 +299,11 @@ func (m *Maintainer) GetMaintenanceStatus(ctx context.Context) (map[string]any, 
 
 	// 待清理数据
 	var expiredCommands int
-	_ = m.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM commands WHERE expire_at < NOW() - INTERVAL '7 days'`).Scan(&expiredCommands)
+	_ = m.db.QueryRowContext(ctx, store.SQL(`SELECT COUNT(*) FROM commands WHERE expire_at < NOW() - INTERVAL '7 days'`)).Scan(&expiredCommands)
 	stats["expired_commands"] = expiredCommands
 
 	var oldCommands int
-	_ = m.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM commands WHERE finished_at < NOW() - INTERVAL '30 days'`).Scan(&oldCommands)
+	_ = m.db.QueryRowContext(ctx, store.SQL(`SELECT COUNT(*) FROM commands WHERE finished_at < NOW() - INTERVAL '30 days'`)).Scan(&oldCommands)
 	stats["old_commands"] = oldCommands
 
 	return stats, nil
