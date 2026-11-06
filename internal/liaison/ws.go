@@ -256,7 +256,7 @@ func (s *Service) handleDesktopSession(conn *websocket.Conn, u *auth.User, hs ws
 	case "vnc":
 		s.handleVNC(conn, hs)
 	case "rdp":
-		sendWSError(conn, "RDP 远程桌面尚未实现（协议栈待接入）")
+		s.handleRDP(conn, hs)
 	default:
 		sendWSError(conn, "未知桌面协议: "+hs.Sub+"（支持 vnc / rdp）")
 	}

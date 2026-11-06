@@ -495,6 +495,7 @@
       case 'policies': body = liaisonPoliciesView(); break;
       case 'ssh': body = liaisonSSHView(); break;
       case 'vnc': body = liaisonVNCView(); break;
+      case 'rdp': body = liaisonRDPView(); break;
       default: body = liaisonFilesView();
     }
     return h('div', {}, [
@@ -735,6 +736,61 @@
     dv.setUint8(1, down);
     dv.setUint32(4, keyCode);
     ws.send(buf);
+  }
+  function liaisonRDPView() {
+    var host = h('input', { placeholder: '目标主机（overlay IP 或 Windows IP）', value: '10.66.0.1' }, []);
+    var port = h('input', { placeholder: '端口', type: 'number', value: 3389 }, []);
+    var user = h('input', { placeholder: '用户名', value: 'Administrator' }, []);
+    var pass = h('input', { placeholder: '密码', type: 'password' }, []);
+    var wrap = h('div', { class: 'vnc-wrap', id: 'rdp-wrap' }, [h('div', { class: 'muted' }, ['（输入 Windows 主机信息后点「连接」）'])]);
+    var connectBtn = h('button', { class: 'btn primary', onclick: function () { liaisonRDPConnect(host, port, user, pass, wrap); } }, ['连接']);
+    return h('div', { class: 'card' }, [
+      h('div', { class: 'card-head' }, [h('h3', {}, ['远程桌面（RDP）'])]),
+      h('div', { class: 'form-row2' }, [host, port, user, pass, connectBtn]),
+      wrap
+    ]);
+  }
+  function liaisonRDPConnect(host, port, user, pass, wrap) {
+    var ws;
+    try {
+      var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(proto + '//' + location.host + '/api/liaison/ws');
+    } catch (e) { wrap.replaceChildren(h('div', { class: 'err field' }, ['[连接失败] ' + e.message])); return; }
+    ws.binaryType = 'arraybuffer';
+    var canvas = null, ctx = null, imgData = null, W = 0, H = 0;
+    function setMsg(t) { wrap.replaceChildren(h('div', { class: 'muted' }, [t])); }
+    ws.onopen = function () {
+      ws.send(JSON.stringify({ kind: 'desktop', sub: 'rdp', host: host.value, port: Number(port.value || 3389), user: user.value, password: pass.value }));
+    };
+    ws.onmessage = function (ev) {
+      if (typeof ev.data === 'string') {
+        try {
+          var m = JSON.parse(ev.data);
+          if (m.type === 'ready') {
+            W = m.width; H = m.height;
+            canvas = document.createElement('canvas');
+            canvas.width = W; canvas.height = H;
+            canvas.style.cssText = 'max-width:100%;background:#000;border-radius:6px;';
+            ctx = canvas.getContext('2d');
+            imgData = ctx.createImageData(W, H);
+            wrap.replaceChildren(canvas);
+            attachVNCInput(canvas, ws, W, H);
+          } else if (m.type === 'error') { setMsg('[错误] ' + m.message); }
+        } catch (e2) {}
+      } else if (canvas) {
+        var dv = new DataView(ev.data);
+        var x = dv.getUint16(0), y = dv.getUint16(2), w = dv.getUint16(4), h = dv.getUint16(6);
+        var px = new Uint8ClampedArray(ev.data, 8);
+        for (var yy = 0; yy < h; yy++) {
+          var srcOff = yy * w * 4;
+          var dstOff = ((y + yy) * W + x) * 4;
+          imgData.data.set(px.subarray(srcOff, srcOff + w * 4), dstOff);
+        }
+        ctx.putImageData(imgData, 0, 0);
+      }
+    };
+    ws.onclose = function () { setMsg('[连接已关闭]'); };
+    ws.onerror = function () { setMsg('[连接错误]'); };
   }
 
 
@@ -1034,7 +1090,8 @@
           { label: 'LLM 对话', active: state.view === 'liaison' && state.liaisonSection === 'llm', onclick: function () { state.liaisonSection = 'llm'; switchView('liaison'); } },
           { label: '策略管理', active: state.view === 'liaison' && state.liaisonSection === 'policies', onclick: function () { state.liaisonSection = 'policies'; switchView('liaison'); } },
           { label: 'Web SSH', active: state.view === 'liaison' && state.liaisonSection === 'ssh', onclick: function () { state.liaisonSection = 'ssh'; switchView('liaison'); } },
-          { label: '远程桌面（VNC）', active: state.view === 'liaison' && state.liaisonSection === 'vnc', onclick: function () { state.liaisonSection = 'vnc'; switchView('liaison'); } }
+          { label: '远程桌面（VNC）', active: state.view === 'liaison' && state.liaisonSection === 'vnc', onclick: function () { state.liaisonSection = 'vnc'; switchView('liaison'); } },
+          { label: '远程桌面（RDP）', active: state.view === 'liaison' && state.liaisonSection === 'rdp', onclick: function () { state.liaisonSection = 'rdp'; switchView('liaison'); } }
         ], state.view === 'liaison'),
         navDropdown('帮助', helpItems, false)
       ]),
