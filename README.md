@@ -1,9 +1,10 @@
 # iFlyGo 🚀
 
-高可用 P2P 隧道 + Web 控制面。目标：用**两个自包含的 Go 静态二进制**（`iflygo-server` / `iflygo-client`）构建一个可水平扩展、数据面去中心化的安全隧道服务。
+高可用 P2P 隧道 + 升级控制平台 + 远程访问/管理的一体化平台。目标：用**两个自包含的 Go 静态二进制**（`iflygo-server` / `iflygo-client`）构建一个可水平扩展、数据面去中心化的安全隧道服务，并完整复刻 `upgrade_mgr` 的主机/组件/制品/任务/RBAC/审计/AI 管理能力，附远程访问（DDNSTO）与远程管理套件（Liaison）。
 
-## ✨ 特性（规划）
+## ✨ 特性
 
+### 隧道（数据面去中心化）
 - ✅ **P2P 优先**：UDP 打洞成功走直连，性能不受服务端带宽限制
 - ✅ **自动兜底**：打洞失败走 Relay（UDP），UDP 被封锁时走 TCP Relay
 - ✅ **端到端加密**：即使经 Relay/Edge 转发，也无法解密内容
@@ -11,6 +12,26 @@
 - ✅ **不安全路由 HA**：多网关加权 ECMP + 健康检查 + 自动故障切换
 - ✅ **Web 管理**：Token 接入、IPAM、证书签发、配置下发、自定义域名/二级前缀
 - ✅ **跨平台**：`CGO_ENABLED=0` 交叉编译，Linux / Windows / macOS / 树莓派 / NAS
+
+### 升级控制平台（完整复刻 upgrade_mgr）
+- ✅ 主机清单 / 组件 / 制品 / 升级任务（灰度编排、批次、重试、取消、回滚）
+- ✅ Agent 注册 / 心跳 / 指令下发 / 进度上报 / 自升级
+- ✅ 多租户 + RBAC（用户/团队/角色/服务组/组织架构）+ 审计日志
+- ✅ AI 接入（MCP/令牌/助手）+ 外部文件白名单 + 快速上手引导
+- ✅ 三主题（🌞暖沙米 / 🌊冷蓝 / 🌙暗黑）+ Mac 圆角 + H5 自适应
+
+### 远程访问（DDNSTO）
+- ✅ 给客户端自动分配子域名 `<slug>.<ddnsto_domain>`，一键穿透到 overlay 目标
+- ✅ 复用 edge 数据面（域名 → overlay 反向代理），无带宽套餐限制
+
+### 远程管理套件（Liaison）
+- ✅ Casbin RBAC 细粒度授权（策略存库，默认 superadmin/admin 全权限）
+- ✅ Web SSH 终端（WebSocket 桥接 x/crypto/ssh）
+- ✅ 文件管理 / Web 数据库查询 / LLM 网关（OpenAI 兼容）
+- ⏳ Web RDP / VNC（guacamole 通道已预留，协议栈待接入）
+
+### 双数据库
+- ✅ **PostgreSQL + SQLite 双库**：同一套代码全功能支持，`$N`/`NOW()`/数组/时间戳/并发原语跨库适配
 
 ## 🏛️ 角色划分
 
@@ -40,6 +61,10 @@
 - [x] ACME 自动证书（Let's Encrypt，HTTP-01 + TLS-ALPN-01）
 - [x] 证书续期 / 吊销（pki.blocklist）
 - [x] Web 管理页面：客户端 / 网络 / 节点 / 路由 / 域名
+- [x] 前端合并：upgrade_mgr 完整控制台（主机/组件/制品/任务/AI/RBAC/审计/设置）+ 隧道管理 + DDNSTO 远程访问 + Liaison 远程管理
+- [x] 双数据库（PostgreSQL + SQLite）全量支持（81 handler + 153 路由 + 39 迁移）
+- [x] DDNSTO 远程访问：子域名自动分配 + edge 穿透
+- [x] Liaison 远程管理套件：Casbin RBAC / Web SSH / 文件管理 / Web DB / LLM 网关
 
 ## 🔌 控制面 API（已实现）
 
@@ -65,6 +90,25 @@
 | GET/POST | `/api/edge-services` | 边缘服务（自定义域名 → overlay 目标） |
 | DELETE | `/api/edge-services/{id}` | 删除边缘服务 |
 | GET | `/api/server-nodes/{id}/edge-routes` | 边缘节点路由表 |
+
+### 远程访问（DDNSTO）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/ddnsto/access` | 远程访问条目列表 |
+| POST | `/api/ddnsto/access` | 开通远程访问（自动分配子域名 + 创建 edge 映射） |
+| DELETE | `/api/ddnsto/access/{id}` | 删除远程访问 |
+
+### 远程管理套件（Liaison）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/liaison/ws` | WebSocket 通道（SSH/RDP/VNC 终端） |
+| GET/PUT/DELETE | `/api/liaison/files*` | 文件管理（列目录/读/写/上传/删除） |
+| GET/POST/DELETE | `/api/liaison/db/connections*` | Web 数据库连接管理 |
+| POST | `/api/liaison/db/query` | 执行 SQL 查询 |
+| GET/POST | `/api/liaison/llm/*` | LLM 网关（模型/对话） |
+| GET/POST/DELETE | `/api/liaison/policies` | Casbin 策略管理（superadmin） |
 
 ## 🔧 本地构建
 
