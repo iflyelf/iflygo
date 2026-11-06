@@ -3,14 +3,14 @@
 -- 旧系统需使用官方 v0.23.1（Go 1.20 构建）。仅在管理员已配置对应主条目时追加，
 -- 不覆盖自定义 URL；默认白名单（未保存过设置）已内置这两条。
 UPDATE app_settings
-SET value = rtrim(value, E'\n') || E'\n' ||
+SET value = rtrim(value, char(10)) || char(10) ||
     'windows-exporter-amd64-legacy=https://github.com/iflyelf/windows_exporter/releases/download/latest/windows_exporter-amd64-legacy.exe'
 WHERE key = 'server.external_binaries'
   AND lower(value) LIKE '%windows-exporter-amd64=%'
   AND lower(value) NOT LIKE '%windows-exporter-amd64-legacy=%';
 
 UPDATE app_settings
-SET value = rtrim(value, E'\n') || E'\n' ||
+SET value = rtrim(value, char(10)) || char(10) ||
     'windows-exporter-arm64-legacy=https://github.com/iflyelf/windows_exporter/releases/download/latest/windows_exporter-arm64-legacy.exe'
 WHERE key = 'server.external_binaries'
   AND lower(value) LIKE '%windows-exporter-arm64=%'

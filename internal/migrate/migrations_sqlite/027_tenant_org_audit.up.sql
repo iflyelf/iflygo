@@ -15,10 +15,6 @@ ALTER TABLE org_departments ADD COLUMN tenant_id BIGINT NOT NULL DEFAULT 1;
 ALTER TABLE audit_logs ADD COLUMN tenant_id BIGINT NOT NULL DEFAULT 0;
 
 -- 唯一约束改为租户内唯一
-ALTER TABLE roles           DROP CONSTRAINT IF EXISTS roles_name_key;
-ALTER TABLE teams           DROP CONSTRAINT IF EXISTS teams_name_key;
-ALTER TABLE service_groups  DROP CONSTRAINT IF EXISTS service_groups_name_key;
-ALTER TABLE org_departments DROP CONSTRAINT IF EXISTS org_departments_dept_id_key;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_roles_tenant_name
     ON roles(tenant_id, name);

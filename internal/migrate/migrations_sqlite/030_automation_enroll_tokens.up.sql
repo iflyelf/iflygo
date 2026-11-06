@@ -23,18 +23,15 @@ UPDATE enroll_tokens
 SET used_count = 1
 WHERE used_at IS NOT NULL AND used_count = 0;
 
-ALTER TABLE enroll_tokens DROP CONSTRAINT IF EXISTS chk_enroll_token_type;
 ALTER TABLE enroll_tokens
     ADD CONSTRAINT chk_enroll_token_type
     CHECK (token_type IN ('one_time', 'automation'));
 
-ALTER TABLE enroll_tokens DROP CONSTRAINT IF EXISTS chk_enroll_token_max_uses;
 ALTER TABLE enroll_tokens
     ADD CONSTRAINT chk_enroll_token_max_uses
     CHECK (max_uses >= 0 AND used_count >= 0);
 
 -- 一次性令牌必须有过期时间且只能使用一次；自动化令牌允许 expires_at 为空。
-ALTER TABLE enroll_tokens DROP CONSTRAINT IF EXISTS chk_enroll_token_one_time;
 ALTER TABLE enroll_tokens
     ADD CONSTRAINT chk_enroll_token_one_time
     CHECK (token_type <> 'one_time' OR (expires_at IS NOT NULL AND max_uses = 1));

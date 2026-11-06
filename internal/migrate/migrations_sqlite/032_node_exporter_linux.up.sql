@@ -3,14 +3,14 @@
 -- 与 028 一致：已有 windows-exporter 主条目（即沿用内置默认）时追加，
 -- 已存在同名条目则跳过，不覆盖管理员自定义 URL；未保存过设置的部署直接使用内置默认。
 UPDATE app_settings
-SET value = rtrim(value, E'\n') || E'\n' ||
+SET value = rtrim(value, char(10)) || char(10) ||
     'node-exporter-linux-amd64=https://github.com/iflyelf/node_exporter/releases/download/latest/node_exporter-linux-amd64'
 WHERE key = 'server.external_binaries'
   AND lower(value) LIKE '%windows-exporter-amd64=%'
   AND lower(value) NOT LIKE '%node-exporter-linux-amd64=%';
 
 UPDATE app_settings
-SET value = rtrim(value, E'\n') || E'\n' ||
+SET value = rtrim(value, char(10)) || char(10) ||
     'node-exporter-linux-arm64=https://github.com/iflyelf/node_exporter/releases/download/latest/node_exporter-linux-arm64'
 WHERE key = 'server.external_binaries'
   AND lower(value) LIKE '%windows-exporter-amd64=%'
