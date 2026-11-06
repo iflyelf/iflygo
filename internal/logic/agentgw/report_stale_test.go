@@ -12,6 +12,7 @@ import (
 
 	"github.com/iflyelf/iflygo/internal/migrate"
 	"github.com/iflyelf/iflygo/internal/protocol"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 type fakeConsul struct {
@@ -39,7 +40,7 @@ func TestReportDuplicateFinalConsulAndStaleGuard(t *testing.T) {
 	}
 	// 关闭必须在其他 t.Cleanup（删测试数据）之后：LIFO 顺序。
 	t.Cleanup(func() { db.Close() })
-	if err := migrate.AutoMigrate(db); err != nil {
+	if err := migrate.AutoMigrate(db, migrate.DialectPostgres); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
@@ -83,7 +84,7 @@ func TestReportDuplicateFinalConsulAndStaleGuard(t *testing.T) {
 		db.Exec(`DELETE FROM hosts WHERE id=$1`, hostID)
 	})
 
-	g := New(db)
+	g := New(db, store.Postgres)
 	consul := &fakeConsul{}
 	g.SetConsul(consul)
 

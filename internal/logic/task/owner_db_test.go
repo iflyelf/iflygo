@@ -16,6 +16,7 @@ import (
 	"github.com/iflyelf/iflygo/internal/migrate"
 	"github.com/iflyelf/iflygo/internal/pkg/scope"
 	"github.com/iflyelf/iflygo/internal/protocol"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // TestTaskOwnerOnly 非管理员只能操作自己创建的任务（开关可控）。
@@ -30,7 +31,7 @@ func TestTaskOwnerOnly(t *testing.T) {
 	}
 	// 关闭必须在其他 t.Cleanup（删测试数据）之后：LIFO 顺序。
 	t.Cleanup(func() { db.Close() })
-	if err := migrate.AutoMigrate(db); err != nil {
+	if err := migrate.AutoMigrate(db, migrate.DialectPostgres); err != nil {
 		t.Fatalf("迁移失败: %v", err)
 	}
 	ctx := context.Background()
@@ -45,7 +46,7 @@ func TestTaskOwnerOnly(t *testing.T) {
 	}
 	t.Cleanup(func() { db.Exec(`DELETE FROM upgrade_tasks WHERE id=$1`, taskID) })
 
-	s := NewService(db, nil, nil, nil)
+	s := NewService(db, store.Postgres, nil, nil, nil)
 	sc := scope.New(1, false)
 
 	// 未开启策略：任何人都能操作（此处只验证通过 owner 校验）
@@ -96,7 +97,7 @@ func TestCreatedByWritten(t *testing.T) {
 	}
 	// 关闭必须在其他 t.Cleanup（删测试数据）之后：LIFO 顺序。
 	t.Cleanup(func() { db.Close() })
-	if err := migrate.AutoMigrate(db); err != nil {
+	if err := migrate.AutoMigrate(db, migrate.DialectPostgres); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
@@ -113,7 +114,7 @@ func TestCreatedByWritten(t *testing.T) {
 	}
 	t.Cleanup(func() { db.Exec(`DELETE FROM hosts WHERE id=$1`, hostID) })
 
-	s := NewService(db, nil, nil, func() bool { return true })
+	s := NewService(db, store.Postgres, nil, nil, func() bool { return true })
 	id, err := s.Create(ctx, scope.New(1, true), CreateRequest{
 		Kind:      "command",
 		Name:      "owner-test",
@@ -149,7 +150,7 @@ func TestTaskOwnerOffTeamShare(t *testing.T) {
 	}
 	// 关闭必须在其他 t.Cleanup（删测试数据）之后：LIFO 顺序。
 	t.Cleanup(func() { db.Close() })
-	if err := migrate.AutoMigrate(db); err != nil {
+	if err := migrate.AutoMigrate(db, migrate.DialectPostgres); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
@@ -176,7 +177,7 @@ func TestTaskOwnerOffTeamShare(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := NewService(db, nil, nil, nil)
+	s := NewService(db, store.Postgres, nil, nil, nil)
 	sc := scope.New(1, false)
 	s.SetOwnerOnlyPolicy(func() bool { return true }) // 全局限制
 	s.SetOwnerPolicyResolver(func(context.Context, string) (string, error) { return "off", nil })
@@ -205,7 +206,7 @@ func TestTaskDeployRecheck(t *testing.T) {
 	}
 	// 关闭必须在其他 t.Cleanup（删测试数据）之后：LIFO 顺序。
 	t.Cleanup(func() { db.Close() })
-	if err := migrate.AutoMigrate(db); err != nil {
+	if err := migrate.AutoMigrate(db, migrate.DialectPostgres); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
@@ -220,7 +221,7 @@ func TestTaskDeployRecheck(t *testing.T) {
 	}
 	t.Cleanup(func() { db.Exec(`DELETE FROM upgrade_tasks WHERE id=$1`, taskID) })
 
-	s := NewService(db, nil, nil, nil)
+	s := NewService(db, store.Postgres, nil, nil, nil)
 	sc := scope.New(1, false)
 
 	bobCtx := auth.WithUser(ctx, &auth.User{Username: "bob", TenantID: 1})
@@ -249,7 +250,7 @@ func TestPreviewHostGroupScope(t *testing.T) {
 	}
 	// 关闭必须在其他 t.Cleanup（删测试数据）之后：LIFO 顺序。
 	t.Cleanup(func() { db.Close() })
-	if err := migrate.AutoMigrate(db); err != nil {
+	if err := migrate.AutoMigrate(db, migrate.DialectPostgres); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
@@ -272,7 +273,7 @@ func TestPreviewHostGroupScope(t *testing.T) {
 	}
 	t.Cleanup(func() { db.Exec(`DELETE FROM hosts WHERE ip=$1`, hostIP) })
 
-	s := NewService(db, component.NewRepo(db), nil, nil)
+	s := NewService(db, store.Postgres, component.NewRepo(db), nil, nil)
 	sc := scope.New(1, true)
 	req := CreateRequest{
 		Kind: KindUpgrade, ComponentID: compID, Version: "v1",
@@ -312,7 +313,7 @@ func TestUpdatedByOnActions(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	if err := migrate.AutoMigrate(db); err != nil {
+	if err := migrate.AutoMigrate(db, migrate.DialectPostgres); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
@@ -338,7 +339,7 @@ func TestUpdatedByOnActions(t *testing.T) {
 		return v
 	}
 
-	s := NewService(db, nil, nil, func() bool { return true })
+	s := NewService(db, store.Postgres, nil, nil, func() bool { return true })
 	admin := func(name string) context.Context {
 		return auth.WithUser(ctx, &auth.User{Username: name, TenantID: 1, IsAdmin: true})
 	}

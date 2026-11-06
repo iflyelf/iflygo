@@ -46,7 +46,7 @@ func TestConcurrentMigrate(t *testing.T) {
 			}
 			// 关闭必须在其他 t.Cleanup（删测试数据）之后：LIFO 顺序。
 			t.Cleanup(func() { db.Close() })
-			errs[idx] = AutoMigrate(db)
+			errs[idx] = AutoMigrate(db, DialectPostgres)
 		}(i)
 	}
 	wg.Wait()
@@ -70,7 +70,7 @@ func TestConcurrentMigrate(t *testing.T) {
 		`SELECT COUNT(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("查询迁移记录失败: %v", err)
 	}
-	m, _ := New(db)
+	m, _ := New(db, DialectPostgres)
 	if count != len(m.migrations) {
 		t.Fatalf("迁移记录数=%d，期望=%d（可能有重复或缺失）", count, len(m.migrations))
 	}

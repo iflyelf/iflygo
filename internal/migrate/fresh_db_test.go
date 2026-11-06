@@ -23,7 +23,7 @@ func TestFreshDatabaseMigrate(t *testing.T) {
 	if err := db.Ping(); err != nil {
 		t.Fatalf("ping 失败: %v", err)
 	}
-	if err := AutoMigrate(db); err != nil {
+	if err := AutoMigrate(db, DialectPostgres); err != nil {
 		t.Fatalf("❌ 全新库迁移失败: %v", err)
 	}
 	t.Log("✅ 全新库迁移成功")

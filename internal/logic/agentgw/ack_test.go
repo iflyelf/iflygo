@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	_ "github.com/lib/pq"
+
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // TestAckOwnership 验证 Ack 只能确认自己的指令，不能篡改他人指令。
@@ -28,7 +30,7 @@ func TestAckOwnership(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	g := New(db)
+	g := New(db, store.Postgres)
 
 	// 构造两个 agent 的指令：victim 属于 agent-A，attacker 是 agent-B
 	const victimAgent = "test-ack-victim-agent"

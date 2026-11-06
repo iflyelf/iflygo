@@ -26,7 +26,7 @@ func TestAutoMigrate(t *testing.T) {
 	cleanupTestDB(t, db)
 
 	// 测试自动迁移
-	if err := AutoMigrate(db); err != nil {
+	if err := AutoMigrate(db, DialectPostgres); err != nil {
 		t.Fatalf("自动迁移失败: %v", err)
 	}
 
@@ -98,7 +98,7 @@ func TestAutoMigrate(t *testing.T) {
 	t.Logf("✅ local_users 已具备 tenant_id / roles")
 
 	// 测试重复执行迁移（幂等性）
-	if err := AutoMigrate(db); err != nil {
+	if err := AutoMigrate(db, DialectPostgres); err != nil {
 		t.Fatalf("重复迁移失败: %v", err)
 	}
 	t.Logf("✅ 重复迁移测试通过（幂等性）")
@@ -117,7 +117,7 @@ func TestMigratorStatus(t *testing.T) {
 	// 关闭必须在其他 t.Cleanup（删测试数据）之后：LIFO 顺序。
 	t.Cleanup(func() { db.Close() })
 
-	m, err := New(db)
+	m, err := New(db, DialectPostgres)
 	if err != nil {
 		t.Fatalf("创建 Migrator 失败: %v", err)
 	}

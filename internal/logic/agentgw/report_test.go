@@ -9,6 +9,7 @@ import (
 	_ "github.com/lib/pq"
 
 	"github.com/iflyelf/iflygo/internal/protocol"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // TestReportTargetsCorrectCommand 验证 Report 按 cmdID 精确定位：
@@ -26,7 +27,7 @@ func TestReportTargetsCorrectCommand(t *testing.T) {
 	// 关闭必须在其他 t.Cleanup（删测试数据）之后：LIFO 顺序。
 	t.Cleanup(func() { db.Close() })
 
-	g := New(db)
+	g := New(db, store.Postgres)
 	ctx := context.Background()
 
 	const owner = "rep-owner-agent"

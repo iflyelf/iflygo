@@ -14,6 +14,7 @@ import (
 	"github.com/iflyelf/iflygo/internal/migrate"
 	"github.com/iflyelf/iflygo/internal/pkg/signer"
 	"github.com/iflyelf/iflygo/internal/protocol"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // TestDequeueSendsLegacyAndV2Signature 验证服务端同时下发两套签名：
@@ -30,12 +31,12 @@ func TestDequeueSendsLegacyAndV2Signature(t *testing.T) {
 	}
 	// 关闭必须在其他 t.Cleanup（删测试数据）之后：LIFO 顺序。
 	t.Cleanup(func() { db.Close() })
-	if err := migrate.AutoMigrate(db); err != nil {
+	if err := migrate.AutoMigrate(db, migrate.DialectPostgres); err != nil {
 		t.Fatalf("迁移失败: %v", err)
 	}
 
 	ctx := context.Background()
-	g := New(db)
+	g := New(db, store.Postgres)
 	agentID := fmt.Sprintf("sig-test-agent-%d", time.Now().UnixNano())
 	secret := "sig-test-secret"
 	t.Cleanup(func() {
@@ -102,12 +103,12 @@ func TestDequeueUsesAdvertisedLegacySignature(t *testing.T) {
 	}
 	// 关闭必须在其他 t.Cleanup（删测试数据）之后：LIFO 顺序。
 	t.Cleanup(func() { db.Close() })
-	if err := migrate.AutoMigrate(db); err != nil {
+	if err := migrate.AutoMigrate(db, migrate.DialectPostgres); err != nil {
 		t.Fatalf("迁移失败: %v", err)
 	}
 
 	ctx := context.Background()
-	g := New(db)
+	g := New(db, store.Postgres)
 	cases := []struct {
 		name       string
 		modes      string
@@ -202,12 +203,12 @@ func TestDequeueSignsLegacyCommandField(t *testing.T) {
 	}
 	// 关闭必须在其他 t.Cleanup（删测试数据）之后：LIFO 顺序。
 	t.Cleanup(func() { db.Close() })
-	if err := migrate.AutoMigrate(db); err != nil {
+	if err := migrate.AutoMigrate(db, migrate.DialectPostgres); err != nil {
 		t.Fatalf("迁移失败: %v", err)
 	}
 
 	ctx := context.Background()
-	g := New(db)
+	g := New(db, store.Postgres)
 	agentID := fmt.Sprintf("sig-legacy-cmd-%d", time.Now().UnixNano())
 	secret := "sig-legacy-cmd-secret"
 	t.Cleanup(func() {

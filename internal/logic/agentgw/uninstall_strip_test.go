@@ -14,6 +14,7 @@ import (
 	"github.com/iflyelf/iflygo/internal/migrate"
 	"github.com/iflyelf/iflygo/internal/pkg/signer"
 	"github.com/iflyelf/iflygo/internal/protocol"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // TestDequeueStripsServiceNameForLegacyUninstall 卸载指令的 service_name 下发规则：
@@ -32,12 +33,12 @@ func TestDequeueStripsServiceNameForLegacyUninstall(t *testing.T) {
 		t.Fatalf("连接数据库失败: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
-	if err := migrate.AutoMigrate(db); err != nil {
+	if err := migrate.AutoMigrate(db, migrate.DialectPostgres); err != nil {
 		t.Fatalf("迁移失败: %v", err)
 	}
 
 	ctx := context.Background()
-	g := New(db)
+	g := New(db, store.Postgres)
 	secret := "uninstall-strip-secret"
 	sfx := time.Now().UnixNano()
 

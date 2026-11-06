@@ -13,6 +13,7 @@ import (
 	"github.com/iflyelf/iflygo/internal/migrate"
 	"github.com/iflyelf/iflygo/internal/pkg/signer"
 	"github.com/iflyelf/iflygo/internal/protocol"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // TestAckSignatureFallback 验证旧 Agent 的签名路径自动探测：
@@ -29,12 +30,12 @@ func TestAckSignatureFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	if err := migrate.AutoMigrate(db); err != nil {
+	if err := migrate.AutoMigrate(db, migrate.DialectPostgres); err != nil {
 		t.Fatalf("迁移失败: %v", err)
 	}
 
 	ctx := context.Background()
-	g := New(db)
+	g := New(db, store.Postgres)
 	const agentID = "test-ack-fallback-agent"
 	const secret = "test-secret"
 	t.Cleanup(func() {

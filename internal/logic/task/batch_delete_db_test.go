@@ -12,6 +12,7 @@ import (
 
 	"github.com/iflyelf/iflygo/internal/migrate"
 	"github.com/iflyelf/iflygo/internal/pkg/scope"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // TestBatchDeleteSetBased 按集合删除时逐个任务的判定与单个 Delete 一致：
@@ -29,7 +30,7 @@ func TestBatchDeleteSetBased(t *testing.T) {
 		t.Fatalf("打开数据库失败: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
-	if err := migrate.AutoMigrate(db); err != nil {
+	if err := migrate.AutoMigrate(db, migrate.DialectPostgres); err != nil {
 		t.Fatalf("数据库迁移失败: %v", err)
 	}
 	ctx := context.Background()
@@ -77,7 +78,7 @@ func TestBatchDeleteSetBased(t *testing.T) {
 	}
 
 	missing := int64(1 << 60)
-	res, err := NewService(db, nil, nil, nil).BatchDelete(ctx, scope.New(1, false),
+	res, err := NewService(db, store.Postgres, nil, nil, nil).BatchDelete(ctx, scope.New(1, false),
 		[]int64{draft, success, running, busy, otherTenant, missing, draft})
 	if err != nil {
 		t.Fatalf("批量删除失败: %v", err)

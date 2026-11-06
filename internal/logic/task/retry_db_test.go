@@ -14,6 +14,7 @@ import (
 	"github.com/iflyelf/iflygo/internal/migrate"
 	"github.com/iflyelf/iflygo/internal/pkg/scope"
 	"github.com/iflyelf/iflygo/internal/protocol"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // TestRetryFailedAndStuckHosts 验证「重新执行」只重置失败/卡住主机：
@@ -32,7 +33,7 @@ func TestRetryFailedAndStuckHosts(t *testing.T) {
 	}
 	// 关闭必须在其他 t.Cleanup（删测试数据）之后：LIFO 顺序。
 	t.Cleanup(func() { db.Close() })
-	if err := migrate.AutoMigrate(db); err != nil {
+	if err := migrate.AutoMigrate(db, migrate.DialectPostgres); err != nil {
 		t.Fatalf("数据库迁移失败: %v", err)
 	}
 	ctx := context.Background()
@@ -101,7 +102,7 @@ func TestRetryFailedAndStuckHosts(t *testing.T) {
 		db.Exec(`DELETE FROM hosts WHERE id = ANY($1)`, hostIDs[:])
 	})
 
-	svc := NewService(db, nil, nil, nil)
+	svc := NewService(db, store.Postgres, nil, nil, nil)
 	res, err := svc.Retry(ctx, scope.New(1, true), taskID, RetryRequest{Force: true})
 	if err != nil {
 		t.Fatal(err)
@@ -139,7 +140,7 @@ func TestRetryFailedAndStuckHosts(t *testing.T) {
 	}
 
 	// 对账不能把重试基线之前的旧 failed/timeout 重新写回 pending 主机。
-	if _, err := agentgw.New(db).ReconcileTasks(ctx); err != nil {
+	if _, err := agentgw.New(db, store.Postgres).ReconcileTasks(ctx); err != nil {
 		t.Fatalf("对账失败: %v", err)
 	}
 	check(0, "pending")
@@ -147,7 +148,7 @@ func TestRetryFailedAndStuckHosts(t *testing.T) {
 	check(3, "pending")
 
 	// 被取消的旧指令迟到上报必须忽略，不能把刚重置的 pending 改成 failed。
-	if err := agentgw.New(db).Report(ctx, "retry-agent-1", fmt.Sprintf("%d", cmdFailed),
+	if err := agentgw.New(db, store.Postgres).Report(ctx, "retry-agent-1", fmt.Sprintf("%d", cmdFailed),
 		protocol.ReportRequest{Status: protocol.CmdFailed, Stage: protocol.StageFailed}); err != nil {
 		t.Fatalf("迟到上报处理失败: %v", err)
 	}
@@ -175,7 +176,7 @@ func TestRetryFailedAndStuckHosts(t *testing.T) {
 	check(2, "pending")
 
 	// 旧成功指令的迟到重复上报不能把强制重试后的 pending 改回 success。
-	if err := agentgw.New(db).Report(ctx, "retry-agent-3", fmt.Sprintf("%d", cmdSuccess),
+	if err := agentgw.New(db, store.Postgres).Report(ctx, "retry-agent-3", fmt.Sprintf("%d", cmdSuccess),
 		protocol.ReportRequest{Status: protocol.CmdSuccess, ToVersion: "2.0.0"}); err != nil {
 		t.Fatalf("重复成功上报处理失败: %v", err)
 	}

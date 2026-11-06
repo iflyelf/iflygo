@@ -11,6 +11,7 @@ import (
 	_ "github.com/lib/pq"
 
 	"github.com/iflyelf/iflygo/internal/migrate"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // TestPausedTaskFinishesWhenAllBatchesDone 复现并防止回归：
@@ -27,7 +28,7 @@ func TestPausedTaskFinishesWhenAllBatchesDone(t *testing.T) {
 	}
 	// 关闭必须在其他 t.Cleanup（删测试数据）之后：LIFO 顺序。
 	t.Cleanup(func() { db.Close() })
-	if err := migrate.AutoMigrate(db); err != nil {
+	if err := migrate.AutoMigrate(db, migrate.DialectPostgres); err != nil {
 		t.Fatalf("数据库迁移失败: %v", err)
 	}
 	ctx := context.Background()
@@ -67,7 +68,7 @@ func TestPausedTaskFinishesWhenAllBatchesDone(t *testing.T) {
 		t.Fatalf("建 task_host 失败: %v", err)
 	}
 
-	o := NewOrchestrator(NewService(db, nil, nil, nil))
+	o := NewOrchestrator(NewService(db, store.Postgres, nil, nil, nil))
 	var st Strategy
 	_ = st
 	// 直接推进：所有批次已完成 → 应终结为 success。
@@ -95,7 +96,7 @@ func TestPausedTaskNotAutoDispatched(t *testing.T) {
 	}
 	// 关闭必须在其他 t.Cleanup（删测试数据）之后：LIFO 顺序。
 	t.Cleanup(func() { db.Close() })
-	if err := migrate.AutoMigrate(db); err != nil {
+	if err := migrate.AutoMigrate(db, migrate.DialectPostgres); err != nil {
 		t.Fatalf("数据库迁移失败: %v", err)
 	}
 	ctx := context.Background()
@@ -143,7 +144,7 @@ func TestPausedTaskNotAutoDispatched(t *testing.T) {
 		t.Fatalf("建 task_host 失败: %v", err)
 	}
 
-	o := NewOrchestrator(NewService(db, nil, nil, nil))
+	o := NewOrchestrator(NewService(db, store.Postgres, nil, nil, nil))
 	if err := o.advance(ctx, taskID, compID, "1.0.0", Strategy{AutoPromote: true}, 1, KindUpgrade, nil, "paused"); err != nil {
 		t.Fatalf("advance 失败: %v", err)
 	}

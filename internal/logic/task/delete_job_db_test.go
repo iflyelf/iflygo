@@ -13,6 +13,7 @@ import (
 	"github.com/iflyelf/iflygo/internal/auth"
 	"github.com/iflyelf/iflygo/internal/migrate"
 	"github.com/iflyelf/iflygo/internal/pkg/scope"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // TestDeleteJobLifecycle 异步删除作业：
@@ -30,7 +31,7 @@ func TestDeleteJobLifecycle(t *testing.T) {
 		t.Fatalf("打开数据库失败: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
-	if err := migrate.AutoMigrate(db); err != nil {
+	if err := migrate.AutoMigrate(db, migrate.DialectPostgres); err != nil {
 		t.Fatalf("数据库迁移失败: %v", err)
 	}
 	sfx := time.Now().UnixNano()
@@ -54,7 +55,7 @@ func TestDeleteJobLifecycle(t *testing.T) {
 	}
 	a, b, running := newTask("success"), newTask("failed"), newTask("running")
 
-	s := NewService(db, nil, nil, nil)
+	s := NewService(db, store.Postgres, nil, nil, nil)
 	job, err := s.CreateDeleteJob(ctx, sc, "127.0.0.1", []int64{a, b, running, a})
 	if err != nil {
 		t.Fatalf("创建作业失败: %v", err)

@@ -22,7 +22,7 @@ func setupDB(t *testing.T) *sql.DB {
 		t.Fatalf("连接数据库失败: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
-	if err := migrate.AutoMigrate(db); err != nil {
+	if err := migrate.AutoMigrate(db, migrate.DialectPostgres); err != nil {
 		t.Fatalf("迁移失败: %v", err)
 	}
 	return db

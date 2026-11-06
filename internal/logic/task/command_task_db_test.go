@@ -16,6 +16,7 @@ import (
 	"github.com/iflyelf/iflygo/internal/migrate"
 	"github.com/iflyelf/iflygo/internal/pkg/scope"
 	"github.com/iflyelf/iflygo/internal/protocol"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // TestCreateCommandTask 验证一次性命令任务：
@@ -33,7 +34,7 @@ func TestCreateCommandTask(t *testing.T) {
 	}
 	// 关闭必须在其他 t.Cleanup（删测试数据）之后：LIFO 顺序。
 	t.Cleanup(func() { db.Close() })
-	if err := migrate.AutoMigrate(db); err != nil {
+	if err := migrate.AutoMigrate(db, migrate.DialectPostgres); err != nil {
 		t.Fatalf("数据库迁移失败: %v", err)
 	}
 	ctx := context.Background()
@@ -73,7 +74,7 @@ func TestCreateCommandTask(t *testing.T) {
 		db.Exec(`DELETE FROM hosts WHERE id IN ($1,$2)`, hostOK, hostOld)
 	}()
 
-	svc := NewService(db, component.NewRepo(db), nil, func() bool { return true })
+	svc := NewService(db, store.Postgres, component.NewRepo(db), nil, func() bool { return true })
 	req := CreateRequest{
 		Kind:    KindCommand,
 		Name:    fmt.Sprintf("cmd-task-%d", sfx),
@@ -162,7 +163,7 @@ func TestCreateCommandTaskValidation(t *testing.T) {
 	}
 	// 关闭必须在其他 t.Cleanup（删测试数据）之后：LIFO 顺序。
 	t.Cleanup(func() { db.Close() })
-	svc := NewService(db, component.NewRepo(db), nil, func() bool { return false })
+	svc := NewService(db, store.Postgres, component.NewRepo(db), nil, func() bool { return false })
 	_, err = svc.Create(context.Background(), scope.New(1, true), CreateRequest{
 		Kind:     KindCommand,
 		Command:  protocol.CommandSpec{Script: "echo hi"},

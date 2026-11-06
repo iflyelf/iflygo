@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/iflyelf/iflygo/internal/auth"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // testAuthorizer 记录调用并返回预设错误。
@@ -24,7 +25,7 @@ func (a *testAuthorizer) authorize(ctx context.Context, actor *auth.User,
 
 // TestCheckDeployPassesWhenNoAuthorizer 未注入时不限制（兼容测试/小规模部署）。
 func TestCheckDeployPassesWhenNoAuthorizer(t *testing.T) {
-	s := NewService(nil, nil, nil, nil)
+	s := NewService(nil, store.Postgres, nil, nil, nil)
 	if err := s.checkDeploy(context.Background(), &auth.User{Username: "u"}, 1, "c"); err != nil {
 		t.Fatalf("未注入 authorizer 应放行: %v", err)
 	}
@@ -32,7 +33,7 @@ func TestCheckDeployPassesWhenNoAuthorizer(t *testing.T) {
 
 // TestCheckDeployCallsAuthorizer 注入后调用，并把错误透传。
 func TestCheckDeployCallsAuthorizer(t *testing.T) {
-	s := NewService(nil, nil, nil, nil)
+	s := NewService(nil, store.Postgres, nil, nil, nil)
 	a := &testAuthorizer{err: errors.New("no deploy")}
 	s.SetAuthorizer(a.authorize)
 	actor := &auth.User{Username: "u"}
@@ -47,7 +48,7 @@ func TestCheckDeployCallsAuthorizer(t *testing.T) {
 
 // TestCheckHostGroups 主机分组范围：空/「*」放行，具体值按 app_code/biz_group 匹配。
 func TestCheckHostGroups(t *testing.T) {
-	s := NewService(nil, nil, nil, nil)
+	s := NewService(nil, store.Postgres, nil, nil, nil)
 	actor := &auth.User{Username: "u"}
 	hosts := []hostRow{
 		{id: 1, ip: "10.0.0.1", appCode: "app1", bizGroup: "g1"},
