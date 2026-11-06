@@ -28,7 +28,8 @@
 - ✅ Casbin RBAC 细粒度授权（策略存库，默认 superadmin/admin 全权限）
 - ✅ Web SSH 终端（WebSocket 桥接 x/crypto/ssh）
 - ✅ 文件管理 / Web 数据库查询 / LLM 网关（OpenAI 兼容）
-- ⏳ Web RDP / VNC（guacamole 通道已预留，协议栈待接入）
+- ✅ Web VNC 远程桌面（纯 Go RFB 客户端 + canvas 渲染）
+- ⏳ Web RDP（协议栈复杂度高，通道已预留）
 
 ### 双数据库
 - ✅ **PostgreSQL + SQLite 双库**：同一套代码全功能支持，`$N`/`NOW()`/数组/时间戳/并发原语跨库适配
