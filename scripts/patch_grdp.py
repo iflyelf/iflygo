@@ -25,15 +25,20 @@ GRDP = sys.argv[1] if len(sys.argv) > 1 else os.path.join("third_party", "grdp")
 
 
 def patch_channel_go():
-    """移除 plugin/channel.go 的 import "C"。"""
+    """移除 plugin/channel.go 的 import "C" + 修复 32 位 int 溢出。"""
     p = os.path.join(GRDP, "plugin", "channel.go")
     if not os.path.exists(p):
         return
     s = open(p, encoding="utf-8").read()
+    orig = s
     if 'import "C"' in s:
         s = s.replace('import "C"\n', "", 1)
+    # StaticVirtualChannels 的 map[string]int 在 32 位架构（GOARCH=arm）下，
+    # CHANNEL_OPTION_* 组合值（0xC0000000 等）超出 int32 范围导致溢出。改为 uint32。
+    s = s.replace("var StaticVirtualChannels = map[string]int{", "var StaticVirtualChannels = map[string]uint32{")
+    if s != orig:
         open(p, "w", encoding="utf-8").write(s)
-        print("  ✓ 移除 channel.go 的 import \"C\"")
+        print("  ✓ 移除 channel.go 的 import \"C\" + 修复 32 位溢出")
 
 
 def patch_client_go():
