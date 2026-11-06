@@ -17,6 +17,7 @@ import (
 // wsHandshake 客户端在 WebSocket 建立后发送的第一条消息（文本 JSON）。
 type wsHandshake struct {
 	Kind       string `json:"kind"`                  // ssh / desktop(rdp|vnc)
+	Sub        string `json:"sub,omitempty"`         // 桌面协议：vnc / rdp
 	Host       string `json:"host"`                  // 目标 overlay IP 或主机名
 	Port       int    `json:"port"`                  // 目标端口
 	User       string `json:"user"`                  // SSH 用户名
@@ -245,11 +246,18 @@ func sendWSError(conn *websocket.Conn, msg string) {
 	_ = conn.Close(websocket.StatusNormalClosure, reason)
 }
 
-// handleDesktopSession RDP/VNC（guacamole 通道）。先占位：返回错误提示未实现。
+// handleDesktopSession RDP/VNC（WebSocket 桥接）。
 func (s *Service) handleDesktopSession(conn *websocket.Conn, u *auth.User, hs wsHandshake) {
 	if !s.authorizeUser(u, "desktop:"+hs.Host, ActConnect) {
 		conn.Close(websocket.StatusPolicyViolation, "无权连接该主机")
 		return
 	}
-	sendWSError(conn, "远程桌面（RDP/VNC）尚未实现")
+	switch hs.Sub {
+	case "vnc":
+		s.handleVNC(conn, hs)
+	case "rdp":
+		sendWSError(conn, "RDP 远程桌面尚未实现（协议栈待接入）")
+	default:
+		sendWSError(conn, "未知桌面协议: "+hs.Sub+"（支持 vnc / rdp）")
+	}
 }

@@ -450,6 +450,7 @@ REMOTE_JS = r'''
       case 'llm': body = liaisonLLMView(); break;
       case 'policies': body = liaisonPoliciesView(); break;
       case 'ssh': body = liaisonSSHView(); break;
+      case 'vnc': body = liaisonVNCView(); break;
       default: body = liaisonFilesView();
     }
     return h('div', {}, [
@@ -598,6 +599,94 @@ REMOTE_JS = r'''
       }
     };
   }
+  function liaisonVNCView() {
+    var host = h('input', { placeholder: '目标主机（overlay IP）', value: '10.66.0.1' }, []);
+    var port = h('input', { placeholder: '端口', type: 'number', value: 5900 }, []);
+    var pass = h('input', { placeholder: '密码（可选）', type: 'password' }, []);
+    var wrap = h('div', { class: 'vnc-wrap', id: 'vnc-wrap' }, [h('div', { class: 'muted' }, ['（输入主机信息后点「连接」，需目标运行 VNC 服务）'])]);
+    var connectBtn = h('button', { class: 'btn primary', onclick: function () { liaisonVNCConnect(host, port, pass, wrap); } }, ['连接']);
+    return h('div', { class: 'card' }, [
+      h('div', { class: 'card-head' }, [h('h3', {}, ['远程桌面（VNC）'])]),
+      h('div', { class: 'form-row2' }, [host, port, pass, connectBtn]),
+      wrap
+    ]);
+  }
+  function liaisonVNCConnect(host, port, pass, wrap) {
+    var ws;
+    try {
+      var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(proto + '//' + location.host + '/api/liaison/ws');
+    } catch (e) { wrap.replaceChildren(h('div', { class: 'err field' }, ['[连接失败] ' + e.message])); return; }
+    ws.binaryType = 'arraybuffer';
+    var canvas = null, ctx = null, imgData = null, W = 0, H = 0;
+    function setMsg(t) { wrap.replaceChildren(h('div', { class: 'muted' }, [t])); }
+    ws.onopen = function () {
+      ws.send(JSON.stringify({ kind: 'desktop', sub: 'vnc', host: host.value, port: Number(port.value || 5900), password: pass.value }));
+    };
+    ws.onmessage = function (ev) {
+      if (typeof ev.data === 'string') {
+        try {
+          var m = JSON.parse(ev.data);
+          if (m.type === 'ready') {
+            W = m.width; H = m.height;
+            canvas = document.createElement('canvas');
+            canvas.width = W; canvas.height = H;
+            canvas.style.cssText = 'max-width:100%;background:#000;border-radius:6px;';
+            ctx = canvas.getContext('2d');
+            imgData = ctx.createImageData(W, H);
+            wrap.replaceChildren(canvas);
+            attachVNCInput(canvas, ws, W, H);
+          } else if (m.type === 'error') { setMsg('[错误] ' + m.message); }
+        } catch (e2) {}
+      } else if (canvas) {
+        var dv = new DataView(ev.data);
+        var x = dv.getUint16(0), y = dv.getUint16(2), w = dv.getUint16(4), h = dv.getUint16(6);
+        var px = new Uint8ClampedArray(ev.data, 8);
+        for (var yy = 0; yy < h; yy++) {
+          var srcOff = yy * w * 4;
+          var dstOff = ((y + yy) * W + x) * 4;
+          imgData.data.set(px.subarray(srcOff, srcOff + w * 4), dstOff);
+        }
+        ctx.putImageData(imgData, 0, 0);
+      }
+    };
+    ws.onclose = function () { setMsg('[连接已关闭]'); };
+    ws.onerror = function () { setMsg('[连接错误]'); };
+  }
+  function attachVNCInput(canvas, ws, W, H) {
+    var buttonMask = 0;
+    function sendPointer(ev, extra) {
+      var scaleX = W / (canvas.clientWidth || 1), scaleY = H / (canvas.clientHeight || 1);
+      var rect = canvas.getBoundingClientRect();
+      var x = Math.round((ev.clientX - rect.left) * scaleX);
+      var y = Math.round((ev.clientY - rect.top) * scaleY);
+      if (x < 0) x = 0; if (y < 0) y = 0;
+      if (x >= W) x = W - 1; if (y >= H) y = H - 1;
+      var buf = new ArrayBuffer(7);
+      var dv = new DataView(buf);
+      dv.setUint8(0, 2);
+      dv.setUint8(1, buttonMask | (extra || 0));
+      dv.setUint16(2, x);
+      dv.setUint16(4, y);
+      ws.send(buf);
+    }
+    canvas.addEventListener('mousemove', function (e) { sendPointer(e, 0); });
+    canvas.addEventListener('mousedown', function (e) { if (e.button === 0) buttonMask = 1; sendPointer(e, 0); });
+    canvas.addEventListener('mouseup', function (e) { if (e.button === 0) buttonMask = 0; sendPointer(e, 0); });
+    canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+    canvas.tabIndex = 0;
+    canvas.focus();
+    canvas.addEventListener('keydown', function (e) { e.preventDefault(); vncKey(ws, e.keyCode, 1); });
+    canvas.addEventListener('keyup', function (e) { vncKey(ws, e.keyCode, 0); });
+  }
+  function vncKey(ws, keyCode, down) {
+    var buf = new ArrayBuffer(8);
+    var dv = new DataView(buf);
+    dv.setUint8(0, 1);
+    dv.setUint8(1, down);
+    dv.setUint32(4, keyCode);
+    ws.send(buf);
+  }
 '''
 
 # 远程访问 + 远程管理菜单（插入到「隧道」菜单后）
@@ -607,7 +696,8 @@ REMOTE_NAV = r'''
           { label: '数据库', active: state.view === 'liaison' && state.liaisonSection === 'db', onclick: function () { state.liaisonSection = 'db'; switchView('liaison'); } },
           { label: 'LLM 对话', active: state.view === 'liaison' && state.liaisonSection === 'llm', onclick: function () { state.liaisonSection = 'llm'; switchView('liaison'); } },
           { label: '策略管理', active: state.view === 'liaison' && state.liaisonSection === 'policies', onclick: function () { state.liaisonSection = 'policies'; switchView('liaison'); } },
-          { label: 'Web SSH', active: state.view === 'liaison' && state.liaisonSection === 'ssh', onclick: function () { state.liaisonSection = 'ssh'; switchView('liaison'); } }
+          { label: 'Web SSH', active: state.view === 'liaison' && state.liaisonSection === 'ssh', onclick: function () { state.liaisonSection = 'ssh'; switchView('liaison'); } },
+          { label: '远程桌面（VNC）', active: state.view === 'liaison' && state.liaisonSection === 'vnc', onclick: function () { state.liaisonSection = 'vnc'; switchView('liaison'); } }
         ], state.view === 'liaison'),
 '''
 
