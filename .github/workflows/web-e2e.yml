@@ -68,6 +68,9 @@ jobs:
         with:
           node-version: '20'
 
+      - name: 前端合并注入
+        run: python3 scripts/inject_tunnel_frontend.py
+
       - name: 编译控制台
         run: |
           go build -o /tmp/iflygo-server ./cmd/server

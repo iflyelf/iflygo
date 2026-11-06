@@ -49,6 +49,9 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
+      - name: 前端合并注入（upgrade_mgr 前端 + 隧道/DDNSTO/Liaison 视图）
+        run: python3 scripts/inject_tunnel_frontend.py
+
       - name: 前端语法检查
         run: node --check web/dist/assets/app.js
 
