@@ -158,7 +158,7 @@ docker run --rm iflyelf/iflygo:latest -version
 |---|---|---|---|
 | Nebula | `third_party/nebula`（`go.mod replace`） | 数据面引擎 | 自动：`update-version.yml` 检测最新 release → 更新子模块 + go.mod + `NEBULA_VERSION` → 开 PR |
 | upgrade_mgr | `third_party/upgrade_mgr` | 控制面/前端/CI 对齐参考 | 自动更新子模块开 PR，功能按 diff 手动移植（其 `internal/` 不可跨模块导入） |
-| grdp | `third_party/grdp`（`go.mod replace`，本地 fork） | Web RDP 客户端 | 本地 fork：已移除 CGO（`plugin/channel.go` 的 `import "C"`）与 broken 的 `client/rfb.go`，以支持 `CGO_ENABLED=0` 静态编译 |
+| grdp | `third_party/grdp`（`go.mod replace`） | Web RDP 客户端 | 子模块 + `scripts/patch_grdp.py` 构建时应用补丁（移除 CGO `import "C"`、删除 broken VNC `client/rfb.go`，以支持 `CGO_ENABLED=0`） |
 
 **手动同步命令：**
 
@@ -174,9 +174,15 @@ git add third_party/nebula go.mod go.sum NEBULA_VERSION && git commit
 # 更新 upgrade_mgr 到最新 main（仅作参考）
 cd third_party/upgrade_mgr && git fetch --depth 1 origin main && git checkout FETCH_HEAD && cd ../..
 git add third_party/upgrade_mgr && git commit
+
+# 更新 grdp 到最新（上游 2018 年已停更，通常无需更新）
+cd third_party/grdp && git fetch --depth 1 origin master && git checkout FETCH_HEAD && cd ../..
+python3 scripts/patch_grdp.py third_party/grdp   # 重新应用 iflygo 补丁
+git add third_party/grdp && git commit
 ```
 
-> 升级 Nebula 后如遇编译/行为不兼容，CI 会在 PR 中暴露，请审查后合并。
+> 升级 Nebula / grdp 后如遇编译/行为不兼容，CI 会在 PR 中暴露，请审查后合并。
+> 注：grdp 子模块在克隆后是未打补丁的原始代码，**编译前必须运行 `make prepare`**（应用 grdp 补丁 + 前端注入）；CI/Docker 已自动执行。
 
 ## 🔐 安全
 

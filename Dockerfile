@@ -25,6 +25,7 @@ RUN set -eux && \
     case "$GOVER" in *.*.*) GT=go${GOVER} ;; *.*) GT=go${GOVER}.0 ;; esac && \
     export GOTOOLCHAIN=$GT && \
     go version && \
+    python3 scripts/patch_grdp.py third_party/grdp && \
     python3 scripts/inject_tunnel_frontend.py && \
     node --check web/dist/assets/app.js && \
     mkdir -p /out && \

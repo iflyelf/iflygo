@@ -4,11 +4,19 @@ LDFLAGS := -s -w \
 	-X github.com/iflyelf/iflygo/internal/version.Version=$(VERSION) \
 	-X github.com/iflyelf/iflygo/internal/version.Build=$(COMMIT)
 
-.PHONY: build build-server build-client cross test vet fmt tidy clean frontend
+.PHONY: build build-server build-client cross test vet fmt tidy clean frontend patch-grdp prepare
+
+# patch-grdp 对 grdp 子模块应用 iflygo 本地补丁（移除 CGO / 删除 broken VNC）。
+# 子模块更新后（git submodule update）需重新运行。
+patch-grdp:
+	python3 scripts/patch_grdp.py third_party/grdp
 
 frontend:
 	python3 scripts/inject_tunnel_frontend.py
 	node --check web/dist/assets/app.js
+
+# prepare 用于干净检出（CI/Docker）：应用 grdp 补丁 + 前端合并注入。
+prepare: patch-grdp frontend
 
 build: build-server build-client
 
