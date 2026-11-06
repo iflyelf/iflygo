@@ -90,6 +90,12 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
+      - name: grdp 子模块补丁
+        run: python3 scripts/patch_grdp.py third_party/grdp
+
+      - name: 前端合并注入
+        run: python3 scripts/inject_tunnel_frontend.py
+
       - name: 编译 server / client
         env:
           CGO_ENABLED: 0
@@ -99,30 +105,62 @@ jobs:
           mkdir -p bin
           ext=""
           [ "${{ matrix.os }}" = "windows" ] && ext=".exe"
-          go build -trimpath -ldflags "-s -w" -o "bin/iflygo-server-${{ matrix.os }}-${{ matrix.arch }}${ext}" ./cmd/server
-          go build -trimpath -ldflags "-s -w" -o "bin/iflygo-client-${{ matrix.os }}-${{ matrix.arch }}${ext}" ./cmd/client
+          COMMIT=$(git rev-parse --short HEAD)
+          VERSION=$(cat VERSION)
+          LDFLAGS="-s -w -X github.com/iflyelf/iflygo/internal/version.Version=${VERSION} -X github.com/iflyelf/iflygo/internal/version.Build=${COMMIT} -X github.com/iflyelf/iflygo/internal/version.Commit=${COMMIT}"
+          go build -trimpath -ldflags "${LDFLAGS}" -o "bin/iflygo-server-${{ matrix.os }}-${{ matrix.arch }}${ext}" ./cmd/server
+          go build -trimpath -ldflags "${LDFLAGS}" -o "bin/iflygo-client-${{ matrix.os }}-${{ matrix.arch }}${ext}" ./cmd/client
 
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: binaries-${{ matrix.os }}-${{ matrix.arch }}
           path: bin/*
 
-  # tag 时发布 GitHub Release
+  # 打包并发布：main -> latest Release；tag v* -> 版本 Release
   release:
-    if: startsWith(github.ref, 'refs/tags/')
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v7.0.0
+      - name: 下载构建产物
+        uses: actions/download-artifact@v7.0.0
         with:
           path: dist
           merge-multiple: true
-      - name: 生成 sha256
+
+      - name: 打包并生成校验和
         run: |
+          set -euo pipefail
           cd dist
-          find . -type f -exec sha256sum {} \; > SHA256SUMS
-      - uses: softprops/action-gh-release@v2
+          for f in iflygo-server-* iflygo-client-*; do
+            [ -f "$f" ] || continue
+            case "$f" in
+              *.tar.gz|*.zip) continue ;;
+            esac
+            case "$f" in
+              *.exe)
+                zip -q "${f%.exe}.zip" "$f"
+                sha256sum "$f" >> checksums.txt
+                sha256sum "${f%.exe}.zip" >> checksums.txt
+                ;;
+              *) tar -czf "${f}.tar.gz" "$f"; sha256sum "${f}.tar.gz" >> checksums.txt ;;
+            esac
+          done
+          ls -lh
+
+      - name: 发布 Release
+        uses: softprops/action-gh-release@v3.0.3
         with:
-          files: dist/**
+          # main/手动触发更新 latest；tag 发布使用 tag 名
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
+          prerelease: false
+          make_latest: true
+          generate_release_notes: ${{ startsWith(github.ref, 'refs/tags/') }}
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.exe
+            dist/checksums.txt
