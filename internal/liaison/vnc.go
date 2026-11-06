@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"nhooyr.io/websocket"
+
+	kzlib "github.com/klauspost/compress/zlib"
 )
 
 // Web VNC（RFB 协议客户端）：连接 VNC 服务器，解码 framebuffer，经 WebSocket 桥接到浏览器。
@@ -53,6 +55,8 @@ type vncClient struct {
 	rMax, gMax, bMax       int
 	fb                     []byte
 	updated                bool
+	// Tight 编码的跨 tile zlib 流（klauspost 支持 io.ByteReader 精确读取，不预读）
+	tzr io.ReadCloser
 }
 
 // vncHandshake 连接 + 握手 + 认证。
@@ -679,6 +683,12 @@ func (v *vncClient) readTight(x, y, w, h int) error {
 			if err != nil {
 				return err
 			}
+			if ctrl[0]&0x01 != 0 { // reset zlib 流
+				if v.tzr != nil {
+					_ = v.tzr.Close()
+					v.tzr = nil
+				}
+			}
 			comp := ctrl[0] >> 4
 			switch comp {
 			case 0x08: // fill
@@ -747,23 +757,35 @@ func (v *vncClient) readTightBasic(x, y, w, h int, comp byte) error {
 	return nil
 }
 
-// readTightZlib 每 tile 独立 zlib 解压（best-effort，见 readTight 说明）。
+// readTightZlib 用跨 tile 复用的 zlib 流解压（klauspost 支持 io.ByteReader 精确读取，
+// 不预读后续 tile 的 control 字节，从而正确处理 Tight 的跨 tile 连续流）。
 func (v *vncClient) readTightZlib(dst []byte) (int, error) {
-	zr, err := zlib.NewReader(&tightStreamReader{r: v.r})
-	if err != nil {
+	if v.tzr == nil {
+		zr, err := kzlib.NewReader(&tightByteReader{r: v.r.r})
+		if err != nil {
+			return 0, err
+		}
+		v.tzr = zr
+	}
+	return io.ReadFull(v.tzr, dst)
+}
+
+// tightByteReader 从底层 VNC 流逐字节读取；实现 io.ByteReader 使 klauspost zlib
+// 精确读取（不多读），保证跨 tile 的 control 字节不被吞掉。
+type tightByteReader struct {
+	r io.Reader
+}
+
+func (t *tightByteReader) ReadByte() (byte, error) {
+	var b [1]byte
+	if _, err := io.ReadFull(t.r, b[:]); err != nil {
 		return 0, err
 	}
-	defer zr.Close()
-	return io.ReadFull(zr, dst)
+	return b[0], nil
 }
 
-// tightStreamReader 从底层连接读 zlib 压缩数据。
-type tightStreamReader struct {
-	r *bufReader
-}
-
-func (t *tightStreamReader) Read(p []byte) (int, error) {
-	return t.r.r.Read(p)
+func (t *tightByteReader) Read(p []byte) (int, error) {
+	return t.r.Read(p)
 }
 
 // readTightJPEG 解码 Tight JPEG 子编码（3 字节长度 + JPEG 数据）。
