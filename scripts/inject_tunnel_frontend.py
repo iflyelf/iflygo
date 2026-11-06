@@ -21,6 +21,19 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "third_party", "upgrade_mgr", "web", "dist")
 DST = os.path.join(ROOT, "web", "dist")
 
+# 注入视图的补充样式（追加到 app.css 末尾）
+EXTRA_CSS = """
+/* iflygo 注入视图（隧道/DDNSTO/Liaison）补充样式 */
+.form-row2 { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+.form-row2 input, .form-row2 select { flex: 1; min-width: 120px; }
+.ssh-term {
+  background: #171a1f; color: #d8dee9; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px; line-height: 1.5; padding: 12px; border-radius: 8px;
+  min-height: 280px; max-height: 420px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+}
+.file-content { background: #f5f2ec; padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 12px; max-height: 360px; }
+"""
+
 # ---------------------------------------------------------------------------
 # 隧道管理视图 JS 片段（适配 upgrade_mgr 前端的 h()/api()/switchView() 约定）
 # ---------------------------------------------------------------------------
@@ -539,10 +552,51 @@ REMOTE_JS = r'''
     ]);
   }
   function liaisonSSHView() {
+    var host = h('input', { placeholder: '目标主机（overlay IP）', value: '10.66.0.1' }, []);
+    var port = h('input', { placeholder: '端口', type: 'number', value: 22 }, []);
+    var user = h('input', { placeholder: '用户名', value: 'root' }, []);
+    var pass = h('input', { placeholder: '密码', type: 'password' }, []);
+    var term = h('pre', { class: 'ssh-term', id: 'ssh-term' }, ['（输入主机与凭据后点「连接」，回车发送命令）']);
+    var input = h('input', { placeholder: '在此输入命令，回车发送', id: 'ssh-input' }, []);
+    var connectBtn = h('button', { class: 'btn primary', onclick: function () { liaisonSSHConnect(host, port, user, pass, term, input); } }, ['连接']);
     return h('div', { class: 'card' }, [
       h('div', { class: 'card-head' }, [h('h3', {}, ['Web SSH'])]),
-      h('div', { class: 'muted' }, ['Web SSH 终端需要 xterm.js；后端通道（/api/liaison/ws）已就绪，前端终端组件待接入。'])
+      h('div', { class: 'form-row2' }, [host, port, user, pass, connectBtn]),
+      term, input
     ]);
+  }
+  function liaisonSSHConnect(host, port, user, pass, term, input) {
+    var ws;
+    try {
+      var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(proto + '//' + location.host + '/api/liaison/ws');
+    } catch (e) { term.textContent += '\n[WebSocket 创建失败] ' + e.message; return; }
+    ws.binaryType = 'arraybuffer';
+    function append(text) { term.textContent += text; term.scrollTop = term.scrollHeight; }
+    ws.onopen = function () {
+      ws.send(JSON.stringify({ kind: 'ssh', host: host.value, port: Number(port.value || 22), user: user.value, password: pass.value, cols: 80, rows: 24 }));
+    };
+    ws.onmessage = function (ev) {
+      if (typeof ev.data === 'string') {
+        try {
+          var m = JSON.parse(ev.data);
+          if (m.type === 'ready') { append('\n[已连接]\n'); input.focus(); }
+          else if (m.type === 'error') { append('\n[错误] ' + m.message + '\n'); }
+        } catch (e) { append(ev.data); }
+      } else {
+        var dec = new TextDecoder();
+        append(dec.decode(ev.data));
+      }
+    };
+    ws.onclose = function () { append('\n[连接已关闭]\n'); };
+    ws.onerror = function () { append('\n[连接错误]\n'); };
+    input.onkeydown = function (e) {
+      if (e.key === 'Enter' && ws && ws.readyState === 1) {
+        ws.send(input.value + '\r');
+        append('\n$ ' + input.value + '\n');
+        input.value = '';
+      }
+    };
   }
 '''
 
@@ -633,6 +687,9 @@ def main():
     assets_dst = os.path.join(DST, "assets")
     os.makedirs(assets_dst, exist_ok=True)
     shutil.copy2(os.path.join(SRC, "assets", "app.css"), os.path.join(assets_dst, "app.css"))
+    # 追加 iflygo 注入视图的补充样式（表单行/终端）
+    with open(os.path.join(assets_dst, "app.css"), "a", encoding="utf-8") as f:
+        f.write(EXTRA_CSS)
 
     # 2. 注入隧道视图
     app_js_path = os.path.join(SRC, "assets", "app.js")

@@ -596,10 +596,51 @@
     ]);
   }
   function liaisonSSHView() {
+    var host = h('input', { placeholder: '目标主机（overlay IP）', value: '10.66.0.1' }, []);
+    var port = h('input', { placeholder: '端口', type: 'number', value: 22 }, []);
+    var user = h('input', { placeholder: '用户名', value: 'root' }, []);
+    var pass = h('input', { placeholder: '密码', type: 'password' }, []);
+    var term = h('pre', { class: 'ssh-term', id: 'ssh-term' }, ['（输入主机与凭据后点「连接」，回车发送命令）']);
+    var input = h('input', { placeholder: '在此输入命令，回车发送', id: 'ssh-input' }, []);
+    var connectBtn = h('button', { class: 'btn primary', onclick: function () { liaisonSSHConnect(host, port, user, pass, term, input); } }, ['连接']);
     return h('div', { class: 'card' }, [
       h('div', { class: 'card-head' }, [h('h3', {}, ['Web SSH'])]),
-      h('div', { class: 'muted' }, ['Web SSH 终端需要 xterm.js；后端通道（/api/liaison/ws）已就绪，前端终端组件待接入。'])
+      h('div', { class: 'form-row2' }, [host, port, user, pass, connectBtn]),
+      term, input
     ]);
+  }
+  function liaisonSSHConnect(host, port, user, pass, term, input) {
+    var ws;
+    try {
+      var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(proto + '//' + location.host + '/api/liaison/ws');
+    } catch (e) { term.textContent += '\n[WebSocket 创建失败] ' + e.message; return; }
+    ws.binaryType = 'arraybuffer';
+    function append(text) { term.textContent += text; term.scrollTop = term.scrollHeight; }
+    ws.onopen = function () {
+      ws.send(JSON.stringify({ kind: 'ssh', host: host.value, port: Number(port.value || 22), user: user.value, password: pass.value, cols: 80, rows: 24 }));
+    };
+    ws.onmessage = function (ev) {
+      if (typeof ev.data === 'string') {
+        try {
+          var m = JSON.parse(ev.data);
+          if (m.type === 'ready') { append('\n[已连接]\n'); input.focus(); }
+          else if (m.type === 'error') { append('\n[错误] ' + m.message + '\n'); }
+        } catch (e) { append(ev.data); }
+      } else {
+        var dec = new TextDecoder();
+        append(dec.decode(ev.data));
+      }
+    };
+    ws.onclose = function () { append('\n[连接已关闭]\n'); };
+    ws.onerror = function () { append('\n[连接错误]\n'); };
+    input.onkeydown = function (e) {
+      if (e.key === 'Enter' && ws && ws.readyState === 1) {
+        ws.send(input.value + '\r');
+        append('\n$ ' + input.value + '\n');
+        input.value = '';
+      }
+    };
   }
 
 

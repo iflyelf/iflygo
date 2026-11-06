@@ -3,7 +3,6 @@ package liaison
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"time"
 
@@ -235,8 +234,15 @@ func (e *sshError) Error() string { return e.msg }
 
 func sendWSError(conn *websocket.Conn, msg string) {
 	b, _ := json.Marshal(map[string]string{"type": "error", "message": msg})
-	_ = conn.Write(context.Background(), websocket.MessageText, b)
-	_ = conn.Close(websocket.StatusNormalClosure, msg)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = conn.Write(ctx, websocket.MessageText, b)
+	// close reason 受 WebSocket 协议限制（≤123 字节），超长会截断
+	reason := msg
+	if len(reason) > 120 {
+		reason = reason[:120]
+	}
+	_ = conn.Close(websocket.StatusNormalClosure, reason)
 }
 
 // handleDesktopSession RDP/VNC（guacamole 通道）。先占位：返回错误提示未实现。
@@ -247,5 +253,3 @@ func (s *Service) handleDesktopSession(conn *websocket.Conn, u *auth.User, hs ws
 	}
 	sendWSError(conn, "远程桌面（RDP/VNC）尚未实现")
 }
-
-var _ = io.Discard

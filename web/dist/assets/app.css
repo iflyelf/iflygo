@@ -643,3 +643,13 @@ select { max-width: 100%; }
 .tag.source-page { background: color-mix(in srgb, var(--primary-color) 22%, transparent); }
 .tag.source-file_or_env { background: color-mix(in srgb, var(--ok-color) 20%, transparent); }
 .tag.source-default { opacity: .75; }
+
+/* iflygo 注入视图（隧道/DDNSTO/Liaison）补充样式 */
+.form-row2 { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+.form-row2 input, .form-row2 select { flex: 1; min-width: 120px; }
+.ssh-term {
+  background: #171a1f; color: #d8dee9; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px; line-height: 1.5; padding: 12px; border-radius: 8px;
+  min-height: 280px; max-height: 420px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+}
+.file-content { background: #f5f2ec; padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 12px; max-height: 360px; }

@@ -2,7 +2,10 @@
 package middleware
 
 import (
+	"bufio"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"time"
 
@@ -61,6 +64,25 @@ func AccessLog(next http.Handler) http.Handler {
 type statusWriter struct {
 	http.ResponseWriter
 	status int
+}
+
+// Unwrap 暴露底层 ResponseWriter（供 http.ResponseController 访问 Hijacker/Flusher）。
+func (s *statusWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
+// Hijack 委托底层 Hijacker，支持 WebSocket 升级。
+func (s *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := s.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("底层 ResponseWriter 不支持 Hijack")
+	}
+	return hj.Hijack()
+}
+
+// Flush 委托底层 Flusher（SSE/流式响应）。
+func (s *statusWriter) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 func (s *statusWriter) WriteHeader(code int) {
