@@ -93,21 +93,23 @@ jobs:
         with:
           submodules: recursive
 
-      - name: 检查 grdp 上游是否有新 commit
+      - name: 检查 grdp 上游是否有新 release
         id: grdp
         run: |
           cd third_party/grdp
-          CUR=$(git rev-parse HEAD)
-          git fetch --depth 1 origin master
-          LATEST=$(git rev-parse FETCH_HEAD)
+          CUR=$(git describe --tags --abbrev=0 2>/dev/null || git rev-parse --short HEAD)
+          LATEST=$(curl -fsSL https://api.github.com/repos/tomatome/grdp/releases/latest | jq -r .tag_name)
           echo "current=${CUR}" >> "$GITHUB_OUTPUT"
           echo "latest=${LATEST}" >> "$GITHUB_OUTPUT"
+          # 注：grdp 的 master 分支含 Linux 不兼容的 plugin 依赖（cliprdr/rail/drdynvc），
+          # 故仅跟踪 release tag（而非 master commit），避免引入 broken 代码。
           if [ "$CUR" = "$LATEST" ]; then
-            echo "upstream 无更新，跳过"
+            echo "上游无新 release，跳过"
             echo "has_update=false" >> "$GITHUB_OUTPUT"
           else
-            echo "检测到上游更新"
+            echo "检测到新 release: $LATEST"
             echo "has_update=true" >> "$GITHUB_OUTPUT"
+            git fetch --depth 1 origin tag "$LATEST"
             git checkout "$LATEST"
           fi
 
@@ -116,8 +118,8 @@ jobs:
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.SYNC_PAT }}
-          commit-message: "chore(deps): 同步 grdp 子模块到最新"
+          commit-message: "chore(deps): 同步 grdp 子模块到 ${{ steps.grdp.outputs.latest }}"
           branch: chore/grdp-sync
           title: "chore(deps): 同步 grdp 子模块"
-          body: "grdp 上游有新 commit。\n\n合并后 CI 会在构建时自动应用 scripts/patch_grdp.py 补丁（移除 CGO、删除 broken VNC），无需手动处理。"
+          body: "grdp 上游有新 release。\n\n合并后 CI 会在构建时自动应用 scripts/patch_grdp.py 补丁（移除 CGO、删除 broken VNC），无需手动处理。"
           delete-branch: true
