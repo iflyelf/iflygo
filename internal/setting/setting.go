@@ -50,7 +50,13 @@ type Item struct {
 }
 
 // Registry 全部可页面配置项（基础项 + 由 config.AIConfig 自动生成的 AI 项）。
-var Registry = append(baseRegistry, aiRegistry()...)
+var Registry = func() []Item {
+	out := make([]Item, 0, len(baseRegistry)+len(aiRegistry())+len(relayRegistry()))
+	out = append(out, baseRegistry...)
+	out = append(out, aiRegistry()...)
+	out = append(out, relayRegistry()...)
+	return out
+}()
 
 // baseRegistry 手写的基础配置项。
 var baseRegistry = []Item{
@@ -1159,6 +1165,16 @@ func NeedsCacheReload(applied []string) bool {
 	return false
 }
 
+// NeedsTCPRelayReload 判断变更是否涉及 TCP 中继（需重建/更新监听器）。
+func NeedsTCPRelayReload(applied []string) bool {
+	for _, k := range applied {
+		if strings.HasPrefix(k, "tcp_relay.") {
+			return true
+		}
+	}
+	return false
+}
+
 // NeedsArtifactReload 判断变更是否涉及制品上传并发/锁等待（可热更新）。
 func NeedsArtifactReload(applied []string) bool {
 	for _, k := range applied {
@@ -1242,4 +1258,18 @@ func validateDuration(allowEmpty bool) func(string) error {
 		}
 		return nil
 	}
+}
+
+// HasPagePrefix 判断是否有以 prefix 开头的设置项已在页面保存。
+//
+// 用于配置文件热加载时避免覆盖页面设置（页面优先级最高）。
+func (s *Service) HasPagePrefix(prefix string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for k := range s.pageKeys {
+		if strings.HasPrefix(k, prefix) {
+			return true
+		}
+	}
+	return false
 }

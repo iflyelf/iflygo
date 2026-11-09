@@ -3,7 +3,7 @@
 // 子命令：
 //
 //	enroll  --server URL --token TOKEN [--name NAME]    一次性 token 注册
-//	run     [--state-dir DIR] [--interval 30s] [--tcp-relay HOST:PORT] [--tcp-relay-token TOKEN]  运行（心跳 + 配置热更新）
+//	run     [--state-dir DIR] [--config FILE] [--data-plane auto|tcp|udp] [--tcp-relay HOST:PORT]  运行（心跳 + 配置热更新）
 //	config  [--state-dir DIR]                           拉取并应用配置包
 //	status  [--state-dir DIR]                           查看本地状态
 //	service install|uninstall [--state-dir DIR] [--tcp-relay HOST:PORT] [--tcp-relay-token TOKEN]  安装/卸载系统服务
@@ -19,7 +19,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/iflyelf/iflygo/internal/client"
 	"github.com/iflyelf/iflygo/internal/version"
@@ -112,14 +111,25 @@ func cmdEnroll(args []string) {
 func cmdRun(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	dir := fs.String("state-dir", client.DefaultStateDir(), "状态目录")
-	interval := fs.Duration("interval", 30*time.Second, "心跳间隔")
+	configPath := fs.String("config", os.Getenv("IFLYGO_CLIENT_CONFIG"),
+		"客户端配置文件（默认 <state-dir>/client.yaml，支持热加载）")
+	interval := fs.Duration("interval", 0, "心跳间隔（留空用配置文件/默认 30s）")
+	mode := fs.String("data-plane", os.Getenv("IFLYGO_DATA_PLANE"),
+		"数据面模式 auto|tcp|udp（留空用配置文件/服务端下发）")
 	tcpRelay := fs.String("tcp-relay", os.Getenv("IFLYGO_TCP_RELAY"),
-		"TCP 中继服务端地址（如 relay.example.com:8443）；UDP 被封锁时经 TCP 承载 overlay 流量")
+		"TCP 中继服务端地址（留空自动发现；off 关闭中继）")
 	tcpRelayToken := fs.String("tcp-relay-token", os.Getenv("IFLYGO_TCP_RELAY_TOKEN"),
-		"TCP 中继共享密钥（服务端配置 TCP_RELAY_TOKEN 时必填）")
+		"TCP 中继共享令牌（留空自动从服务端获取）")
 	fs.Parse(args)
 
-	if err := client.Run(*dir, *interval, *tcpRelay, *tcpRelayToken); err != nil {
+	if err := client.Run(client.RunOptions{
+		Dir:           *dir,
+		Interval:      *interval,
+		Mode:          *mode,
+		TCPRelay:      *tcpRelay,
+		TCPRelayToken: *tcpRelayToken,
+		ConfigPath:    *configPath,
+	}); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		os.Exit(1)
 	}
@@ -159,15 +169,16 @@ func cmdService(args []string) {
 	action := args[0]
 	fs := flag.NewFlagSet("service", flag.ExitOnError)
 	dir := fs.String("state-dir", client.DefaultStateDir(), "状态目录")
+	configPath := fs.String("config", os.Getenv("IFLYGO_CLIENT_CONFIG"), "客户端配置文件（写入服务启动参数）")
 	relay := fs.String("tcp-relay", os.Getenv("IFLYGO_TCP_RELAY"), "TCP 中继服务端地址（写入服务启动参数）")
-	relayToken := fs.String("tcp-relay-token", os.Getenv("IFLYGO_TCP_RELAY_TOKEN"), "TCP 中继共享密钥")
+	relayToken := fs.String("tcp-relay-token", os.Getenv("IFLYGO_TCP_RELAY_TOKEN"), "TCP 中继共享令牌")
 	fs.Parse(args[1:])
 
 	switch action {
 	case "install":
 		exe, _ := os.Executable()
 		exe, _ = filepath.Abs(exe)
-		if err := client.InstallService(exe, *dir, *relay, *relayToken); err != nil {
+		if err := client.InstallService(exe, *dir, *relay, *relayToken, *configPath); err != nil {
 			fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 			os.Exit(1)
 		}

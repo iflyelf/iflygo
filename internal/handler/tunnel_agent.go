@@ -2,7 +2,9 @@ package handler
 
 import (
 	"crypto/subtle"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -81,8 +83,65 @@ func TunnelAgentHeartbeat(sc *svc.ServiceContext) http.HandlerFunc {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		httpx.OK(w, map[string]any{"config_rev": row.ConfigRev, "server_url": ""})
+		mode, relayAddr, relayToken := tunnelRelayInfo(sc, r)
+		httpx.OK(w, map[string]any{
+			"config_rev":      row.ConfigRev,
+			"server_url":      "",
+			"tcp_relay_mode":  mode,
+			"tcp_relay":       relayAddr,
+			"tcp_relay_token": relayToken,
+		})
 	}
+}
+
+// tunnelRelayInfo 返回下发给客户端的 TCP 中继配置：
+// 模式（auto/tcp/udp）、可达地址（自动推断）与共享令牌。
+func tunnelRelayInfo(sc *svc.ServiceContext, r *http.Request) (mode, addr, token string) {
+	if sc == nil || sc.Relay == nil {
+		return "auto", "", ""
+	}
+	mode = sc.Relay.Mode()
+	token = sc.Relay.Token()
+	port := sc.Relay.Port()
+	if port <= 0 {
+		return mode, "", token
+	}
+	if adv := strings.TrimSpace(sc.Relay.Advertise()); adv != "" {
+		if _, _, err := net.SplitHostPort(adv); err == nil {
+			return mode, adv, token
+		}
+		return mode, net.JoinHostPort(strings.Trim(adv, "[]"), strconv.Itoa(port)), token
+	}
+	host := ""
+	if sc.Config != nil {
+		host = hostFromURL(sc.Config.Server.ExternalURL)
+	}
+	if host == "" {
+		host = hostFromRequestHost(r.Host)
+	}
+	if host == "" {
+		return mode, "", token
+	}
+	return mode, net.JoinHostPort(host, strconv.Itoa(port)), token
+}
+
+func hostFromURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
+func hostFromRequestHost(h string) string {
+	if host, _, err := net.SplitHostPort(h); err == nil {
+		return host
+	}
+	return strings.Trim(h, "[]")
 }
 
 // AgentConfig 拉取配置包。

@@ -17,43 +17,75 @@ import (
 	"github.com/iflyelf/iflygo/internal/tcprelay"
 )
 
-// Run 启动客户端主循环：心跳 + 配置热更新 + overlay。
+// RunOptions 客户端运行参数。
 //
-// tcpRelay 非空时（如 "relay.example.com:8443"），会在启动/热加载 overlay 前
-// 把 Nebula 配置里的 static_host_map 改写为本地 UDP 桥，桥经 TCP 连到中继服务端，
-// 用于 UDP 被完全封锁的网络。
-func Run(dir string, interval time.Duration, tcpRelay, tcpRelayToken string) error {
+// 优先级：命令行参数 > 配置文件（默认 <state-dir>/client.yaml，支持热加载）
+// > 服务端心跳下发 > 内置默认。
+type RunOptions struct {
+	Dir           string
+	Interval      time.Duration // <=0 时使用配置文件/默认 30s
+	Mode          string        // auto / tcp / udp；空则由配置文件/服务端决定
+	TCPRelay      string        // 中继地址；"off" 等价 udp；空则自动发现
+	TCPRelayToken string
+	ConfigPath    string // 空则 <state-dir>/client.yaml
+}
+
+// Run 启动客户端主循环：心跳 + 配置热更新 + overlay + 客户端配置文件热加载。
+func Run(opts RunOptions) error {
+	dir := opts.Dir
 	st, err := LoadState(dir)
 	if err != nil {
 		return errors.New("未找到状态文件，请先执行 enroll")
 	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	cfgPath := opts.ConfigPath
+	if cfgPath == "" {
+		cfgPath = DefaultFileConfigPath(dir)
+	}
+	fileCfg, err := LoadFileConfig(cfgPath)
+	if err != nil {
+		log.Printf("⚠️ %v（改用默认/服务端下发配置）", err)
+		fileCfg = &FileConfig{}
+	}
+
+	interval := opts.Interval
+	if interval <= 0 {
+		interval = fileCfg.IntervalDuration(30 * time.Second)
+	}
+
 	c := New(st.Server, st.ClientID, st.Secret)
 	ov := overlay.New(slog.Default())
 
 	log.Printf("🚀 iflygo-client 运行中: #%d %s (%s) 服务器 %s", st.ClientID, st.Name, st.IPv4, st.Server)
-	if tcpRelay != "" {
-		log.Printf("🧵 TCP 中继已启用: %s（overlay 流量将经 TCP 承载）", tcpRelay)
+	log.Printf("⚙️ 客户端配置: %s（支持热加载）", cfgPath)
+
+	// 首次心跳获取服务端下发的数据面策略，再拉取配置。
+	hbInfo, hbErr := c.Heartbeat(ctx)
+	if hbErr != nil {
+		log.Printf("⚠️ 心跳失败: %v", hbErr)
 	}
+	if err := fetchAndApply(c, st, dir); err != nil {
+		log.Printf("⚠️ 拉取配置失败: %v", err)
+	}
+
+	relay := ResolveRelay(opts.Mode, opts.TCPRelay, opts.TCPRelayToken, fileCfg, hbInfo)
+	logRelay(relay)
 
 	// TCP 中继桥的生命周期与 overlay 一致：热加载时重建，退出时关闭。
 	bridges := newBridgeScope()
 	defer func() { bridges.Close() }()
 
-	// 首次拉取配置（含证书与 Nebula 配置）
-	if err := fetchAndApply(c, st, dir); err != nil {
-		log.Printf("⚠️ 拉取配置失败: %v", err)
-	}
 	// 尝试启动 overlay（需要 TUN 设备与 NET_ADMIN）
-	if err := startOverlay(ov, dir, tcpRelay, tcpRelayToken, bridges.ctx); err != nil {
+	if err := startOverlay(ov, dir, relay, bridges.ctx); err != nil {
 		log.Printf("⚠️ 启动 overlay 失败（需要 root/TUN）: %v", err)
 		// overlay 未启动，桥也无用，回收后换一个新作用域供后续热加载使用。
 		bridges.Close()
 		bridges = newBridgeScope()
 	}
 	defer ov.Stop()
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	// 不安全路由健康管理（探测网关 → 动态热加载）
 	rm := NewRouteManager(dir, ov)
@@ -62,43 +94,121 @@ func Run(dir string, interval time.Duration, tcpRelay, tcpRelayToken string) err
 	}
 	go rm.Run(ctx, interval)
 
-	hb := time.NewTicker(interval)
-	defer hb.Stop()
-	peers := time.NewTicker(15 * time.Second)
-	defer peers.Stop()
+	hbTicker := time.NewTicker(interval)
+	defer hbTicker.Stop()
+	peersTicker := time.NewTicker(15 * time.Second)
+	defer peersTicker.Stop()
+	cfgTicker := time.NewTicker(2 * time.Second)
+	defer cfgTicker.Stop()
+
+	cfgMod := fileModTime(cfgPath)
+
+	// restartRelay 用新的数据面策略重建桥并重启 overlay。
+	restartRelay := func(next RelaySettings) {
+		if next == relay {
+			return
+		}
+		scope := newBridgeScope()
+		if err := restartOverlay(ov, dir, next, scope.ctx); err != nil {
+			scope.Close()
+			log.Printf("⚠️ 切换数据面模式失败: %v", err)
+			return
+		}
+		bridges.Close()
+		bridges = scope
+		relay = next
+		logRelay(relay)
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			log.Println("正在退出...")
 			return nil
-		case <-hb.C:
-			rev, err := c.Heartbeat(ctx)
+		case <-hbTicker.C:
+			hb, err := c.Heartbeat(ctx)
 			if err != nil {
 				log.Printf("⚠️ 心跳失败: %v", err)
 				continue
 			}
-			if rev != st.ConfigRev {
+			hbInfo = hb
+			configChanged := hb.ConfigRev != st.ConfigRev
+			if configChanged {
 				if err := fetchAndApply(c, st, dir); err != nil {
 					log.Printf("⚠️ 更新配置失败: %v", err)
-				} else {
-					// 用新配置重建 TCP 桥；成功后再回收旧桥，失败则保留旧桥运行。
-					next := newBridgeScope()
-					if err := reloadOverlay(ov, dir, tcpRelay, tcpRelayToken, next.ctx); err != nil {
-						next.Close()
-						log.Printf("⚠️ 热加载失败: %v", err)
-					} else {
-						bridges.Close()
-						bridges = next
-					}
+					continue
 				}
 			}
-		case <-peers.C:
+			next := ResolveRelay(opts.Mode, opts.TCPRelay, opts.TCPRelayToken, fileCfg, hb)
+			if next != relay {
+				restartRelay(next)
+				continue
+			}
+			if configChanged {
+				// 用新配置重建 TCP 桥；成功后再回收旧桥，失败则保留旧桥运行。
+				scope := newBridgeScope()
+				if err := reloadOverlay(ov, dir, relay, scope.ctx); err != nil {
+					scope.Close()
+					log.Printf("⚠️ 热加载失败: %v", err)
+				} else {
+					bridges.Close()
+					bridges = scope
+				}
+			}
+		case <-cfgTicker.C:
+			mod := fileModTime(cfgPath)
+			if mod.Equal(cfgMod) {
+				continue
+			}
+			cfgMod = mod
+			next, err := LoadFileConfig(cfgPath)
+			if err != nil {
+				log.Printf("⚠️ 客户端配置热加载失败: %v", err)
+				continue
+			}
+			fileCfg = next
+			if d := next.IntervalDuration(0); d > 0 && d != interval {
+				interval = d
+				hbTicker.Reset(interval)
+				log.Printf("🔄 客户端心跳间隔已更新为 %s", interval)
+			}
+			restartRelay(ResolveRelay(opts.Mode, opts.TCPRelay, opts.TCPRelayToken, fileCfg, hbInfo))
+			log.Printf("✅ 客户端配置已热加载: %s", cfgPath)
+		case <-peersTicker.C:
 			for _, p := range ov.Peers() {
 				log.Printf("🔗 隧道: %s <-> %s (relay=%v)", p.VPNIP, p.Remote, p.Relays)
 			}
 		}
 	}
+}
+
+// logRelay 输出当前数据面策略。
+func logRelay(r RelaySettings) {
+	switch r.Mode {
+	case "tcp":
+		if r.Addr == "" {
+			log.Printf("⚠️ 数据面=tcp，但未获取到中继地址，暂按 UDP 运行")
+			return
+		}
+		log.Printf("🧵 数据面=tcp（始终经 TCP 中继 %s）", r.Addr)
+	case "udp":
+		log.Printf("📡 数据面=udp（仅原生 UDP）")
+	default:
+		if r.Addr == "" {
+			log.Printf("🧠 数据面=auto（未发现 TCP 中继，仅 UDP）")
+			return
+		}
+		log.Printf("🧠 数据面=auto（UDP 优先，%s 自动兜底 TCP）", r.Addr)
+	}
+}
+
+// fileModTime 返回文件修改时间；不存在返回零值。
+func fileModTime(path string) time.Time {
+	info, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime()
 }
 
 // bridgeScope 管理一组 TCP 中继桥的生命周期（一个 overlay 配置对应一组桥）。
@@ -180,37 +290,47 @@ func ApplyBundle(dir string, b *model.Bundle) error {
 	return nil
 }
 
-func startOverlay(ov *overlay.Overlay, dir, tcpRelay, tcpRelayToken string, bridgeCtx context.Context) error {
+func startOverlay(ov *overlay.Overlay, dir string, relay RelaySettings, bridgeCtx context.Context) error {
 	cfg, err := readNebulaConfig(dir)
 	if err != nil {
 		return err
 	}
-	cfg, err = rewriteForRelay(bridgeCtx, tcpRelay, tcpRelayToken, cfg)
+	cfg, err = rewriteForRelay(bridgeCtx, relay, cfg)
 	if err != nil {
 		return err
 	}
 	return ov.Start(cfg)
 }
 
-func reloadOverlay(ov *overlay.Overlay, dir, tcpRelay, tcpRelayToken string, bridgeCtx context.Context) error {
+func reloadOverlay(ov *overlay.Overlay, dir string, relay RelaySettings, bridgeCtx context.Context) error {
 	cfg, err := readNebulaConfig(dir)
 	if err != nil {
 		return err
 	}
-	cfg, err = rewriteForRelay(bridgeCtx, tcpRelay, tcpRelayToken, cfg)
+	cfg, err = rewriteForRelay(bridgeCtx, relay, cfg)
 	if err != nil {
 		return err
 	}
 	return ov.Reload(cfg)
 }
 
-// rewriteForRelay 在启用 TCP 中继时改写 Nebula 配置中的 static_host_map。
-// tcpRelay 为空则原样返回（保持原生 UDP 行为）。
-func rewriteForRelay(ctx context.Context, tcpRelay, tcpRelayToken string, cfg []byte) ([]byte, error) {
-	if tcpRelay == "" {
+// restartOverlay 数据面模式变化时重启 overlay（static_host_map 变更用重启最稳妥）。
+func restartOverlay(ov *overlay.Overlay, dir string, relay RelaySettings, bridgeCtx context.Context) error {
+	_ = ov.Stop()
+	return startOverlay(ov, dir, relay, bridgeCtx)
+}
+
+// rewriteForRelay 按数据面模式改写 Nebula 配置：
+//   - udp：不改写，保持原生 UDP；
+//   - auto：改写为本地桥（UDP 优先，自动兜底 TCP）；
+//   - tcp：改写为本地桥并强制经 TCP 中继。
+func rewriteForRelay(ctx context.Context, relay RelaySettings, cfg []byte) ([]byte, error) {
+	if relay.Mode == "udp" || relay.Addr == "" {
 		return cfg, nil
 	}
-	return tcprelay.RewriteConfig(ctx, tcpRelay, tcpRelayToken, cfg)
+	return tcprelay.RewriteConfigWithOptions(ctx, relay.Addr, relay.Token, tcprelay.RewriteOptions{
+		ForceRelay: relay.Mode == "tcp",
+	}, cfg)
 }
 
 func readNebulaConfig(dir string) ([]byte, error) {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/iflyelf/iflygo/internal/model"
@@ -142,4 +143,102 @@ func getNebulaSettings(sc *svc.ServiceContext, networkID int64) (*model.NebulaSe
 
 func tunnelID(r *http.Request) (int64, error) {
 	return strconv.ParseInt(r.PathValue("id"), 10, 64)
+}
+
+// networkDetail 网络详情（含 Nebula 设置）。
+type networkDetail struct {
+	model.Network
+	Nebula model.NebulaSettings `json:"nebula"`
+}
+
+// GetNetwork 返回网络详情（含 Nebula 设置），供页面编辑。
+func GetNetwork(sc *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := tunnelID(r)
+		if err != nil {
+			httpx.Fail(w, http.StatusBadRequest, "id 非法")
+			return
+		}
+		n, err := getNetwork(sc, id)
+		if err != nil {
+			httpx.FailErr(w, http.StatusNotFound, err)
+			return
+		}
+		neb, err := getNebulaSettings(sc, id)
+		if err != nil {
+			httpx.FailErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		httpx.OK(w, networkDetail{Network: *n, Nebula: *neb})
+	}
+}
+
+type networkSettingsReq struct {
+	DNS    string               `json:"dns"`
+	MTU    int                  `json:"mtu"`
+	Nebula model.NebulaSettings `json:"nebula"`
+}
+
+// UpdateNetwork 更新网络的 DNS/MTU/Nebula 设置，并递增该网络下客户端的配置版本，
+// 使客户端在下一次心跳后自动拉取新配置。
+func UpdateNetwork(sc *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := tunnelID(r)
+		if err != nil {
+			httpx.Fail(w, http.StatusBadRequest, "id 非法")
+			return
+		}
+		existing, err := getNetwork(sc, id)
+		if err != nil {
+			httpx.FailErr(w, http.StatusNotFound, err)
+			return
+		}
+		var req networkSettingsReq
+		if err := httpx.DecodeJSON(r, &req); err != nil {
+			httpx.Fail(w, http.StatusBadRequest, "请求体非法")
+			return
+		}
+		if req.MTU == 0 {
+			req.MTU = existing.MTU
+		}
+		if req.MTU < 576 || req.MTU > 9000 {
+			httpx.Fail(w, http.StatusBadRequest, "MTU 应在 576-9000 之间")
+			return
+		}
+		switch strings.ToLower(strings.TrimSpace(req.Nebula.LogLevel)) {
+		case "", "error", "warn", "warning", "info", "debug":
+		default:
+			httpx.Fail(w, http.StatusBadRequest, "log_level 只能是 error/warn/info/debug")
+			return
+		}
+		switch strings.ToLower(strings.TrimSpace(req.Nebula.StatsType)) {
+		case "", "prometheus", "graphite":
+		default:
+			httpx.Fail(w, http.StatusBadRequest, "stats_type 只能是 prometheus/graphite")
+			return
+		}
+		if req.Nebula.ListenPort != 0 && (req.Nebula.ListenPort < 1 || req.Nebula.ListenPort > 65535) {
+			httpx.Fail(w, http.StatusBadRequest, "listen_port 应在 1-65535 之间")
+			return
+		}
+		nebulaJSON, err := json.Marshal(req.Nebula)
+		if err != nil {
+			httpx.FailErr(w, http.StatusBadRequest, err)
+			return
+		}
+		q := sc.Store.Rebind(`UPDATE networks SET dns = $1, mtu = $2, nebula = $3 WHERE id = $4`)
+		if _, err := sc.Store.DB.Exec(q, req.DNS, req.MTU, string(nebulaJSON), id); err != nil {
+			httpx.FailErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		// 配置已变化：让该网络下所有客户端下次心跳拉取新配置。
+		_, _ = sc.Store.DB.Exec(sc.Store.Rebind(`UPDATE client_nodes SET config_rev = config_rev + 1 WHERE network_id = $1`), id)
+
+		n, err := getNetwork(sc, id)
+		if err != nil {
+			httpx.FailErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		httpx.OK(w, networkDetail{Network: *n, Nebula: req.Nebula})
+	}
 }

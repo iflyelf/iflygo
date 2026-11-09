@@ -1,10 +1,11 @@
 package handler
 
 import (
+	"context"
+	"net/http"
 	"strings"
 
 	"github.com/iflyelf/iflygo/internal/pkg/audit"
-	"net/http"
 
 	"github.com/iflyelf/iflygo/internal/pkg/httpx"
 	"github.com/iflyelf/iflygo/internal/setting"
@@ -49,6 +50,9 @@ func UpdateSettings(s *svc.ServiceContext) http.HandlerFunc {
 		if setting.NeedsArtifactReload(applied) {
 			s.ReloadArtifactSettings()
 		}
+		if setting.NeedsTCPRelayReload(applied) {
+			s.ReloadTCPRelay(context.WithoutCancel(r.Context()))
+		}
 		httpx.OK(w, map[string]any{"applied": applied})
 	}
 }
@@ -79,6 +83,9 @@ func ResetSetting(s *svc.ServiceContext) http.HandlerFunc {
 		}
 		if setting.NeedsArtifactReload(applied) {
 			s.ReloadArtifactSettings()
+		}
+		if setting.NeedsTCPRelayReload(applied) {
+			s.ReloadTCPRelay(context.WithoutCancel(r.Context()))
 		}
 		base, _ := s.Settings.BaseValue(key)
 		httpx.OK(w, map[string]any{"key": key, "value": base})

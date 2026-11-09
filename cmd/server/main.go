@@ -10,9 +10,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"reflect"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/iflyelf/iflygo/internal/config"
 	"github.com/iflyelf/iflygo/internal/ddnsto"
@@ -22,7 +26,6 @@ import (
 	"github.com/iflyelf/iflygo/internal/overlay"
 	"github.com/iflyelf/iflygo/internal/pkg/netutil"
 	"github.com/iflyelf/iflygo/internal/svc"
-	"github.com/iflyelf/iflygo/internal/tcprelay"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -79,6 +82,11 @@ func main() {
 	// 其他副本通过 5 秒轮询同步，无需重启。
 	sc.StartArtifactSettingsWatcher(ctx, 5*time.Second)
 	sc.StartAISettingsWatcher(ctx)
+	// TCP 中继：默认自动启用（控制面端口 +1），模式/地址/令牌支持页面与配置文件热更新。
+	sc.ReloadTCPRelay(ctx)
+	sc.StartRelaySettingsWatcher(ctx, 5*time.Second)
+	// 配置文件热加载：TCP 中继即时生效，其余变更提示需重启。
+	go watchConfigFile(ctx, *configFile, c, sc)
 
 	mux := http.NewServeMux()
 	limiters := registerRoutes(mux, sc)
@@ -96,19 +104,6 @@ func main() {
 	}
 	ddnsto.RegisterRoutes(mux, sc)
 	startTunnelDataPlane()
-
-	// 可选：TCP 中继。UDP 被完全封锁（仅允许 TCP）时，客户端可把发往
-	// lighthouse/relay 的 overlay 数据报封装进 TCP 隧道，由本服务解封装后
-	// 以 UDP 转发到真实上游，实现「UDP over TCP」兜底。
-	if c.TCPRelay.Listen != "" {
-		relay := tcprelay.NewServer(c.TCPRelay.Listen)
-		relay.Token = c.TCPRelay.Token
-		go func() {
-			if err := relay.Start(ctx); err != nil {
-				log.Printf("⚠️ TCP 中继服务退出: %v", err)
-			}
-		}()
-	}
 
 	// 访问日志 → CORS → 安全响应头 → CSRF → 请求体限制 → Redis 缓存 → 业务路由。
 	// 缓存放在安全头内侧：命中缓存时仍会经过 SecurityHeaders / LimitBody，
@@ -458,6 +453,8 @@ func registerTunnelRoutes(mux *http.ServeMux, sc *svc.ServiceContext) {
 	// 网络
 	mux.Handle("GET /api/networks", auth(handler.ListNetworks(sc)))
 	mux.Handle("POST /api/networks", auth(handler.CreateNetwork(sc)))
+	mux.Handle("GET /api/networks/{id}", auth(handler.GetNetwork(sc)))
+	mux.Handle("PUT /api/networks/{id}", auth(handler.UpdateNetwork(sc)))
 	mux.Handle("DELETE /api/networks/{id}", auth(handler.DeleteNetwork(sc)))
 
 	// 服务端节点（lighthouse/relay/edge/gateway）
@@ -520,4 +517,120 @@ func startTunnelDataPlane() {
 			log.Fatalf("启动 edge 失败: %v", err)
 		}
 	}
+}
+
+// watchConfigFile 轮询配置文件并热加载可热更项（TCP 中继）。
+//
+// 运行期重建监听/连接池等长生命周期对象不安全，因此其余 section 变更只提示
+// 需要重启；页面保存的设置优先级更高，会覆盖配置文件中的对应项。
+func watchConfigFile(ctx context.Context, path string, c *config.Config, sc *svc.ServiceContext) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return
+	}
+	last := configModTime(path)
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			mod := configModTime(path)
+			if mod.IsZero() || mod.Equal(last) {
+				continue
+			}
+			last = mod
+			next, err := config.Load(path)
+			if err != nil {
+				log.Printf("⚠️ 配置文件热加载失败: %v", err)
+				continue
+			}
+			changed := configSectionsChanged(c, next)
+			if len(changed) == 0 {
+				continue
+			}
+			applied := map[string]bool{}
+			skipped := map[string]bool{}
+			if containsString(changed, "tcp_relay") {
+				if sc.Settings != nil && sc.Settings.HasPagePrefix("tcp_relay.") {
+					skipped["tcp_relay"] = true
+				} else {
+					c.TCPRelay = next.TCPRelay
+					sc.ReloadTCPRelay(ctx)
+					applied["tcp_relay"] = true
+				}
+			}
+			var hot, restart, override []string
+			for _, sec := range changed {
+				switch {
+				case applied[sec]:
+					hot = append(hot, sec)
+				case skipped[sec]:
+					override = append(override, sec)
+				default:
+					restart = append(restart, sec)
+				}
+			}
+			if len(hot) > 0 {
+				log.Printf("✅ 配置文件已热加载: %s", strings.Join(hot, ", "))
+			}
+			if len(override) > 0 {
+				log.Printf("ℹ️ 配置文件以下项已在页面配置，忽略文件变更: %s", strings.Join(override, ", "))
+			}
+			if len(restart) > 0 {
+				log.Printf("ℹ️ 配置文件以下变更需重启生效: %s", strings.Join(restart, ", "))
+			}
+		}
+	}
+}
+
+func configModTime(path string) time.Time {
+	info, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime()
+}
+
+// configSectionsChanged 返回发生变化的顶层配置 section。
+func configSectionsChanged(oldCfg, newCfg *config.Config) []string {
+	oldMap := configYAMLMap(oldCfg)
+	newMap := configYAMLMap(newCfg)
+	seen := map[string]bool{}
+	out := []string{}
+	for k, v := range newMap {
+		seen[k] = true
+		if !reflect.DeepEqual(oldMap[k], v) {
+			out = append(out, k)
+		}
+	}
+	for k, v := range oldMap {
+		if !seen[k] && v != nil {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func configYAMLMap(c *config.Config) map[string]any {
+	b, err := yaml.Marshal(c)
+	if err != nil {
+		return map[string]any{}
+	}
+	var m map[string]any
+	if err := yaml.Unmarshal(b, &m); err != nil {
+		return map[string]any{}
+	}
+	return m
+}
+
+func containsString(list []string, want string) bool {
+	for _, v := range list {
+		if v == want {
+			return true
+		}
+	}
+	return false
 }

@@ -65,16 +65,22 @@ func Register(ctx context.Context, server, token string, info RegInfo) (id int64
 	return out.ClientID, out.Secret, &out.Bundle, err
 }
 
-// Heartbeat 心跳，返回服务端配置版本。
-func (c *Client) Heartbeat(ctx context.Context) (int64, error) {
-	var out struct {
-		ConfigRev int64  `json:"config_rev"`
-		ServerURL string `json:"server_url"`
-	}
+// HeartbeatResult 心跳响应：配置版本 + 服务端下发的数据面/中继策略。
+type HeartbeatResult struct {
+	ConfigRev     int64  `json:"config_rev"`
+	ServerURL     string `json:"server_url"`
+	TCPRelayMode  string `json:"tcp_relay_mode"`
+	TCPRelay      string `json:"tcp_relay"`
+	TCPRelayToken string `json:"tcp_relay_token"`
+}
+
+// Heartbeat 心跳，返回服务端配置版本与数据面策略。
+func (c *Client) Heartbeat(ctx context.Context) (*HeartbeatResult, error) {
+	var out HeartbeatResult
 	if err := doJSON(ctx, http.MethodPost, c.Server+"/api/tunnel/heartbeat", c.bearer(), nil, &out); err != nil {
-		return 0, err
+		return nil, err
 	}
-	return out.ConfigRev, nil
+	return &out, nil
 }
 
 // Config 拉取配置包。

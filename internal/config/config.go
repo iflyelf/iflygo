@@ -41,14 +41,22 @@ type Config struct {
 	AI  AIConfig  `yaml:"ai"`
 	Log LogConfig `yaml:"log"`
 	// TCPRelay 可选：UDP 被封锁时，为 Nebula overlay 提供「UDP over TCP」中继。
+	// 默认自动启用（监听控制端口 +1），客户端会自动发现并智能切换。
 	TCPRelay TCPRelayConfig `yaml:"tcp_relay"`
 }
 
-// TCPRelayConfig TCP 中继服务端配置（仅 listen 非空时启用）。
+// TCPRelayConfig TCP 中继服务端配置。
 type TCPRelayConfig struct {
-	// Listen TCP 监听地址（如 ":8443"）；为空则关闭 TCP 中继服务。
+	// Listen TCP 监听地址（如 ":8443"）。留空自动监听「控制面端口 +1」；
+	// 设为 "off" 可完全关闭。
 	Listen string `yaml:"listen"`
+	// Advertise 对外可达的中继地址（如 "relay.example.com:8443"）。
+	// 留空时按 ExternalURL 或客户端请求 Host + 实际监听端口自动推断。
+	Advertise string `yaml:"advertise"`
+	// Mode 客户端默认数据面模式：auto（UDP 优先，自动兜底 TCP）/ tcp（强制 TCP 中继）/ udp（仅 UDP）。
+	Mode string `yaml:"mode"`
 	// Token 可选共享密钥；非空时客户端必须携带相同令牌，防止中继被滥用为开放 UDP 代理。
+	// 客户端通过心跳自动获取，无需手工配置。
 	Token string `yaml:"token"`
 }
 
@@ -334,8 +342,9 @@ func Default() *Config {
 			Host: "localhost", Port: 5432, User: "postgres", DBName: "upgrade_mgr",
 			SSLMode: "disable", MaxOpenConns: 50, MaxIdleConns: 10, ConnMaxLifetime: 3600,
 		},
-		Auth:   AuthConfig{Provider: "builtin", AdminUsername: "admin"},
-		Consul: ConsulConfig{Timeout: 10, Concurrency: 16, CleanupMissing: true},
+		Auth:     AuthConfig{Provider: "builtin", AdminUsername: "admin"},
+		TCPRelay: TCPRelayConfig{Mode: "auto"},
+		Consul:   ConsulConfig{Timeout: 10, Concurrency: 16, CleanupMissing: true},
 		Redis: RedisConfig{
 			Enabled: false, Mode: "single", Host: "localhost", Port: 6379,
 			TTL: 10, Prefix: "upgrade_mgr:",
@@ -436,7 +445,9 @@ func Load(path string) (*Config, error) {
 
 // applyEnv 用环境变量覆盖配置。
 func (c *Config) applyEnv() {
+	setStr(&c.TCPRelay.Mode, "TCP_RELAY_MODE")
 	setStr(&c.TCPRelay.Listen, "TCP_RELAY_LISTEN")
+	setStr(&c.TCPRelay.Advertise, "TCP_RELAY_ADVERTISE")
 	setStr(&c.TCPRelay.Token, "TCP_RELAY_TOKEN")
 	setStr(&c.Server.Host, "SERVER_HOST")
 	setInt(&c.Server.Port, "SERVER_PORT")

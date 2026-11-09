@@ -148,6 +148,22 @@ TUNNEL_JS = r'''
     ]);
   }
 
+  state.tunnelNebulaNet = 0;
+  state.tunnelNebulaData = null;
+  state.tunnelNebulaFor = -1;
+
+  function tunnelNebulaList(v) {
+    return String(v || '').split(',').map(function (x) { return x.trim(); }).filter(function (x) { return x; });
+  }
+  function tunnelNebulaLoad(nid) {
+    if (!nid) { state.tunnelNebulaData = null; state.tunnelNebulaFor = 0; return Promise.resolve(); }
+    state.tunnelNebulaFor = nid;
+    state.tunnelNebulaNet = nid;
+    return api('/api/networks/' + nid).then(function (d) {
+      state.tunnelNebulaData = (d && d.nebula) || {};
+    }).catch(function () { state.tunnelNebulaData = {}; });
+  }
+
   function tunnelNetworksView() {
     var rows = state.tunnelNetworks.map(function (n) {
       return h('tr', {}, [
@@ -168,17 +184,123 @@ TUNNEL_JS = r'''
         .then(function () { tunnelSetMsg(true, '网络已创建'); return tunnelReload(); })
         .catch(function (e) { tunnelSetMsg(false, e.message); render(); });
     } }, ['创建网络']);
-    return h('div', { class: 'card' }, [
-      h('div', { class: 'card-head' }, [h('h3', {}, ['网络'])]),
-      h('div', { class: 'table-wrap' }, [
-        h('table', {}, [
-          h('thead', {}, [h('tr', {}, [h('th', {}, ['名称']), h('th', {}, ['IPv4']), h('th', {}, ['IPv6']), h('th', {}, ['MTU']), h('th', {}, ['操作'])])]),
-          h('tbody', {}, rows)
-        ])
+
+    // ---- 网络级 Nebula 设置（页面可编辑，保存后客户端下次心跳生效）----
+    var nid = state.tunnelNebulaNet || (state.tunnelNetworks[0] && state.tunnelNetworks[0].id) || 0;
+    if (nid && state.tunnelNebulaFor !== nid) { tunnelNebulaLoad(nid).then(render); }
+    var nb = state.tunnelNebulaData || {};
+    var cur = null;
+    for (var i = 0; i < state.tunnelNetworks.length; i++) {
+      if (state.tunnelNetworks[i].id === nid) { cur = state.tunnelNetworks[i]; break; }
+    }
+    var nebNet = tunnelNetSelect(nid, function () {
+      state.tunnelNebulaFor = -1;
+      tunnelNebulaLoad(Number(nebNet.value)).then(render);
+    });
+    function numOpt(v) { return h('option', { value: String(v) }, [String(v)]); }
+    var cipher = h('select', { value: nb.cipher || '' }, [
+      h('option', { value: '' }, ['默认 aes-256-gcm']),
+      h('option', { value: 'aes-256-gcm' }, ['aes-256-gcm']),
+      h('option', { value: 'chacha20-poly1305' }, ['chacha20-poly1305'])
+    ]);
+    var listenPort = h('input', { type: 'number', value: nb.listen_port || '' }, []);
+    var lhInterval = h('input', { type: 'number', value: nb.lighthouse_interval || '' }, []);
+    var punch = h('input', { type: 'checkbox', checked: !!nb.punch }, []);
+    var punchRespond = h('input', { type: 'checkbox', checked: !!nb.punch_respond }, []);
+    var punchDelay = h('input', { value: nb.punch_delay || '' }, []);
+    var amRelay = h('input', { type: 'checkbox', checked: !!nb.am_relay }, []);
+    var useRelays = h('input', { type: 'checkbox', checked: !!nb.use_relays }, []);
+    var relays = h('input', { value: (nb.relays || []).join(', ') }, []);
+    var tunDevice = h('input', { value: nb.tun_device || '' }, []);
+    var tunDisabled = h('input', { type: 'checkbox', checked: !!nb.tun_disabled }, []);
+    var prefRanges = h('input', { value: (nb.preferred_ranges || []).join(', ') }, []);
+    var hsInterval = h('input', { value: nb.handshake_try_interval || '' }, []);
+    var hsRetries = h('input', { type: 'number', value: nb.handshake_retries || '' }, []);
+    var logLevel = h('select', { value: nb.log_level || '' }, [
+      h('option', { value: '' }, ['默认 info']),
+      h('option', { value: 'error' }, ['error']),
+      h('option', { value: 'warn' }, ['warn']),
+      h('option', { value: 'info' }, ['info']),
+      h('option', { value: 'debug' }, ['debug'])
+    ]);
+    var logFormat = h('select', { value: nb.log_format || '' }, [
+      h('option', { value: '' }, ['默认 text']),
+      h('option', { value: 'text' }, ['text']),
+      h('option', { value: 'json' }, ['json'])
+    ]);
+    var statsType = h('select', { value: nb.stats_type || '' }, [
+      h('option', { value: '' }, ['关闭']),
+      h('option', { value: 'prometheus' }, ['prometheus']),
+      h('option', { value: 'graphite' }, ['graphite'])
+    ]);
+    var statsListen = h('input', { value: nb.stats_listen || '' }, []);
+    var dns = h('input', { value: cur ? (cur.dns || '') : '', placeholder: '如 1.1.1.1,8.8.8.8' }, []);
+    var mtu = h('input', { type: 'number', value: cur ? (cur.mtu || 1300) : 1300 }, []);
+    var save = h('button', { class: 'btn primary', onclick: function () {
+      var id = Number(nebNet.value);
+      if (!id) { tunnelSetMsg(false, '请先选择网络'); render(); return; }
+      var body = {
+        dns: dns.value,
+        mtu: Number(mtu.value || 0),
+        nebula: {
+          cipher: cipher.value,
+          listen_port: Number(listenPort.value || 0),
+          lighthouse_interval: Number(lhInterval.value || 0),
+          punch: punch.checked,
+          punch_respond: punchRespond.checked,
+          punch_delay: punchDelay.value,
+          am_relay: amRelay.checked,
+          use_relays: useRelays.checked,
+          relays: tunnelNebulaList(relays.value),
+          tun_device: tunDevice.value,
+          tun_disabled: tunDisabled.checked,
+          preferred_ranges: tunnelNebulaList(prefRanges.value),
+          handshake_try_interval: hsInterval.value,
+          handshake_retries: Number(hsRetries.value || 0),
+          log_level: logLevel.value,
+          log_format: logFormat.value,
+          stats_type: statsType.value,
+          stats_listen: statsListen.value
+        }
+      };
+      api('/api/networks/' + id, { method: 'PUT', body: JSON.stringify(body) })
+        .then(function () {
+          tunnelSetMsg(true, '网络/Nebula 设置已保存，客户端下次心跳自动拉取');
+          state.tunnelNebulaFor = -1;
+          return tunnelNebulaLoad(id);
+        })
+        .then(function () { return tunnelReload(); })
+        .then(render)
+        .catch(function (e) { tunnelSetMsg(false, e.message); render(); });
+    } }, ['保存网络设置']);
+
+    return h('div', {}, [
+      h('div', { class: 'card' }, [
+        h('div', { class: 'card-head' }, [h('h3', {}, ['网络'])]),
+        h('div', { class: 'table-wrap' }, [
+          h('table', {}, [
+            h('thead', {}, [h('tr', {}, [h('th', {}, ['名称']), h('th', {}, ['IPv4']), h('th', {}, ['IPv6']), h('th', {}, ['MTU']), h('th', {}, ['操作'])])]),
+            h('tbody', {}, rows)
+          ])
+        ]),
+        field('名称', name), field('IPv4 CIDR', cidr4), field('IPv6 CIDR', cidr6),
+        field('IPv4 网关', gw4), field('IPv6 网关', gw6),
+        create
       ]),
-      field('名称', name), field('IPv4 CIDR', cidr4), field('IPv6 CIDR', cidr6),
-      field('IPv4 网关', gw4), field('IPv6 网关', gw6),
-      create
+      h('div', { class: 'card' }, [
+        h('div', { class: 'card-head' }, [h('h3', {}, ['Nebula 设置（网络级）'])]),
+        h('div', { class: 'muted' }, ['保存后该网络下所有客户端在下一次心跳自动拉取新配置；无需逐台修改。']),
+        field('所属网络', nebNet),
+        h('div', { class: 'form-row2' }, [field('加密算法', cipher), field('监听端口', listenPort), field('Lighthouse 间隔(s)', lhInterval)]),
+        h('div', { class: 'form-row2' }, [field('NAT 打洞 punch', punch), field('响应打洞 punch_respond', punchRespond), field('打洞延迟 punch_delay', punchDelay)]),
+        h('div', { class: 'form-row2' }, [field('作为中继 am_relay', amRelay), field('使用中继 use_relays', useRelays), field('TUN 设备', tunDevice)]),
+        field('中继地址 relays（逗号分隔，host:port 或 overlay IP）', relays),
+        h('div', { class: 'form-row2' }, [field('禁用 TUN（仅测试）', tunDisabled), field('握手间隔', hsInterval), field('握手重试次数', hsRetries)]),
+        field('优先网段 preferred_ranges（逗号分隔）', prefRanges),
+        h('div', { class: 'form-row2' }, [field('日志级别', logLevel), field('日志格式', logFormat), field('统计类型', statsType)]),
+        h('div', { class: 'form-row2' }, [field('统计监听地址', statsListen), field('DNS', dns), field('MTU', mtu)]),
+        save
+      ])
     ]);
   }
 

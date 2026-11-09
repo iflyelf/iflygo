@@ -29,7 +29,17 @@ func startUDPEcho(t *testing.T) (string, func()) {
 	return pc.LocalAddr().String(), func() { _ = pc.Close() }
 }
 
-// startRelayServer 启动一个 TCP 中继服务端（随机端口），返回地址与取消函数。
+// deadUDP 返回一个绑定了但永不应答的 UDP socket 与地址，用于模拟 UDP 被封锁。
+func deadUDP(t *testing.T) (*net.UDPConn, string, func()) {
+	t.Helper()
+	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("dead UDP listen: %v", err)
+	}
+	return pc, pc.LocalAddr().String(), func() { _ = pc.Close() }
+}
+
+// startRelayServer 启动一个 TCP 中继服务端（随机端口），返回地址。
 func startRelayServer(t *testing.T, ctx context.Context, token string) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -64,8 +74,28 @@ func roundTrip(t *testing.T, local *net.UDPAddr, msg string) {
 	}
 }
 
-// TestBridgeServerRoundTrip 端到端：UDP 客户端 → 本地桥 → TCP 中继 → UDP 上游 → 回程。
-func TestBridgeServerRoundTrip(t *testing.T) {
+func waitMode(t *testing.T, b *Bridge, want string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if b.Mode() == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("等待桥切换到 %s 超时，当前 %s", want, b.Mode())
+}
+
+// sendProbe 模拟 Nebula 向桥发一个数据报。
+func sendProbe(t *testing.T, conn *net.UDPConn, payload string) {
+	t.Helper()
+	if _, err := conn.Write([]byte(payload)); err != nil {
+		t.Fatalf("write probe: %v", err)
+	}
+}
+
+// TestBridgeDirectPath 验证正常网络下走直连 UDP，不切换到中继。
+func TestBridgeDirectPath(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -73,16 +103,164 @@ func TestBridgeServerRoundTrip(t *testing.T) {
 	defer closeEcho()
 	relayAddr := startRelayServer(t, ctx, "")
 
-	bridge, err := StartBridge(ctx, relayAddr, "", echoAddr)
+	b, err := StartBridge(ctx, relayAddr, "", echoAddr)
 	if err != nil {
 		t.Fatalf("StartBridge: %v", err)
 	}
-	defer bridge.Close()
-	roundTrip(t, bridge.LocalAddr(), "hello over tcp relay")
+	defer b.Close()
+
+	roundTrip(t, b.LocalAddr(), "hello direct")
+	if b.Mode() != "direct" {
+		t.Fatalf("正常网络应保持直连，实际 %s", b.Mode())
+	}
 }
 
-// TestBridgeServerToken 验证共享令牌：错误令牌无法建立隧道，正确令牌可用。
-func TestBridgeServerToken(t *testing.T) {
+// TestBridgeAutoSwitchToRelay 验证直连无响应时自动切换到 TCP 中继。
+func TestBridgeAutoSwitchToRelay(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, deadAddr, closeDead := deadUDP(t)
+	defer closeDead()
+	relayAddr := startRelayServer(t, ctx, "")
+
+	b, err := StartBridgeWithOptions(ctx, BridgeOptions{
+		RelayServer:     relayAddr,
+		Target:          deadAddr,
+		ResponseTimeout: 100 * time.Millisecond,
+		MinSent:         1,
+		DialTimeout:     time.Second,
+	})
+	if err != nil {
+		t.Fatalf("StartBridge: %v", err)
+	}
+	defer b.Close()
+
+	conn, err := net.DialUDP("udp", nil, b.LocalAddr())
+	if err != nil {
+		t.Fatalf("dial bridge: %v", err)
+	}
+	defer conn.Close()
+	sendProbe(t, conn, "probe-1")
+	time.Sleep(150 * time.Millisecond)
+	sendProbe(t, conn, "probe-2")
+
+	waitMode(t, b, "relay")
+}
+
+// TestBridgeSwitchBackToDirect 验证中继期间直连恢复后自动切回。
+func TestBridgeSwitchBackToDirect(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	dead, deadAddr, closeDead := deadUDP(t)
+	defer closeDead()
+	relayAddr := startRelayServer(t, ctx, "")
+
+	b, err := StartBridgeWithOptions(ctx, BridgeOptions{
+		RelayServer:     relayAddr,
+		Target:          deadAddr,
+		ResponseTimeout: 100 * time.Millisecond,
+		MinSent:         1,
+		RetryInterval:   time.Hour, // 关闭主动探测，改为手动注入直连响应
+		DialTimeout:     time.Second,
+	})
+	if err != nil {
+		t.Fatalf("StartBridge: %v", err)
+	}
+	defer b.Close()
+
+	nebula, err := net.DialUDP("udp", nil, b.LocalAddr())
+	if err != nil {
+		t.Fatalf("dial bridge: %v", err)
+	}
+	defer nebula.Close()
+	sendProbe(t, nebula, "probe-1")
+	time.Sleep(150 * time.Millisecond)
+	sendProbe(t, nebula, "probe-2")
+	waitMode(t, b, "relay")
+
+	// 模拟真实上游恢复：从目标地址向桥的直连 socket 回包。
+	directLocal := b.direct.LocalAddr().(*net.UDPAddr)
+	if _, err := dead.WriteToUDP([]byte("recovered"), directLocal); err != nil {
+		t.Fatalf("inject direct response: %v", err)
+	}
+	waitMode(t, b, "direct")
+}
+
+// TestBridgeForceRelay 验证 tcp 模式：启动即走中继，且不回落直连。
+func TestBridgeForceRelay(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	echoAddr, closeEcho := startUDPEcho(t)
+	defer closeEcho()
+	relayAddr := startRelayServer(t, ctx, "")
+
+	b, err := StartBridgeWithOptions(ctx, BridgeOptions{
+		RelayServer: relayAddr,
+		Target:      echoAddr,
+		ForceRelay:  true,
+		DialTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("StartBridge: %v", err)
+	}
+	defer b.Close()
+	if b.Mode() != "relay" {
+		t.Fatalf("强制中继模式应立即为 relay，实际 %s", b.Mode())
+	}
+	roundTrip(t, b.LocalAddr(), "hello forced tcp")
+
+	// 中继不可用时不回退直连（策略模式）。
+	bad, err := StartBridgeWithOptions(ctx, BridgeOptions{
+		RelayServer: "127.0.0.1:1", // 不可达
+		Target:      echoAddr,
+		ForceRelay:  true,
+		DialTimeout: 200 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("StartBridge: %v", err)
+	}
+	defer bad.Close()
+	conn, err := net.DialUDP("udp", nil, bad.LocalAddr())
+	if err != nil {
+		t.Fatalf("dial bridge: %v", err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
+	_, _ = conn.Write([]byte("must-not-leak"))
+	buf := make([]byte, 64)
+	if n, err := conn.Read(buf); err == nil {
+		t.Fatalf("tcp 模式不应回退直连，却收到 %q", buf[:n])
+	}
+}
+
+// TestBridgeRelayPath 验证在强制中继状态下数据确实经 TCP 中继转发。
+func TestBridgeRelayPath(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	echoAddr, closeEcho := startUDPEcho(t)
+	defer closeEcho()
+	relayAddr := startRelayServer(t, ctx, "")
+
+	b, err := StartBridge(ctx, relayAddr, "", echoAddr)
+	if err != nil {
+		t.Fatalf("StartBridge: %v", err)
+	}
+	defer b.Close()
+
+	b.mu.Lock()
+	b.state = bridgeRelay
+	b.lastProbe = time.Now() // 避免首个报文同时触发直连探测
+	b.mu.Unlock()
+
+	roundTrip(t, b.LocalAddr(), "hello relay")
+}
+
+// TestServerTokenAuth 验证中继服务端的共享令牌校验。
+func TestServerTokenAuth(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -90,29 +268,43 @@ func TestBridgeServerToken(t *testing.T) {
 	defer closeEcho()
 	relayAddr := startRelayServer(t, ctx, "s3cret")
 
-	bad, err := StartBridge(ctx, relayAddr, "wrong", echoAddr)
+	// 错误令牌：握手后服务端立即断开，读不到回显。
+	bad, err := net.Dial("tcp", relayAddr)
 	if err != nil {
-		t.Fatalf("StartBridge: %v", err)
+		t.Fatalf("dial relay: %v", err)
 	}
-	defer bad.Close()
-	conn, err := net.DialUDP("udp", nil, bad.LocalAddr())
-	if err != nil {
-		t.Fatalf("dial bad bridge: %v", err)
+	if err := writeHandshake(bad, echoAddr, "wrong"); err != nil {
+		t.Fatalf("handshake: %v", err)
 	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(500 * time.Millisecond))
-	_, _ = conn.Write([]byte("ping"))
-	buf := make([]byte, 64)
-	if n, err := conn.Read(buf); err == nil {
-		t.Fatalf("错误令牌不应收到回显，却收到 %q", buf[:n])
+	if err := writeFrame(bad, []byte("ping")); err != nil {
+		t.Fatalf("write: %v", err)
 	}
+	_ = bad.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := readFrame(bad); err == nil {
+		t.Fatalf("错误令牌不应收到回显")
+	}
+	_ = bad.Close()
 
-	good, err := StartBridge(ctx, relayAddr, "s3cret", echoAddr)
+	// 正确令牌：正常转发。
+	good, err := net.Dial("tcp", relayAddr)
 	if err != nil {
-		t.Fatalf("StartBridge: %v", err)
+		t.Fatalf("dial relay: %v", err)
 	}
 	defer good.Close()
-	roundTrip(t, good.LocalAddr(), "authorized")
+	if err := writeHandshake(good, echoAddr, "s3cret"); err != nil {
+		t.Fatalf("handshake: %v", err)
+	}
+	if err := writeFrame(good, []byte("ping")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = good.SetReadDeadline(time.Now().Add(2 * time.Second))
+	payload, err := readFrame(good)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(payload) != "ping" {
+		t.Fatalf("回显不匹配: %q", payload)
+	}
 }
 
 // TestRewriteConfig 验证 static_host_map 与 relay.relays 均被改写为本地桥端口。
@@ -166,7 +358,7 @@ relay:
 		t.Fatalf("relay.use_relays 应保留")
 	}
 
-	// 验证改写后的地址确实能经 TCP 中继到达上游
+	// 验证改写后的地址确实能经桥到达上游（正常网络走直连 UDP）
 	conn, err := net.Dial("udp", eps[0])
 	if err != nil {
 		t.Fatalf("dial rewritten endpoint: %v", err)

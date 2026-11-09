@@ -65,6 +65,8 @@ type ServiceContext struct {
 	Audit      *audit.Logger    // 审计日志
 	AIToken    *aitoken.Repo    // AI 访问令牌
 	Liaison    *liaison.Service // 远程管理套件（Web SSH/文件/DB/LLM/Casbin）
+	// Relay TCP 中继运行时（可随页面/配置文件热重建，端口/模式随心跳下发）。
+	Relay *RelayRuntime
 	// cacheRef 可选 Redis 缓存（单点/集群/哨兵）；未启用时所有读写自动降级。
 	// 用原子指针保存，设置页保存后热替换不会与请求读取产生数据竞争。
 	cacheRef atomic.Pointer[cache.Cache]
@@ -196,6 +198,7 @@ func New(c *config.Config) *ServiceContext {
 		RBAC:          rbac.NewService(db),
 		Audit:         audit.NewLogger(db), // 审计日志
 		AIToken:       aitoken.NewRepo(db),
+		Relay:         NewRelayRuntime(c),
 		dbMaxOpenBase: c.Database.MaxOpenConns,
 		dbMaxIdleBase: c.Database.MaxIdleConns,
 	}

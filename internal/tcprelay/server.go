@@ -41,16 +41,16 @@ func (s *Server) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	s.logf("✅ TCP 中继服务已启动，监听 %s", ln.Addr())
-	if s.Token == "" {
-		s.logf("⚠️ TCP 中继未配置共享令牌（TCP_RELAY_TOKEN），任何可访问该端口者均可使用，请用防火墙限制来源")
-	}
 	return s.Serve(ctx, ln)
 }
 
 // Serve 在给定 listener 上服务（便于测试注入）。
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	defer ln.Close()
+	s.logf("✅ TCP 中继服务已启动，监听 %s", ln.Addr())
+	if s.Token == "" {
+		s.logf("⚠️ TCP 中继未配置共享令牌（TCP_RELAY_TOKEN），任何可访问该端口者均可使用，请用防火墙限制来源")
+	}
 	go func() {
 		<-ctx.Done()
 		_ = ln.Close()

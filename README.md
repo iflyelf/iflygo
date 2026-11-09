@@ -6,7 +6,9 @@
 
 ### 隧道（数据面去中心化）
 - ✅ **P2P 优先**：UDP 打洞成功走直连，性能不受服务端带宽限制
-- ✅ **自动兜底**：打洞失败走 Relay（UDP），UDP 被封锁时走 TCP Relay
+- ✅ **智能数据面**：`auto`（UDP 优先，自动检测并切换 TCP 中继）/ `tcp`（强制 TCP）/ `udp`（仅 UDP）
+- ✅ **零配置**：服务端自动开启 TCP 中继并通过心跳下发，客户端无需手工指定协议或地址
+- ✅ **配置热加载**：服务端/客户端配置文件修改后自动生效；服务端设置可在页面配置
 - ✅ **端到端加密**：即使经 Relay/Edge 转发，也无法解密内容
 - ✅ **高可用**：多 Lighthouse / Relay / Edge，一个挂掉自动切换
 - ✅ **不安全路由 HA**：多网关加权 ECMP + 健康检查 + 自动故障切换
@@ -67,7 +69,8 @@
 - [x] 双数据库（PostgreSQL + SQLite）全量支持（81 handler + 153 路由 + 39 迁移）
 - [x] DDNSTO 远程访问：子域名自动分配 + edge 穿透
 - [x] Liaison 远程管理套件：Casbin RBAC / Web SSH / 文件管理 / Web DB / LLM 网关
-- [x] TCP Relay：UDP 被完全封锁时，经 TCP 承载 overlay 流量（客户端本地 UDP 桥 + 服务端解封装转发）
+- [x] 数据面模式 auto/tcp/udp + TCP Relay（UDP 被封锁时经 TCP 承载 overlay 流量）
+- [x] 服务端/客户端配置文件热加载；服务端中继配置与网络 Nebula 设置可在页面配置
 
 ## 🔌 控制面 API（已实现）
 
@@ -145,12 +148,12 @@ docker run --rm iflyelf/iflygo:latest -version
 | 8080 | TCP | 控制面 Web/API |
 | 443 | TCP/UDP | Edge 入口 / TCP 隧道 |
 | 6688 | UDP | Lighthouse/Relay |
-| 8443（可配置） | TCP | TCP 中继（仅 `tcp_relay.listen` 非空时监听） |
+| 控制面端口 +1（默认，可配置） | TCP | TCP 中继（默认自动开启；`tcp_relay.listen=off` 关闭） |
 
-## 🧵 TCP Relay（UDP 被封锁时的兜底）
+## 🧵 数据面与 TCP Relay
 
-当网络**只允许 TCP**（UDP 全部被拦截）时，Nebula 无法打洞也无法使用 UDP Relay。
-TCP Relay 在客户端本地做一层「UDP 桥」，把 overlay 数据报封装进 TCP 隧道：
+Nebula 原生只有 UDP。当网络**只允许 TCP**（UDP 全部被拦截）时，iflygo 在客户端
+本地做一层「UDP 桥」，把 overlay 数据报封装进 TCP 隧道：
 
 ```
 Nebula ──UDP──▶ 127.0.0.1:<随机端口>（本地桥）
@@ -162,22 +165,76 @@ Nebula ──UDP──▶ 127.0.0.1:<随机端口>（本地桥）
               lighthouse / relay 真实 endpoint
 ```
 
-- **服务端**：配置文件
-  ```yaml
-  tcp_relay:
-    listen: ":8443"
-    token: "change-me"      # 可选，建议设置
-  ```
-  或环境变量 `TCP_RELAY_LISTEN=:8443`、`TCP_RELAY_TOKEN=change-me`。`listen` 为空则不启动。
-- **客户端**：`iflygo-client run --tcp-relay relay.example.com:8443 --tcp-relay-token change-me`
-  或环境变量 `IFLYGO_TCP_RELAY=relay.example.com:8443`、`IFLYGO_TCP_RELAY_TOKEN=change-me`。
-- **原理**：客户端把 Nebula `static_host_map` 与 `relay.relays` 中每个真实上游
-  `host:port` 改写为本地 `127.0.0.1:<随机 UDP 端口>`；本地桥将数据报以
-  「4 字节大端长度 + 载荷」的帧写入 TCP 隧道；服务端按握手里的目标地址建立独立
-  UDP socket 转发，响应原路返回。纯 overlay IP（无端口）条目原样保留。
-- **安全**：设置 `token` 后，服务端用常量时间比较校验握手令牌，避免中继被滥用为
-  开放 UDP 代理；未设置时启动会打印告警，建议配合防火墙限制来源。
-- **按需启用**：未配置时保持原生 UDP 行为，不产生任何额外开销。
+### 三种数据面模式
+
+| 模式 | 行为 | 适用场景 |
+|---|---|---|
+| `auto`（默认） | UDP 直连优先；连续无响应自动切 TCP 中继；直连恢复自动切回 | 绝大多数网络，兼顾性能与可达性 |
+| `tcp` | 始终经 TCP 中继，不回落直连 | UDP 被完全封锁、或 UDP 时通时断 |
+| `udp` | 仅原生 UDP，不使用中继 | 明确禁止中继/带宽受限 |
+
+模式优先级：**命令行 > 客户端配置文件 > 服务端心跳下发 > 内置默认**。
+
+### 零配置（推荐）
+
+- 服务端默认自动监听「控制面端口 +1」的 TCP 中继，并把模式/地址/令牌随心跳下发。
+- 客户端直接 `iflygo-client run` 即可：自动发现中继、自动判断是否需要 TCP。
+- 页面路径：**设置 → 数据面 / TCP 中继**，可配置模式、监听地址、对外地址与共享令牌，保存即时生效。
+
+服务端配置文件（可选，支持热加载）：
+
+```yaml
+tcp_relay:
+  mode: auto            # auto / tcp / udp（下发给客户端作为默认）
+  listen: ":8443"       # 留空 = 控制面端口 +1；off = 关闭
+  advertise: ""         # 对外地址，留空按 external_url/请求 Host 自动推断
+  token: "change-me"    # 可选共享令牌（客户端自动获取）
+```
+
+环境变量：`TCP_RELAY_MODE`、`TCP_RELAY_LISTEN`、`TCP_RELAY_ADVERTISE`、`TCP_RELAY_TOKEN`。
+
+### 客户端配置文件（支持热加载）
+
+默认路径 `<state-dir>/client.yaml`（可用 `--config` 或 `IFLYGO_CLIENT_CONFIG` 指定）：
+
+```yaml
+interval: 30s
+data_plane:
+  mode: auto                 # auto / tcp / udp
+  tcp_relay: ""              # 留空自动发现；也可填 relay.example.com:8443
+  tcp_relay_token: ""        # 留空自动从服务端获取
+log:
+  level: info
+```
+
+修改后约 2 秒内自动生效；数据面模式变化会自动重启 overlay（隧道短暂重连），
+心跳间隔变化立即生效。
+
+命令行仍可临时覆盖：
+
+```bash
+iflygo-client run --data-plane tcp
+iflygo-client run --tcp-relay relay.example.com:8443 --tcp-relay-token change-me
+iflygo-client run --tcp-relay off   # 等价 --data-plane udp
+```
+
+### 服务端配置文件热加载
+
+`iflygo-server -c etc/config.yaml` 会每 3 秒检查文件变化：
+
+- `tcp_relay`：即时重建监听并生效；
+- 其它 section（数据库、监听端口、Redis 等）：日志提示「需重启生效」；
+- 页面已保存的 `tcp_relay.*` 优先级更高，文件变更不会覆盖页面配置。
+
+### 原理与安全
+
+- 客户端把 Nebula `static_host_map` 与 `relay.relays` 中每个真实上游 `host:port`
+  改写为本地桥端口；桥用「4 字节大端长度 + 载荷」帧写入 TCP 隧道；服务端按握手目标
+  建立独立 UDP socket 转发，响应原路返回。纯 overlay IP（无端口）条目原样保留。
+- 本地桥默认直连 UDP（与原生等价）；只有判定直连不可用时才启用 TCP，
+  避免长期承担额外一跳与 TCP 队头阻塞的代价。
+- `token` 非空时服务端用常量时间比较校验握手令牌，客户端通过已认证心跳自动获取；
+  未设置令牌时启动会打印告警，建议用防火墙限制来源。
 
 ## 🚀 发布流程
 

@@ -8,6 +8,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// RewriteOptions 改写选项。
+type RewriteOptions struct {
+	// ForceRelay 强制走 TCP 中继（tcp 模式），桥启动即使用中继。
+	ForceRelay bool
+}
+
 // RewriteConfig 解析 Nebula 配置，把下列真实上游 endpoint 改写为本地 TCP 桥的
 // UDP 端口（127.0.0.1:<port>）：
 //
@@ -19,6 +25,11 @@ import (
 //
 // 返回改写后的 YAML。所有桥在 ctx 取消时自动关闭。
 func RewriteConfig(ctx context.Context, relayServer, token string, cfg []byte) ([]byte, error) {
+	return RewriteConfigWithOptions(ctx, relayServer, token, RewriteOptions{}, cfg)
+}
+
+// RewriteConfigWithOptions 与 RewriteConfig 相同，但可指定 auto/tcp 模式。
+func RewriteConfigWithOptions(ctx context.Context, relayServer, token string, opts RewriteOptions, cfg []byte) ([]byte, error) {
 	var root map[string]any
 	if err := yaml.Unmarshal(cfg, &root); err != nil {
 		return nil, fmt.Errorf("解析 Nebula 配置失败: %w", err)
@@ -37,7 +48,7 @@ func RewriteConfig(ctx context.Context, relayServer, token string, cfg []byte) (
 			if err != nil {
 				return nil, fmt.Errorf("static_host_map[%s]: %w", vpnIP, err)
 			}
-			rewritten, err := startBridges(ctx, relayServer, token, list)
+			rewritten, err := startBridges(ctx, relayServer, token, opts, list)
 			if err != nil {
 				return nil, fmt.Errorf("static_host_map[%s]: %w", vpnIP, err)
 			}
@@ -58,7 +69,7 @@ func RewriteConfig(ctx context.Context, relayServer, token string, cfg []byte) (
 			if err != nil {
 				return nil, fmt.Errorf("relay.relays: %w", err)
 			}
-			rewritten, err := startBridges(ctx, relayServer, token, list)
+			rewritten, err := startBridges(ctx, relayServer, token, opts, list)
 			if err != nil {
 				return nil, fmt.Errorf("relay.relays: %w", err)
 			}
@@ -81,14 +92,19 @@ func RewriteConfig(ctx context.Context, relayServer, token string, cfg []byte) (
 // startBridges 为每个可解析的 "host:port" endpoint 启动一个本地桥，
 // 返回改写后的本地 UDP 地址列表。无法解析为 host:port 的条目（如纯 overlay IP）
 // 原样保留，避免破坏配置。
-func startBridges(ctx context.Context, relayServer, token string, endpoints []string) ([]any, error) {
+func startBridges(ctx context.Context, relayServer, token string, opts RewriteOptions, endpoints []string) ([]any, error) {
 	out := make([]any, 0, len(endpoints))
 	for _, ep := range endpoints {
 		if _, _, err := net.SplitHostPort(ep); err != nil {
 			out = append(out, ep) // 非 host:port（如 overlay IP），保持原样
 			continue
 		}
-		bridge, err := StartBridge(ctx, relayServer, token, ep)
+		bridge, err := StartBridgeWithOptions(ctx, BridgeOptions{
+			RelayServer: relayServer,
+			Token:       token,
+			Target:      ep,
+			ForceRelay:  opts.ForceRelay,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("启动 TCP 桥失败 (%s): %w", ep, err)
 		}
