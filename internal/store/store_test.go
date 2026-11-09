@@ -1,8 +1,10 @@
 package store
 
 import (
+	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/iflyelf/iflygo/internal/config"
 )
@@ -24,20 +26,28 @@ func TestPostgresIntegration(t *testing.T) {
 	}
 	defer s.Close()
 
+	// 每次使用唯一名称并清理：CI 会连续跑两遍（普通 + -race），固定名称会触发唯一约束。
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	name := "pgtest-" + suffix
+	retName := "pgtest-returning-" + suffix
+	t.Cleanup(func() {
+		_, _ = s.DB.Exec(s.Rebind(`DELETE FROM networks WHERE name IN ($1,$2)`), name, retName)
+	})
+
 	if _, err := s.DB.Exec(s.Rebind(`INSERT INTO networks (name, cidr4, cidr6, gateway4, gateway6, dns, mtu, nebula, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`),
-		"pgtest", "10.0.0.0/16", "", "10.0.0.1", "", "", 1300, "", ""); err != nil {
+		name, "10.0.0.0/16", "", "10.0.0.1", "", "", 1300, "", ""); err != nil {
 		t.Fatalf("insert network: %v", err)
 	}
 	// RETURNING id 是 handler 的标准写法（PostgreSQL 不支持 LastInsertId）
 	var nid int64
-	if err := s.DB.QueryRow(s.Rebind(`INSERT INTO networks (name, cidr4) VALUES ($1,$2) RETURNING id`), "pgtest-returning", "10.1.0.0/16").Scan(&nid); err != nil {
+	if err := s.DB.QueryRow(s.Rebind(`INSERT INTO networks (name, cidr4) VALUES ($1,$2) RETURNING id`), retName, "10.1.0.0/16").Scan(&nid); err != nil {
 		t.Fatalf("insert returning id: %v", err)
 	}
 	if nid == 0 {
 		t.Fatalf("RETURNING id 应为非 0，got %d", nid)
 	}
 	var n int
-	if err := s.DB.QueryRow(s.Rebind(`SELECT COUNT(*) FROM networks WHERE name = $1`), "pgtest").Scan(&n); err != nil {
+	if err := s.DB.QueryRow(s.Rebind(`SELECT COUNT(*) FROM networks WHERE name = $1`), name).Scan(&n); err != nil {
 		t.Fatalf("count: %v", err)
 	}
 	if n != 1 {
