@@ -51,3 +51,19 @@ func TestRelayRegistry(t *testing.T) {
 		t.Fatalf("无关设置不应触发中继热更新")
 	}
 }
+
+func TestRevealSecret(t *testing.T) {
+	c := config.Default()
+	c.TCPRelay.Token = "s3cret"
+	s := NewService(nil, c)
+	v, err := s.RevealSecret("tcp_relay.token")
+	if err != nil || v != "s3cret" {
+		t.Fatalf("RevealSecret: %q %v", v, err)
+	}
+	if _, err := s.RevealSecret("tcp_relay.mode"); err == nil {
+		t.Fatalf("非密钥项应拒绝查看")
+	}
+	if _, err := s.RevealSecret("no.such.key"); err == nil {
+		t.Fatalf("未知项应报错")
+	}
+}

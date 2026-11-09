@@ -1260,6 +1260,20 @@ func validateDuration(allowEmpty bool) func(string) error {
 	}
 }
 
+// RevealSecret 返回密钥项的完整值（仅供 superadmin 显式查看，调用方必须记审计）。
+func (s *Service) RevealSecret(key string) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	it, ok := s.items[key]
+	if !ok {
+		return "", fmt.Errorf("未知设置项 %s", key)
+	}
+	if !it.Secret {
+		return "", fmt.Errorf("设置项 %s 不是密钥", key)
+	}
+	return it.Get(s.cfg), nil
+}
+
 // HasPagePrefix 判断是否有以 prefix 开头的设置项已在页面保存。
 //
 // 用于配置文件热加载时避免覆盖页面设置（页面优先级最高）。

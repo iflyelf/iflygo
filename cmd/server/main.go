@@ -266,6 +266,7 @@ func registerRoutes(mux *http.ServeMux, sc *svc.ServiceContext) []middleware.Sto
 
 	mux.HandleFunc("GET /api/settings", middleware.RequireAuth(auth, middleware.RequireSuperAdmin(handler.ListSettings(sc))))
 	mux.HandleFunc("PUT /api/settings", middleware.RequireAuth(auth, middleware.RequireSuperAdmin(handler.UpdateSettings(sc))))
+	mux.HandleFunc("GET /api/settings/reveal/{key}", middleware.RequireAuth(auth, middleware.RequireSuperAdmin(handler.RevealSetting(sc))))
 	mux.HandleFunc("DELETE /api/settings/{key}", middleware.RequireAuth(auth, middleware.RequireSuperAdmin(handler.ResetSetting(sc))))
 
 	// AI / MCP

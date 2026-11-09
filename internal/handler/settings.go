@@ -57,6 +57,24 @@ func UpdateSettings(s *svc.ServiceContext) http.HandlerFunc {
 	}
 }
 
+// RevealSetting 返回密钥项的完整值（仅 superadmin；每次查看写审计）。
+//
+// 列表接口默认脱敏为 ******，避免密钥出现在页面快照/日志；需要明文时由
+// 用户显式点击「显示完整值」，服务端记审计后返回。
+func RevealSetting(s *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		key := strings.TrimSpace(r.PathValue("key"))
+		v, err := s.Settings.RevealSecret(key)
+		if err != nil {
+			auditOp(s, r, audit.ActionSettingReveal, "setting", key, key, err)
+			httpx.Fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		auditOp(s, r, audit.ActionSettingReveal, "setting", key, key, nil)
+		httpx.OK(w, map[string]any{"key": key, "value": v})
+	}
+}
+
 // ResetSetting 删除页面保存的值，恢复为配置文件/环境变量/默认值：DELETE /api/settings/{key}。
 //
 // 页面设置优先级最高；不提供恢复入口时，一旦在页面保存过，之后修改配置文件将不再生效。

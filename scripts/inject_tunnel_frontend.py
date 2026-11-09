@@ -912,13 +912,63 @@ TUNNEL_SWITCHVIEW = r"""    else if (v === 'tunnel') render();
 """
 
 
+# 密钥显示：列表接口默认脱敏，superadmin 显式点击后调用 reveal 接口取完整值。
+SETTINGS_JS = r"""
+  // ===== 密钥显示（superadmin 显式操作，服务端写审计）=====
+  state.revealedSecrets = state.revealedSecrets || {};
+  state.secretValues = state.secretValues || {};
+  var _origSettingsView = settingsView;
+  settingsView = function () {
+    var node = _origSettingsView();
+    if (!node || !node.querySelectorAll) return node;
+    var wraps = node.querySelectorAll('[data-setting-key]');
+    for (var i = 0; i < wraps.length; i++) {
+      var wrap = wraps[i];
+      var inp = wrap.querySelector('input[type="password"], input[data-secret-revealed]');
+      if (!inp) continue;
+      var key = wrap.getAttribute('data-setting-key');
+      if (state.revealedSecrets[key] && state.secretValues[key] !== undefined) {
+        inp.type = 'text';
+        inp.setAttribute('data-secret-revealed', '1');
+        inp.value = state.secretValues[key];
+      }
+      var btn = h('button', { type: 'button', class: 'btn ghost small' },
+        [state.revealedSecrets[key] ? '隐藏' : '显示完整值']);
+      btn.onclick = (function (key, inp, btn) {
+        return function () {
+          if (state.revealedSecrets[key]) {
+            delete state.revealedSecrets[key];
+            delete state.secretValues[key];
+            inp.type = 'password';
+            inp.removeAttribute('data-secret-revealed');
+            var cur = (state.settings || []).filter(function (s) { return s.key === key; })[0];
+            inp.value = cur ? (cur.value || '') : '';
+            btn.textContent = '显示完整值';
+            return;
+          }
+          api('/api/settings/reveal/' + encodeURIComponent(key)).then(function (d) {
+            state.revealedSecrets[key] = true;
+            state.secretValues[key] = (d && d.value) || '';
+            inp.type = 'text';
+            inp.setAttribute('data-secret-revealed', '1');
+            inp.value = state.secretValues[key];
+            btn.textContent = '隐藏';
+          }).catch(function (e) { alert('读取完整密钥失败: ' + e.message); });
+        };
+      })(key, inp, btn);
+      wrap.appendChild(h('div', { class: 'toolbar', style: 'margin-top:6px' }, [btn]));
+    }
+    return node;
+  };
+"""
+
 def inject(app_js):
     """在锚点注入隧道 + 远程访问 + 远程管理视图代码，返回注入后的内容。"""
     # 1. state 末尾注入 state 字段 + 视图函数
     anchor_state = "navOpen: null };"
     if anchor_state not in app_js:
         raise RuntimeError("未找到 state 末尾锚点: " + anchor_state)
-    app_js = app_js.replace(anchor_state, anchor_state + "\n" + TUNNEL_JS + REMOTE_JS, 1)
+    app_js = app_js.replace(anchor_state, anchor_state + "\n" + TUNNEL_JS + REMOTE_JS + SETTINGS_JS, 1)
 
     # 2. 导航菜单注入（隧道下拉 + 远程访问 + 远程管理下拉）
     anchor_nav = "navDropdown('帮助', helpItems, false)"

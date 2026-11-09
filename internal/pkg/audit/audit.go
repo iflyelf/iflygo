@@ -157,6 +157,7 @@ const (
 	ActionEnrollTokenDelete = "enroll_token.delete"
 	ActionSettingUpdate     = "setting.update"
 	ActionSettingReset      = "setting.reset"
+	ActionSettingReveal     = "setting.reveal"
 	// AI / MCP
 	ActionAITokenCreate  = "ai_token.create"
 	ActionAITokenRevoke  = "ai_token.revoke"
