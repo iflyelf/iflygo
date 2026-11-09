@@ -106,6 +106,7 @@ func buildNebulaInput(sc *svc.ServiceContext, networkID int64, isLighthouse bool
 		KeyPath:              "node.key",
 		Blocklist:            blocklist,
 		IsLighthouse:         isLighthouse,
+		LighthouseInterval:   settings.LighthouseInterval,
 		ListenPort:           listenPort,
 		Lighthouses:          hosts,
 		StaticHostMap:        staticMap,

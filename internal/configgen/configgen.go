@@ -144,9 +144,10 @@ type Input struct {
 
 	Blocklist []string
 
-	IsLighthouse bool
-	ListenHost   string
-	ListenPort   int
+	IsLighthouse       bool
+	LighthouseInterval int
+	ListenHost         string
+	ListenPort         int
 
 	Lighthouses   []string            // lighthouse.hosts（overlay IP）
 	StaticHostMap map[string][]string // overlay IP -> 公网 host:port
@@ -193,6 +194,7 @@ func Build(in Input) ([]byte, error) {
 		StaticHostMap: in.StaticHostMap,
 		Lighthouse: Lighthouse{
 			AmLighthouse:    in.IsLighthouse,
+			Interval:        in.LighthouseInterval,
 			Hosts:           in.Lighthouses,
 			RemoteAllowList: in.RemoteAllowList,
 		},
