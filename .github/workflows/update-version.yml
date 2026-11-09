@@ -98,7 +98,16 @@ jobs:
         run: |
           cd third_party/grdp
           CUR=$(git describe --tags --abbrev=0 2>/dev/null || git rev-parse --short HEAD)
-          LATEST=$(curl -fsSL https://api.github.com/repos/tomatome/grdp/releases/latest | jq -r .tag_name)
+          # 优先取最新 Release；该仓库可能没有 Release（404），回退到最新 tag。
+          LATEST=$(curl -fsSL https://api.github.com/repos/tomatome/grdp/releases/latest 2>/dev/null | jq -r '.tag_name // empty' || true)
+          if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
+            LATEST=$(curl -fsSL "https://api.github.com/repos/tomatome/grdp/tags?per_page=1" 2>/dev/null | jq -r '.[0].name // empty' || true)
+          fi
+          if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
+            echo "上游既无 release 也无 tag，跳过"
+            echo "has_update=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           echo "current=${CUR}" >> "$GITHUB_OUTPUT"
           echo "latest=${LATEST}" >> "$GITHUB_OUTPUT"
           # 注：grdp 的 master 分支含 Linux 不兼容的 plugin 依赖（cliprdr/rail/drdynvc），
