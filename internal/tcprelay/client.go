@@ -68,9 +68,9 @@ type BridgeOptions struct {
 	RelayServer string
 	Token       string
 	Target      string
-	// ResponseTimeout 直连无响应多久判定为不可用，默认 5s。
+	// ResponseTimeout 直连无响应多久判定为不可用，默认 3s。
 	ResponseTimeout time.Duration
-	// MinSent 判定前至少发出的报文数，默认 3。
+	// MinSent 判定前至少发出的报文数，默认 2。
 	MinSent int
 	// RetryInterval 中继模式下重试直连的间隔，默认 30s。
 	RetryInterval time.Duration
@@ -364,14 +364,14 @@ func (b *Bridge) responseTimeoutValue() time.Duration {
 	if b.responseTimeout > 0 {
 		return b.responseTimeout
 	}
-	return 5 * time.Second
+	return 3 * time.Second
 }
 
 func (b *Bridge) minSentValue() int {
 	if b.minSent > 0 {
 		return b.minSent
 	}
-	return 3
+	return 2
 }
 
 func (b *Bridge) retryIntervalValue() time.Duration {
