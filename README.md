@@ -41,6 +41,7 @@
 | `iflygo-server` | `console` | Web/API、数据库、IPAM、PKI、Token、配置生成、域名 |
 | | `lighthouse` | UDP 发现、NAT 打洞协调 |
 | | `relay` | UDP 中继 |
+| | `tcp-relay` | TCP 中继（UDP over TCP 兜底，配置 `tcp_relay.listen` 后由 console 进程启动） |
 | | `edge` | 443 入口、Host/SNI 路由、ACME |
 | | `gateway` | 不安全路由网关（转发/NAT/子网探测） |
 | `iflygo-client` | — | Token 注册、overlay、L7 隧道、服务守护、自升级 |
@@ -66,6 +67,7 @@
 - [x] 双数据库（PostgreSQL + SQLite）全量支持（81 handler + 153 路由 + 39 迁移）
 - [x] DDNSTO 远程访问：子域名自动分配 + edge 穿透
 - [x] Liaison 远程管理套件：Casbin RBAC / Web SSH / 文件管理 / Web DB / LLM 网关
+- [x] TCP Relay：UDP 被完全封锁时，经 TCP 承载 overlay 流量（客户端本地 UDP 桥 + 服务端解封装转发）
 
 ## 🔌 控制面 API（已实现）
 
@@ -143,6 +145,39 @@ docker run --rm iflyelf/iflygo:latest -version
 | 8080 | TCP | 控制面 Web/API |
 | 443 | TCP/UDP | Edge 入口 / TCP 隧道 |
 | 6688 | UDP | Lighthouse/Relay |
+| 8443（可配置） | TCP | TCP 中继（仅 `tcp_relay.listen` 非空时监听） |
+
+## 🧵 TCP Relay（UDP 被封锁时的兜底）
+
+当网络**只允许 TCP**（UDP 全部被拦截）时，Nebula 无法打洞也无法使用 UDP Relay。
+TCP Relay 在客户端本地做一层「UDP 桥」，把 overlay 数据报封装进 TCP 隧道：
+
+```
+Nebula ──UDP──▶ 127.0.0.1:<随机端口>（本地桥）
+                        │ TCP（长度前缀帧）
+                        ▼
+              iflygo-server: tcp-relay
+                        │ UDP（每个隧道独立 socket）
+                        ▼
+              lighthouse / relay 真实 endpoint
+```
+
+- **服务端**：配置文件
+  ```yaml
+  tcp_relay:
+    listen: ":8443"
+    token: "change-me"      # 可选，建议设置
+  ```
+  或环境变量 `TCP_RELAY_LISTEN=:8443`、`TCP_RELAY_TOKEN=change-me`。`listen` 为空则不启动。
+- **客户端**：`iflygo-client run --tcp-relay relay.example.com:8443 --tcp-relay-token change-me`
+  或环境变量 `IFLYGO_TCP_RELAY=relay.example.com:8443`、`IFLYGO_TCP_RELAY_TOKEN=change-me`。
+- **原理**：客户端把 Nebula `static_host_map` 与 `relay.relays` 中每个真实上游
+  `host:port` 改写为本地 `127.0.0.1:<随机 UDP 端口>`；本地桥将数据报以
+  「4 字节大端长度 + 载荷」的帧写入 TCP 隧道；服务端按握手里的目标地址建立独立
+  UDP socket 转发，响应原路返回。纯 overlay IP（无端口）条目原样保留。
+- **安全**：设置 `token` 后，服务端用常量时间比较校验握手令牌，避免中继被滥用为
+  开放 UDP 代理；未设置时启动会打印告警，建议配合防火墙限制来源。
+- **按需启用**：未配置时保持原生 UDP 行为，不产生任何额外开销。
 
 ## 🚀 发布流程
 

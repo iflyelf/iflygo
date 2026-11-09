@@ -40,6 +40,16 @@ type Config struct {
 	// AI 可选：MCP 服务、AI 访问令牌、Skills 与内置 AI 助手（见 ai.go）。
 	AI  AIConfig  `yaml:"ai"`
 	Log LogConfig `yaml:"log"`
+	// TCPRelay 可选：UDP 被封锁时，为 Nebula overlay 提供「UDP over TCP」中继。
+	TCPRelay TCPRelayConfig `yaml:"tcp_relay"`
+}
+
+// TCPRelayConfig TCP 中继服务端配置（仅 listen 非空时启用）。
+type TCPRelayConfig struct {
+	// Listen TCP 监听地址（如 ":8443"）；为空则关闭 TCP 中继服务。
+	Listen string `yaml:"listen"`
+	// Token 可选共享密钥；非空时客户端必须携带相同令牌，防止中继被滥用为开放 UDP 代理。
+	Token string `yaml:"token"`
 }
 
 // ServerConfig 监听与前端。
@@ -426,6 +436,8 @@ func Load(path string) (*Config, error) {
 
 // applyEnv 用环境变量覆盖配置。
 func (c *Config) applyEnv() {
+	setStr(&c.TCPRelay.Listen, "TCP_RELAY_LISTEN")
+	setStr(&c.TCPRelay.Token, "TCP_RELAY_TOKEN")
 	setStr(&c.Server.Host, "SERVER_HOST")
 	setInt(&c.Server.Port, "SERVER_PORT")
 	setInt(&c.Server.AuditRetentionDays, "SERVER_AUDIT_RETENTION_DAYS")

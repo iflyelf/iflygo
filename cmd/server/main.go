@@ -22,6 +22,7 @@ import (
 	"github.com/iflyelf/iflygo/internal/overlay"
 	"github.com/iflyelf/iflygo/internal/pkg/netutil"
 	"github.com/iflyelf/iflygo/internal/svc"
+	"github.com/iflyelf/iflygo/internal/tcprelay"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -95,6 +96,19 @@ func main() {
 	}
 	ddnsto.RegisterRoutes(mux, sc)
 	startTunnelDataPlane()
+
+	// 可选：TCP 中继。UDP 被完全封锁（仅允许 TCP）时，客户端可把发往
+	// lighthouse/relay 的 overlay 数据报封装进 TCP 隧道，由本服务解封装后
+	// 以 UDP 转发到真实上游，实现「UDP over TCP」兜底。
+	if c.TCPRelay.Listen != "" {
+		relay := tcprelay.NewServer(c.TCPRelay.Listen)
+		relay.Token = c.TCPRelay.Token
+		go func() {
+			if err := relay.Start(ctx); err != nil {
+				log.Printf("⚠️ TCP 中继服务退出: %v", err)
+			}
+		}()
+	}
 
 	// 访问日志 → CORS → 安全响应头 → CSRF → 请求体限制 → Redis 缓存 → 业务路由。
 	// 缓存放在安全头内侧：命中缓存时仍会经过 SecurityHeaders / LimitBody，

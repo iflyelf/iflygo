@@ -13,6 +13,19 @@ const serviceName = "iflygo-client"
 
 // SystemdUnit 生成 systemd 单元内容。
 func SystemdUnit(exe, stateDir string) string {
+	return SystemdUnitWithRelay(exe, stateDir, "", "")
+}
+
+// SystemdUnitWithRelay 生成带 TCP 中继启动参数的 systemd 单元内容。
+// relay/token 为空时不附加对应参数。
+func SystemdUnitWithRelay(exe, stateDir, relay, token string) string {
+	extra := ""
+	if relay != "" {
+		extra += " --tcp-relay " + relay
+	}
+	if token != "" {
+		extra += " --tcp-relay-token " + token
+	}
 	return fmt.Sprintf(`[Unit]
 Description=iFlyGo Client Agent
 After=network-online.target
@@ -20,22 +33,25 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=%s run --state-dir %s
+ExecStart=%s run --state-dir %s%s
 Restart=always
 RestartSec=3
 LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target
-`, exe, stateDir)
+`, exe, stateDir, extra)
 }
 
-// InstallService 安装为系统服务。
-func InstallService(exe, stateDir string) error {
+// InstallService 安装为系统服务；relay/token 非空时写入 unit 的启动参数。
+func InstallService(exe, stateDir, relay, token string) error {
 	if runtime.GOOS != "linux" {
 		return fmt.Errorf("暂不支持 %s 服务安装（Linux systemd 已支持，Windows 后续版本）", runtime.GOOS)
 	}
-	unit := SystemdUnit(exe, stateDir)
+	if strings.ContainsAny(relay+token, " \t\r\n\"'\\") {
+		return fmt.Errorf("TCP 中继参数不能包含空白或引号")
+	}
+	unit := SystemdUnitWithRelay(exe, stateDir, relay, token)
 	path := filepath.Join("/etc/systemd/system", serviceName+".service")
 	if err := os.WriteFile(path, []byte(unit), 0o644); err != nil {
 		return fmt.Errorf("写入 unit 失败（需要 root）: %w", err)

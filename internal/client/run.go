@@ -14,10 +14,15 @@ import (
 
 	"github.com/iflyelf/iflygo/internal/model"
 	"github.com/iflyelf/iflygo/internal/overlay"
+	"github.com/iflyelf/iflygo/internal/tcprelay"
 )
 
 // Run 启动客户端主循环：心跳 + 配置热更新 + overlay。
-func Run(dir string, interval time.Duration) error {
+//
+// tcpRelay 非空时（如 "relay.example.com:8443"），会在启动/热加载 overlay 前
+// 把 Nebula 配置里的 static_host_map 改写为本地 UDP 桥，桥经 TCP 连到中继服务端，
+// 用于 UDP 被完全封锁的网络。
+func Run(dir string, interval time.Duration, tcpRelay, tcpRelayToken string) error {
 	st, err := LoadState(dir)
 	if err != nil {
 		return errors.New("未找到状态文件，请先执行 enroll")
@@ -26,14 +31,24 @@ func Run(dir string, interval time.Duration) error {
 	ov := overlay.New(slog.Default())
 
 	log.Printf("🚀 iflygo-client 运行中: #%d %s (%s) 服务器 %s", st.ClientID, st.Name, st.IPv4, st.Server)
+	if tcpRelay != "" {
+		log.Printf("🧵 TCP 中继已启用: %s（overlay 流量将经 TCP 承载）", tcpRelay)
+	}
+
+	// TCP 中继桥的生命周期与 overlay 一致：热加载时重建，退出时关闭。
+	bridges := newBridgeScope()
+	defer func() { bridges.Close() }()
 
 	// 首次拉取配置（含证书与 Nebula 配置）
 	if err := fetchAndApply(c, st, dir); err != nil {
 		log.Printf("⚠️ 拉取配置失败: %v", err)
 	}
 	// 尝试启动 overlay（需要 TUN 设备与 NET_ADMIN）
-	if err := startOverlay(ov, dir); err != nil {
+	if err := startOverlay(ov, dir, tcpRelay, tcpRelayToken, bridges.ctx); err != nil {
 		log.Printf("⚠️ 启动 overlay 失败（需要 root/TUN）: %v", err)
+		// overlay 未启动，桥也无用，回收后换一个新作用域供后续热加载使用。
+		bridges.Close()
+		bridges = newBridgeScope()
 	}
 	defer ov.Stop()
 
@@ -66,8 +81,16 @@ func Run(dir string, interval time.Duration) error {
 			if rev != st.ConfigRev {
 				if err := fetchAndApply(c, st, dir); err != nil {
 					log.Printf("⚠️ 更新配置失败: %v", err)
-				} else if err := reloadOverlay(ov, dir); err != nil {
-					log.Printf("⚠️ 热加载失败: %v", err)
+				} else {
+					// 用新配置重建 TCP 桥；成功后再回收旧桥，失败则保留旧桥运行。
+					next := newBridgeScope()
+					if err := reloadOverlay(ov, dir, tcpRelay, tcpRelayToken, next.ctx); err != nil {
+						next.Close()
+						log.Printf("⚠️ 热加载失败: %v", err)
+					} else {
+						bridges.Close()
+						bridges = next
+					}
 				}
 			}
 		case <-peers.C:
@@ -76,6 +99,26 @@ func Run(dir string, interval time.Duration) error {
 			}
 		}
 	}
+}
+
+// bridgeScope 管理一组 TCP 中继桥的生命周期（一个 overlay 配置对应一组桥）。
+type bridgeScope struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+func newBridgeScope() *bridgeScope {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &bridgeScope{ctx: ctx, cancel: cancel}
+}
+
+// Close 关闭该作用域下的所有桥（幂等）。
+func (b *bridgeScope) Close() {
+	if b == nil || b.cancel == nil {
+		return
+	}
+	b.cancel()
+	b.cancel = nil
 }
 
 // FetchAndApply 拉取并应用配置包。
@@ -137,20 +180,37 @@ func ApplyBundle(dir string, b *model.Bundle) error {
 	return nil
 }
 
-func startOverlay(ov *overlay.Overlay, dir string) error {
+func startOverlay(ov *overlay.Overlay, dir, tcpRelay, tcpRelayToken string, bridgeCtx context.Context) error {
 	cfg, err := readNebulaConfig(dir)
+	if err != nil {
+		return err
+	}
+	cfg, err = rewriteForRelay(bridgeCtx, tcpRelay, tcpRelayToken, cfg)
 	if err != nil {
 		return err
 	}
 	return ov.Start(cfg)
 }
 
-func reloadOverlay(ov *overlay.Overlay, dir string) error {
+func reloadOverlay(ov *overlay.Overlay, dir, tcpRelay, tcpRelayToken string, bridgeCtx context.Context) error {
 	cfg, err := readNebulaConfig(dir)
 	if err != nil {
 		return err
 	}
+	cfg, err = rewriteForRelay(bridgeCtx, tcpRelay, tcpRelayToken, cfg)
+	if err != nil {
+		return err
+	}
 	return ov.Reload(cfg)
+}
+
+// rewriteForRelay 在启用 TCP 中继时改写 Nebula 配置中的 static_host_map。
+// tcpRelay 为空则原样返回（保持原生 UDP 行为）。
+func rewriteForRelay(ctx context.Context, tcpRelay, tcpRelayToken string, cfg []byte) ([]byte, error) {
+	if tcpRelay == "" {
+		return cfg, nil
+	}
+	return tcprelay.RewriteConfig(ctx, tcpRelay, tcpRelayToken, cfg)
 }
 
 func readNebulaConfig(dir string) ([]byte, error) {

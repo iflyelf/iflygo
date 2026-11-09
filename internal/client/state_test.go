@@ -38,3 +38,12 @@ func TestSystemdUnit(t *testing.T) {
 		}
 	}
 }
+
+func TestSystemdUnitTCPRelay(t *testing.T) {
+	u := SystemdUnitWithRelay("/usr/local/bin/iflygo-client", "/var/lib/iflygo",
+		"relay.example.com:8443", "s3cret")
+	want := "ExecStart=/usr/local/bin/iflygo-client run --state-dir /var/lib/iflygo --tcp-relay relay.example.com:8443 --tcp-relay-token s3cret"
+	if !strings.Contains(u, want) {
+		t.Fatalf("unit 缺少 %q:\n%s", want, u)
+	}
+}
