@@ -5,19 +5,23 @@ LDFLAGS := -s -w \
 	-X github.com/iflyelf/iflygo/internal/version.Build=$(COMMIT) \
 	-X github.com/iflyelf/iflygo/internal/version.Commit=$(COMMIT)
 
-.PHONY: build build-server build-client cross test vet fmt tidy clean frontend patch-grdp prepare
+.PHONY: build build-server build-client cross test test-race vet fmt tidy clean frontend patch-grdp patch-nebula prepare
 
 # patch-grdp 对 grdp 子模块应用 iflygo 本地补丁（移除 CGO / 删除 broken VNC）。
 # 子模块更新后（git submodule update）需重新运行。
 patch-grdp:
 	python3 scripts/patch_grdp.py third_party/grdp
 
+# patch-nebula 修复 disabledTun 的 data race（仅测试/无 TUN 场景，幂等）。
+patch-nebula:
+	python3 scripts/patch_nebula.py third_party/nebula
+
 frontend:
 	python3 scripts/inject_tunnel_frontend.py
 	node --check web/dist/assets/app.js
 
-# prepare 用于干净检出（CI/Docker）：应用 grdp 补丁 + 前端合并注入。
-prepare: patch-grdp frontend
+# prepare 用于干净检出（CI/Docker）：应用子模块补丁 + 前端合并注入。
+prepare: patch-grdp patch-nebula frontend
 
 build: build-server build-client
 
@@ -29,6 +33,10 @@ build-client:
 
 test:
 	go test ./...
+
+# test-race 并发竞态检查（需要先修复 Nebula disabledTun 的已知 race）。
+test-race: patch-nebula
+	go test -race ./...
 
 vet:
 	go vet ./...

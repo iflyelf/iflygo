@@ -17,6 +17,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"net"
 )
 
 // 协议常量。
@@ -91,35 +92,49 @@ func tokenMatches(want, got string) bool {
 }
 
 // writeFrame 写一帧（4 字节大端长度 + 载荷）。
+//
+// 使用 net.Buffers：对 TCP 连接会走 writev，一次系统调用写出头部+载荷，
+// 减少高吞吐中继场景的 syscall 次数。
 func writeFrame(w io.Writer, payload []byte) error {
 	if len(payload) > maxFrameSize {
 		return fmt.Errorf("帧过大: %d", len(payload))
 	}
 	var hdr [4]byte
 	binary.BigEndian.PutUint32(hdr[:], uint32(len(payload)))
-	if _, err := w.Write(hdr[:]); err != nil {
+	if len(payload) == 0 {
+		_, err := w.Write(hdr[:])
 		return err
 	}
-	_, err := w.Write(payload)
+	bufs := net.Buffers{hdr[:], payload}
+	_, err := bufs.WriteTo(w)
 	return err
 }
 
-// readFrame 读一帧（返回的切片为新分配，调用方可安全持有）。
-func readFrame(r io.Reader) ([]byte, error) {
+// readFrameInto 读一帧到调用方提供的缓冲区，返回的切片仅在下次调用前有效。
+//
+// 热路径（服务端转发、客户端回传）复用同一块缓冲区，避免每包一次堆分配。
+func readFrameInto(r io.Reader, buf []byte) ([]byte, error) {
 	var hdr [4]byte
 	if _, err := io.ReadFull(r, hdr[:]); err != nil {
 		return nil, err
 	}
 	n := binary.BigEndian.Uint32(hdr[:])
 	if n == 0 {
-		return []byte{}, nil
+		return buf[:0], nil
 	}
 	if n > maxFrameSize {
 		return nil, fmt.Errorf("帧长度非法: %d", n)
 	}
-	buf := make([]byte, n)
-	if _, err := io.ReadFull(r, buf); err != nil {
+	if int(n) > len(buf) {
+		return nil, fmt.Errorf("帧超出缓冲区: %d > %d", n, len(buf))
+	}
+	if _, err := io.ReadFull(r, buf[:n]); err != nil {
 		return nil, err
 	}
-	return buf, nil
+	return buf[:n], nil
+}
+
+// readFrame 读一帧（新分配缓冲区，便于测试与低频调用）。
+func readFrame(r io.Reader) ([]byte, error) {
+	return readFrameInto(r, make([]byte, maxFrameSize))
 }

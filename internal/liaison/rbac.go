@@ -64,16 +64,19 @@ type policyAdapter struct {
 func NewPolicyAdapter(db *sql.DB) *policyAdapter { return &policyAdapter{db: db} }
 
 // ensureTable 建策略表（幂等；SQLite 与 PG 通用语法）。
+//
+// 不需要自增 id：策略由 (ptype,v0..v3) 唯一确定；旧库若已有 id 列，
+// INSERT 不写该列也兼容（PG BIGSERIAL 自动生成，SQLite 允许 NULL）。
 func (a *policyAdapter) ensureTable() {
 	a.once.Do(func() {
 		_, _ = a.db.Exec(store.SQL(`
 			CREATE TABLE IF NOT EXISTS liaison_policies (
-				id    BIGSERIAL PRIMARY KEY,
 				ptype VARCHAR(10)  NOT NULL DEFAULT '',
 				v0    VARCHAR(255) NOT NULL DEFAULT '',
 				v1    VARCHAR(255) NOT NULL DEFAULT '',
 				v2    VARCHAR(255) NOT NULL DEFAULT '',
-				v3    VARCHAR(255) NOT NULL DEFAULT ''
+				v3    VARCHAR(255) NOT NULL DEFAULT '',
+				PRIMARY KEY (ptype, v0, v1, v2, v3)
 			)`))
 	})
 }

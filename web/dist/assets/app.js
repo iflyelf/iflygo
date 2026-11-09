@@ -260,7 +260,6 @@
     var punch = h('input', { type: 'checkbox', checked: !!nb.punch }, []);
     var punchRespond = h('input', { type: 'checkbox', checked: !!nb.punch_respond }, []);
     var punchDelay = h('input', { value: nb.punch_delay || '' }, []);
-    var amRelay = h('input', { type: 'checkbox', checked: !!nb.am_relay }, []);
     var useRelays = h('input', { type: 'checkbox', checked: !!nb.use_relays }, []);
     var relays = h('input', { value: (nb.relays || []).join(', ') }, []);
     var tunDevice = h('input', { value: nb.tun_device || '' }, []);
@@ -301,7 +300,7 @@
           punch: punch.checked,
           punch_respond: punchRespond.checked,
           punch_delay: punchDelay.value,
-          am_relay: amRelay.checked,
+          am_relay: !!nb.am_relay,
           use_relays: useRelays.checked,
           relays: tunnelNebulaList(relays.value),
           tun_device: tunDevice.value,
@@ -345,9 +344,9 @@
         field('所属网络', nebNet),
         h('div', { class: 'form-row2' }, [field('加密算法', cipher), field('监听端口', listenPort), field('Lighthouse 间隔(s)', lhInterval)]),
         h('div', { class: 'form-row2' }, [field('NAT 打洞 punch', punch), field('响应打洞 punch_respond', punchRespond), field('打洞延迟 punch_delay', punchDelay)]),
-        h('div', { class: 'form-row2' }, [field('作为中继 am_relay', amRelay), field('使用中继 use_relays', useRelays), field('TUN 设备', tunDevice)]),
+        h('div', { class: 'form-row2' }, [field('使用中继 use_relays', useRelays), field('TUN 设备', tunDevice), field('禁用 TUN（仅测试）', tunDisabled)]),
         field('中继地址 relays（逗号分隔，host:port 或 overlay IP）', relays),
-        h('div', { class: 'form-row2' }, [field('禁用 TUN（仅测试）', tunDisabled), field('握手间隔', hsInterval), field('握手重试次数', hsRetries)]),
+        h('div', { class: 'form-row2' }, [field('握手间隔', hsInterval), field('握手重试次数', hsRetries)]),
         field('优先网段 preferred_ranges（逗号分隔）', prefRanges),
         h('div', { class: 'form-row2' }, [field('日志级别', logLevel), field('日志格式', logFormat), field('统计类型', statsType)]),
         h('div', { class: 'form-row2' }, [field('统计监听地址', statsListen), field('DNS', dns), field('MTU', mtu)]),
@@ -720,7 +719,7 @@
     ]);
   }
   function liaisonSSHView() {
-    var host = h('input', { placeholder: '目标主机（overlay IP）', value: '10.66.0.1' }, []);
+    var host = h('input', { placeholder: '目标主机（overlay IP，如 10.77.0.2）' }, []);
     var port = h('input', { placeholder: '端口', type: 'number', value: 22 }, []);
     var user = h('input', { placeholder: '用户名', value: 'root' }, []);
     var pass = h('input', { placeholder: '密码', type: 'password' }, []);
@@ -772,7 +771,7 @@
     });
   }
   function liaisonVNCView() {
-    var host = h('input', { placeholder: '目标主机（overlay IP）', value: '10.66.0.1' }, []);
+    var host = h('input', { placeholder: '目标主机（overlay IP，如 10.77.0.2）' }, []);
     var port = h('input', { placeholder: '端口', type: 'number', value: 5900 }, []);
     var pass = h('input', { placeholder: '密码（可选）', type: 'password' }, []);
     var wrap = h('div', { class: 'vnc-wrap', id: 'vnc-wrap' }, [h('div', { class: 'muted' }, ['（输入主机信息后点「连接」，需目标运行 VNC 服务）'])]);
@@ -860,9 +859,9 @@
     ws.send(buf);
   }
   function liaisonRDPView() {
-    var host = h('input', { placeholder: '目标主机（overlay IP 或 Windows IP）', value: '10.66.0.1' }, []);
+    var host = h('input', { placeholder: '目标主机（overlay IP 或 Windows IP，如 10.77.0.2）' }, []);
     var port = h('input', { placeholder: '端口', type: 'number', value: 3389 }, []);
-    var user = h('input', { placeholder: '用户名', value: 'Administrator' }, []);
+    var user = h('input', { placeholder: '用户名' }, []);
     var pass = h('input', { placeholder: '密码', type: 'password' }, []);
     var wrap = h('div', { class: 'vnc-wrap', id: 'rdp-wrap' }, [h('div', { class: 'muted' }, ['（输入 Windows 主机信息后点「连接」）'])]);
     var connectBtn = h('button', { class: 'btn primary', onclick: function () { liaisonRDPConnect(host, port, user, pass, wrap); } }, ['连接']);
@@ -959,6 +958,16 @@
       })(key, inp, btn);
       wrap.appendChild(h('div', { class: 'toolbar', style: 'margin-top:6px' }, [btn]));
     }
+    // 恢复为配置文件值时清掉明文缓存，避免继续展示旧密钥。
+    node.addEventListener('click', function (ev) {
+      var t = ev.target;
+      if (!t || !t.getAttribute) return;
+      var k = t.getAttribute('data-key');
+      if (k && String(t.className || '').indexOf('setting-reset') >= 0) {
+        delete state.revealedSecrets[k];
+        delete state.secretValues[k];
+      }
+    }, true);
     return node;
   };
 

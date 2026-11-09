@@ -2,7 +2,9 @@ package handler
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -217,9 +219,63 @@ func UpdateNetwork(sc *svc.ServiceContext) http.HandlerFunc {
 			httpx.Fail(w, http.StatusBadRequest, "stats_type 只能是 prometheus/graphite")
 			return
 		}
+		switch strings.ToLower(strings.TrimSpace(req.Nebula.Cipher)) {
+		case "", "aes-256-gcm", "chacha20-poly1305":
+		default:
+			httpx.Fail(w, http.StatusBadRequest, "cipher 只能是 aes-256-gcm / chacha20-poly1305（留空用默认）")
+			return
+		}
+		switch strings.ToLower(strings.TrimSpace(req.Nebula.LogFormat)) {
+		case "", "text", "json":
+		default:
+			httpx.Fail(w, http.StatusBadRequest, "log_format 只能是 text / json")
+			return
+		}
 		if req.Nebula.ListenPort != 0 && (req.Nebula.ListenPort < 1 || req.Nebula.ListenPort > 65535) {
 			httpx.Fail(w, http.StatusBadRequest, "listen_port 应在 1-65535 之间")
 			return
+		}
+		if req.Nebula.LighthouseInterval < 0 || req.Nebula.HandshakeRetries < 0 {
+			httpx.Fail(w, http.StatusBadRequest, "lighthouse_interval / handshake_retries 不能为负数")
+			return
+		}
+		for _, d := range strings.Split(req.DNS, ",") {
+			if d = strings.TrimSpace(d); d != "" && net.ParseIP(d) == nil {
+				httpx.Fail(w, http.StatusBadRequest, "DNS 含非法 IP: "+d)
+				return
+			}
+		}
+		for _, r := range req.Nebula.PreferredRanges {
+			if r = strings.TrimSpace(r); r == "" {
+				continue
+			}
+			if _, err := netip.ParsePrefix(r); err != nil {
+				httpx.Fail(w, http.StatusBadRequest, "preferred_ranges 含非法 CIDR: "+r)
+				return
+			}
+		}
+		for _, r := range req.Nebula.Relays {
+			r = strings.TrimSpace(r)
+			if r == "" {
+				continue
+			}
+			if _, _, err := net.SplitHostPort(r); err == nil || net.ParseIP(r) != nil {
+				continue
+			}
+			httpx.Fail(w, http.StatusBadRequest, "relays 条目应为 host:port 或 overlay IP: "+r)
+			return
+		}
+		if req.Nebula.PunchDelay != "" {
+			if _, err := time.ParseDuration(req.Nebula.PunchDelay); err != nil {
+				httpx.Fail(w, http.StatusBadRequest, "punch_delay 不是合法时长: "+req.Nebula.PunchDelay)
+				return
+			}
+		}
+		if req.Nebula.HandshakeTryInterval != "" {
+			if _, err := time.ParseDuration(req.Nebula.HandshakeTryInterval); err != nil {
+				httpx.Fail(w, http.StatusBadRequest, "handshake_try_interval 不是合法时长: "+req.Nebula.HandshakeTryInterval)
+				return
+			}
 		}
 		nebulaJSON, err := json.Marshal(req.Nebula)
 		if err != nil {

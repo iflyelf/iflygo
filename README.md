@@ -123,6 +123,7 @@
 make build       # 构建当前平台 server/client 到 bin/
 make cross       # 交叉编译全部平台到 dist/
 make test        # 单元测试
+make test-race   # 并发竞态检查（含 Nebula 测试补丁）
 make vet         # 静态检查
 ```
 
@@ -204,8 +205,6 @@ data_plane:
   mode: auto                 # auto / tcp / udp
   tcp_relay: ""              # 留空自动发现；也可填 relay.example.com:8443
   tcp_relay_token: ""        # 留空自动从服务端获取
-log:
-  level: info
 ```
 
 修改后约 2 秒内自动生效；数据面模式变化会自动重启 overlay（隧道短暂重连），
@@ -249,7 +248,7 @@ iflygo-client run --tcp-relay off   # 等价 --data-plane udp
 
 | 子模块 | 路径 | 用途 | 跟随方式 |
 |---|---|---|---|
-| Nebula | `third_party/nebula`（`go.mod replace`） | 数据面引擎 | 自动：`update-version.yml` 检测最新 release → 更新子模块 + go.mod + `NEBULA_VERSION` → 开 PR |
+| Nebula | `third_party/nebula`（`go.mod replace`） | 数据面引擎 | 自动：`update-version.yml` 检测最新 release → 更新子模块 + go.mod + `NEBULA_VERSION` → 开 PR；`scripts/patch_nebula.py` 修复 disabledTun 的测试 data race（幂等） |
 | upgrade_mgr | `third_party/upgrade_mgr` | 控制面/前端/CI 对齐参考 | 自动更新子模块开 PR，功能按 diff 手动移植（其 `internal/` 不可跨模块导入） |
 | grdp | `third_party/grdp`（`go.mod replace`） | Web RDP 客户端 | 子模块 + `scripts/patch_grdp.py` 构建时应用补丁（移除 CGO `import "C"`、删除 broken VNC `client/rfb.go`，以支持 `CGO_ENABLED=0`） |
 

@@ -10,19 +10,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/iflyelf/iflygo/internal/config"
 	"github.com/iflyelf/iflygo/internal/tcprelay"
 )
 
 // RelayRuntime TCP 中继运行时：监听器可随页面/配置文件热重建。
 //
-// 页面保存 tcp_relay.* 后调用 Apply 即可即时生效；多副本通过
+// 页面保存 tcp_relay.* 后调用 ReloadTCPRelay 即可即时生效；多副本通过
 // StartRelaySettingsWatcher 周期性同步。模式（auto/tcp/udp）会随心跳下发给客户端，
 // 客户端无需手工指定协议。
 type RelayRuntime struct {
-	cfg *config.Config
-
-	mu        sync.Mutex
+	mu        sync.RWMutex
 	listen    string
 	advertise string
 	mode      string
@@ -32,15 +29,23 @@ type RelayRuntime struct {
 	cancel    context.CancelFunc
 }
 
-// NewRelayRuntime 创建中继运行时。
-func NewRelayRuntime(cfg *config.Config) *RelayRuntime {
-	return &RelayRuntime{cfg: cfg, mode: "auto"}
+// RelayInfo 中继运行时快照。
+type RelayInfo struct {
+	Mode      string
+	Port      int
+	Token     string
+	Advertise string
 }
 
-// Apply 应用新的中继配置；仅当监听地址变化时重建监听器。
+// NewRelayRuntime 创建中继运行时。
+func NewRelayRuntime() *RelayRuntime {
+	return &RelayRuntime{mode: "auto"}
+}
+
+// Apply 应用新的中继配置；仅当监听地址或令牌变化时重建监听器。
 //
 //   - mode: auto / tcp / udp（udp 表示不启动中继，客户端只走原生 UDP）
-//   - listen: "" 自动监听控制面端口 +1；"off" 关闭；其它为显式 host:port
+//   - listen: 显式 host:port；"off" 关闭；空值由调用方换算默认端口后传入
 func (r *RelayRuntime) Apply(ctx context.Context, mode, listen, advertise, token string) error {
 	mode = normalizeRelayMode(mode)
 	listen = strings.TrimSpace(listen)
@@ -58,6 +63,9 @@ func (r *RelayRuntime) Apply(ctx context.Context, mode, listen, advertise, token
 		r.token = token
 		return nil
 	}
+	if listen == "" {
+		return fmt.Errorf("TCP 中继监听地址为空（应由调用方换算默认端口）")
+	}
 
 	// 当前监听器仍可用且地址/令牌均未变化：直接复用。
 	if r.ln != nil && r.listen == listen && r.token == token {
@@ -69,24 +77,9 @@ func (r *RelayRuntime) Apply(ctx context.Context, mode, listen, advertise, token
 		r.stopLocked()
 	}
 
-	effective := listen
-	if effective == "" {
-		host := "0.0.0.0"
-		port := 8091
-		if r.cfg != nil {
-			if strings.TrimSpace(r.cfg.Server.Host) != "" {
-				host = r.cfg.Server.Host
-			}
-			if r.cfg.Server.Port > 0 {
-				port = r.cfg.Server.Port + 1
-			}
-		}
-		effective = net.JoinHostPort(host, strconv.Itoa(port))
-	}
-
-	ln, err := net.Listen("tcp", effective)
+	ln, err := net.Listen("tcp", listen)
 	if err != nil {
-		return fmt.Errorf("监听 %s 失败: %w", effective, err)
+		return fmt.Errorf("监听 %s 失败: %w", listen, err)
 	}
 	addr, _ := ln.Addr().(*net.TCPAddr)
 	port := 0
@@ -139,17 +132,28 @@ func (r *RelayRuntime) stopLocked() {
 	r.port = 0
 }
 
+// Info 一次性返回运行时快照，避免热路径多次加锁。
+func (r *RelayRuntime) Info() RelayInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	mode := r.mode
+	if mode == "" {
+		mode = "auto"
+	}
+	return RelayInfo{Mode: mode, Port: r.port, Token: r.token, Advertise: r.advertise}
+}
+
 // Port 返回实际监听端口（0 表示未启用）。
 func (r *RelayRuntime) Port() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.port
 }
 
 // Mode 返回数据面模式 auto/tcp/udp。
 func (r *RelayRuntime) Mode() string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	if r.mode == "" {
 		return "auto"
 	}
@@ -158,15 +162,15 @@ func (r *RelayRuntime) Mode() string {
 
 // Token 返回中继共享令牌。
 func (r *RelayRuntime) Token() string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.token
 }
 
 // Advertise 返回显式配置的对外地址。
 func (r *RelayRuntime) Advertise() string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.advertise
 }
 
@@ -179,6 +183,17 @@ func normalizeRelayMode(mode string) string {
 	default:
 		return "auto"
 	}
+}
+
+// defaultRelayListen 未显式配置时监听「控制面端口 +1」。
+func defaultRelayListen(host string, port int) string {
+	if strings.TrimSpace(host) == "" {
+		host = "0.0.0.0"
+	}
+	if port <= 0 {
+		port = 8090
+	}
+	return net.JoinHostPort(host, strconv.Itoa(port+1))
 }
 
 // relayRuntimeSettings 是可在运行期热更新、且需要跨副本同步的中继设置键。
@@ -200,21 +215,15 @@ func (s *ServiceContext) StartRelaySettingsWatcher(ctx context.Context, interval
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		var last string
 		syncOnce := func() {
-			vals, err := s.Settings.ReadValues(ctx, relayRuntimeSettings...)
-			if err != nil {
+			// SyncFromDB 同时处理「其他副本修改」与「恢复为配置文件值」，
+			// 避免只应用增量导致删除不生效。
+			changed, err := s.Settings.SyncFromDB(ctx, relayRuntimeSettings)
+			if err != nil || len(changed) == 0 {
 				return
 			}
-			fp := relayFingerprint(vals)
-			if fp == last {
-				return
-			}
-			last = fp
-			if applied := s.Settings.ApplyRuntime(vals); len(applied) > 0 {
-				s.ReloadTCPRelay(ctx)
-				log.Printf("🔄 已同步其他副本的 TCP 中继配置: %s", strings.Join(applied, ", "))
-			}
+			s.ReloadTCPRelay(ctx)
+			log.Printf("🔄 已同步其他副本的 TCP 中继配置: %s", strings.Join(changed, ", "))
 		}
 		syncOnce()
 		for {
@@ -234,20 +243,13 @@ func (s *ServiceContext) ReloadTCPRelay(ctx context.Context) {
 		return
 	}
 	c := s.Settings.Snapshot()
-	if err := s.Relay.Apply(ctx, c.TCPRelay.Mode, c.TCPRelay.Listen, c.TCPRelay.Advertise, c.TCPRelay.Token); err != nil {
+	listen := strings.TrimSpace(c.TCPRelay.Listen)
+	if listen == "" {
+		listen = defaultRelayListen(c.Server.Host, c.Server.Port)
+	}
+	if err := s.Relay.Apply(ctx, c.TCPRelay.Mode, listen, c.TCPRelay.Advertise, c.TCPRelay.Token); err != nil {
 		log.Printf("⚠️ TCP 中继配置应用失败: %v", err)
 		return
 	}
 	log.Printf("✅ TCP 中继已应用: mode=%s port=%d", s.Relay.Mode(), s.Relay.Port())
-}
-
-func relayFingerprint(vals map[string]string) string {
-	var b strings.Builder
-	for _, k := range relayRuntimeSettings {
-		b.WriteString(k)
-		b.WriteByte('=')
-		b.WriteString(vals[k])
-		b.WriteByte('\n')
-	}
-	return b.String()
 }

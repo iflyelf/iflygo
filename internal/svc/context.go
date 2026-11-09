@@ -198,7 +198,7 @@ func New(c *config.Config) *ServiceContext {
 		RBAC:          rbac.NewService(db),
 		Audit:         audit.NewLogger(db), // 审计日志
 		AIToken:       aitoken.NewRepo(db),
-		Relay:         NewRelayRuntime(c),
+		Relay:         NewRelayRuntime(),
 		dbMaxOpenBase: c.Database.MaxOpenConns,
 		dbMaxIdleBase: c.Database.MaxIdleConns,
 	}

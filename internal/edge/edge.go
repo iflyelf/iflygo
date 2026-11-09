@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Route 一条接入映射：HTTP 用 Host，TCP 用 Port。
@@ -118,6 +119,23 @@ func NewProxy(table *Table) *Proxy {
 	p := &Proxy{table: table}
 	p.rp = &httputil.ReverseProxy{
 		Director: p.director,
+		// 显式连接池与超时：避免后端半开连接无限占用，提升高并发复用率。
+		Transport: &http.Transport{
+			// overlay 目标是内网地址，禁止走环境变量里的 HTTP 代理。
+			Proxy: nil,
+			DialContext: (&net.Dialer{
+				Timeout:   10 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			MaxIdleConns:          256,
+			MaxIdleConnsPerHost:   32,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			ResponseHeaderTimeout: 60 * time.Second,
+		},
+		// 流式响应（SSE/大文件）及时刷出，避免攒包。
+		FlushInterval: 100 * time.Millisecond,
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 			http.Error(w, "网关路由未命中或后端不可达: "+err.Error(), http.StatusBadGateway)
 		},

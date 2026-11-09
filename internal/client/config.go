@@ -18,10 +18,6 @@ type FileConfig struct {
 	Interval string `yaml:"interval"`
 	// DataPlane 数据面策略。
 	DataPlane DataPlaneConfig `yaml:"data_plane"`
-	// Log 日志（level 目前仅用于展示与后续扩展）。
-	Log struct {
-		Level string `yaml:"level"`
-	} `yaml:"log"`
 }
 
 // DataPlaneConfig 数据面配置。

@@ -69,7 +69,9 @@ jobs:
           node-version: '20'
 
       - name: grdp 子模块补丁
-        run: python3 scripts/patch_grdp.py third_party/grdp
+        run: |
+          python3 scripts/patch_grdp.py third_party/grdp
+          python3 scripts/patch_nebula.py third_party/nebula
 
       - name: 前端合并注入
         run: python3 scripts/inject_tunnel_frontend.py

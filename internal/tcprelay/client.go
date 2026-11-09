@@ -52,7 +52,7 @@ type Bridge struct {
 	forceRelay      bool
 	logger          *log.Logger
 
-	mu        sync.Mutex
+	mu        sync.RWMutex
 	tcp       net.Conn
 	nextDial  time.Time
 	nebulaSrc *net.UDPAddr
@@ -145,8 +145,8 @@ func (b *Bridge) LocalAddr() *net.UDPAddr { return b.udp.LocalAddr().(*net.UDPAd
 
 // Mode 返回当前转发方式（"direct" / "relay"），用于日志与观测。
 func (b *Bridge) Mode() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 	if b.state == bridgeRelay {
 		return "relay"
 	}
@@ -179,13 +179,10 @@ func (b *Bridge) nebulaLoop() {
 		if err != nil {
 			return
 		}
-		payload := make([]byte, n)
-		copy(payload, buf[:n])
-
 		b.mu.Lock()
 		b.nebulaSrc = src
 		b.mu.Unlock()
-		b.forward(payload)
+		b.forward(buf[:n])
 	}
 }
 
@@ -203,9 +200,7 @@ func (b *Bridge) directLoop() {
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
-		payload := make([]byte, n)
-		copy(payload, buf[:n])
-		b.onDirectResponse(payload)
+		b.onDirectResponse(buf[:n])
 	}
 }
 
@@ -321,16 +316,17 @@ func (b *Bridge) ensureTCP() (net.Conn, error) {
 
 // recvLoop 读取 TCP 帧，写回本地 UDP（发给最近的 Nebula 源地址）。
 func (b *Bridge) recvLoop(conn net.Conn) {
+	buf := make([]byte, maxFrameSize)
 	for {
-		payload, err := readFrame(conn)
+		payload, err := readFrameInto(conn, buf)
 		if err != nil {
 			b.dropTCP(conn)
 			return
 		}
-		b.mu.Lock()
+		b.mu.RLock()
 		src := b.nebulaSrc
 		closed := b.closed
-		b.mu.Unlock()
+		b.mu.RUnlock()
 		if closed || src == nil {
 			continue
 		}
@@ -349,8 +345,8 @@ func (b *Bridge) dropTCP(conn net.Conn) {
 }
 
 func (b *Bridge) isClosed() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 	return b.closed
 }
 

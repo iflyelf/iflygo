@@ -82,12 +82,31 @@ func (m *RouteManager) ProbeOnce() {
 		return
 	}
 
+	// 并发探测（上限 8），避免网关较多时串行 2s 超时拖长健康检查窗口。
 	health := map[string]bool{}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 8)
+	seen := map[string]bool{}
 	for _, rt := range routes {
 		for _, gw := range rt.Gateways {
-			health[gw.IP] = m.probe(gw)
+			if seen[gw.IP] {
+				continue
+			}
+			seen[gw.IP] = true
+			wg.Add(1)
+			go func(gw model.GatewaySpec) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				ok := m.probe(gw)
+				mu.Lock()
+				health[gw.IP] = ok
+				mu.Unlock()
+			}(gw)
 		}
 	}
+	wg.Wait()
 
 	eff := EffectiveUnsafeRoutes(routes, health)
 	hash := routeHash(eff)
@@ -118,6 +137,20 @@ func (m *RouteManager) probe(gw model.GatewaySpec) bool {
 	}
 	m.ov.EnsureTunnel(gw.IP)
 	return m.ov.Reachable(gw.IP)
+}
+
+// Reapply 在 overlay 重启/热加载后重新应用当前有效的不安全路由。
+//
+// overlay 重启会从磁盘 config.yml 重新载入，动态健康筛选结果可能丢失；
+// 这里用上一次的健康结果重新写回，避免等待下一次探测。
+func (m *RouteManager) Reapply() error {
+	m.mu.Lock()
+	eff := append([]configgen.Route(nil), m.effective...)
+	m.mu.Unlock()
+	if len(eff) == 0 {
+		return nil
+	}
+	return m.apply(eff)
 }
 
 // apply 将有效 unsafe_routes 写入配置并热加载。

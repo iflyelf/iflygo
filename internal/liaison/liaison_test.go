@@ -2,6 +2,8 @@ package liaison
 
 import (
 	"database/sql"
+	"os"
+	"path/filepath"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -111,5 +113,38 @@ func TestSSHConfig(t *testing.T) {
 func TestItoa(t *testing.T) {
 	if itoa(0) != "0" || itoa(22) != "22" || itoa(5000) != "5000" {
 		t.Errorf("itoa 结果错误: %q %q %q", itoa(0), itoa(22), itoa(5000))
+	}
+}
+
+func TestSafePathSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
+		t.Skipf("当前平台不支持符号链接: %v", err)
+	}
+	t.Setenv("LIAISON_FS_ROOT", root)
+	if _, err := safePath("/link/secret"); err == nil {
+		t.Fatalf("应阻止通过软链逃逸根目录")
+	}
+	if _, err := safePath("/new-file"); err != nil {
+		t.Fatalf("根目录内的新文件应允许: %v", err)
+	}
+	// .. 会被 Clean 归一化到 root 内（与旧行为一致），不应逃逸到宿主机。
+	got, err := safePath("/../../etc/passwd")
+	if err != nil {
+		t.Fatalf("归一化到 root 内不应报错: %v", err)
+	}
+	if !pathWithin(root, got) {
+		t.Fatalf("归一化后仍应在 root 内: %s", got)
+	}
+
+	// 根目录本身是软链时，仍应正常工作。
+	realRoot := t.TempDir()
+	linkRoot := filepath.Join(t.TempDir(), "rootlink")
+	if err := os.Symlink(realRoot, linkRoot); err == nil {
+		t.Setenv("LIAISON_FS_ROOT", linkRoot)
+		if _, err := safePath("/ok"); err != nil {
+			t.Fatalf("软链根目录内的路径应允许: %v", err)
+		}
 	}
 }

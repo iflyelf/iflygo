@@ -9,6 +9,9 @@ import (
 	"time"
 )
 
+// maxConcurrentTunnels 单实例最大并发中继隧道数，防止连接洪泛耗尽资源。
+const maxConcurrentTunnels = 4096
+
 // Server TCP 中继服务端：接受客户端 TCP 隧道，解封装后以 UDP 转发到目标 endpoint。
 //
 // 每条客户端 TCP 隧道绑定一个独立的 UDP 连接（connected socket）到目标，
@@ -22,11 +25,18 @@ type Server struct {
 	HandshakeTimeout time.Duration
 	// Logger 可选日志器；nil 时使用标准库 log。
 	Logger *log.Logger
+
+	sem chan struct{}
 }
 
 // NewServer 创建 TCP 中继服务端。
 func NewServer(listen string) *Server {
-	return &Server{Listen: listen, HandshakeTimeout: 10 * time.Second, Logger: log.Default()}
+	return &Server{
+		Listen:           listen,
+		HandshakeTimeout: 10 * time.Second,
+		Logger:           log.Default(),
+		sem:              make(chan struct{}, maxConcurrentTunnels),
+	}
 }
 
 func (s *Server) logf(format string, args ...any) {
@@ -65,12 +75,26 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 			}
 			return err
 		}
-		go s.serveConn(conn)
+		select {
+		case s.sem <- struct{}{}:
+			go func(c net.Conn) {
+				defer func() { <-s.sem }()
+				s.serveConn(c)
+			}(conn)
+		default:
+			s.logf("⚠️ TCP 中继并发隧道已达上限 %d，拒绝 %s", maxConcurrentTunnels, conn.RemoteAddr())
+			_ = conn.Close()
+		}
 	}
 }
 
 // serveConn 处理一条 TCP 隧道：握手 → UDP ⇄ TCP 双向转发。
 func (s *Server) serveConn(tcp net.Conn) {
+	if tc, ok := tcp.(*net.TCPConn); ok {
+		_ = tc.SetNoDelay(true)
+		_ = tc.SetKeepAlive(true)
+		_ = tc.SetKeepAlivePeriod(30 * time.Second)
+	}
 	t, err := s.dialTarget(tcp)
 	if err != nil {
 		s.logf("⚠️ TCP 中继握手失败: %v", err)
@@ -131,8 +155,9 @@ func pipe(t *tunnel) {
 	// TCP → UDP
 	go func() {
 		defer stop()
+		buf := make([]byte, maxFrameSize)
 		for {
-			payload, err := readFrame(t.tcp)
+			payload, err := readFrameInto(t.tcp, buf)
 			if err != nil {
 				return
 			}

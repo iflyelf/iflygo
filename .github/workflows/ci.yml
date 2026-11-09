@@ -50,7 +50,9 @@ jobs:
           go-version-file: 'go.mod'
 
       - name: grdp 子模块补丁（移除 CGO + broken VNC）
-        run: python3 scripts/patch_grdp.py third_party/grdp
+        run: |
+          python3 scripts/patch_grdp.py third_party/grdp
+          python3 scripts/patch_nebula.py third_party/nebula
 
       - name: 前端合并注入（upgrade_mgr 前端 + 隧道/DDNSTO/Liaison 视图）
         run: python3 scripts/inject_tunnel_frontend.py
@@ -63,6 +65,9 @@ jobs:
 
       - name: 运行测试
         run: go test -p 1 ./...
+
+      - name: 并发竞态检查（-race）
+        run: go test -race -p 1 ./...
 
   # 多架构二进制（push/tag 作为发布产物，PR 作为编译校验）
   build:
@@ -91,7 +96,9 @@ jobs:
           go-version-file: 'go.mod'
 
       - name: grdp 子模块补丁
-        run: python3 scripts/patch_grdp.py third_party/grdp
+        run: |
+          python3 scripts/patch_grdp.py third_party/grdp
+          python3 scripts/patch_nebula.py third_party/nebula
 
       - name: 前端合并注入
         run: python3 scripts/inject_tunnel_frontend.py

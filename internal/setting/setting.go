@@ -1274,16 +1274,20 @@ func (s *Service) RevealSecret(key string) (string, error) {
 	return it.Get(s.cfg), nil
 }
 
-// HasPagePrefix 判断是否有以 prefix 开头的设置项已在页面保存。
+// ApplyBaseTCPRelay 用配置文件热加载的新值更新基线；页面已保存 tcp_relay.* 时忽略。
 //
-// 用于配置文件热加载时避免覆盖页面设置（页面优先级最高）。
-func (s *Service) HasPagePrefix(prefix string) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+// 写 cfg 时持有设置锁，避免与 View/Snapshot 并发读写。
+func (s *Service) ApplyBaseTCPRelay(tr config.TCPRelayConfig) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.base != nil {
+		s.base.TCPRelay = tr
+	}
 	for k := range s.pageKeys {
-		if strings.HasPrefix(k, prefix) {
-			return true
+		if strings.HasPrefix(k, "tcp_relay.") {
+			return false
 		}
 	}
-	return false
+	s.cfg.TCPRelay = tr
+	return true
 }

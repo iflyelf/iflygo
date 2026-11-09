@@ -5,6 +5,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"hash/fnv"
 	"log"
 	"log/slog"
 	"net/http"
@@ -84,9 +85,10 @@ func main() {
 	sc.StartAISettingsWatcher(ctx)
 	// TCP 中继：默认自动启用（控制面端口 +1），模式/地址/令牌支持页面与配置文件热更新。
 	sc.ReloadTCPRelay(ctx)
+	defer sc.Relay.Stop()
 	sc.StartRelaySettingsWatcher(ctx, 5*time.Second)
 	// 配置文件热加载：TCP 中继即时生效，其余变更提示需重启。
-	go watchConfigFile(ctx, *configFile, c, sc)
+	go watchConfigFile(ctx, *configFile, sc)
 
 	mux := http.NewServeMux()
 	limiters := registerRoutes(mux, sc)
@@ -524,12 +526,19 @@ func startTunnelDataPlane() {
 //
 // 运行期重建监听/连接池等长生命周期对象不安全，因此其余 section 变更只提示
 // 需要重启；页面保存的设置优先级更高，会覆盖配置文件中的对应项。
-func watchConfigFile(ctx context.Context, path string, c *config.Config, sc *svc.ServiceContext) {
+func watchConfigFile(ctx context.Context, path string, sc *svc.ServiceContext) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return
 	}
-	last := configModTime(path)
+	// lastCfg 保留「上一次文件内容」用于 diff；不读取共享 *config.Config，
+	// 避免与页面设置写入并发。
+	lastCfg, err := config.Load(path)
+	if err != nil {
+		log.Printf("⚠️ 配置文件初始加载失败（热加载将持续重试）: %v", err)
+		lastCfg = nil
+	}
+	last := configDigest(path)
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -537,29 +546,40 @@ func watchConfigFile(ctx context.Context, path string, c *config.Config, sc *svc
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			mod := configModTime(path)
-			if mod.IsZero() || mod.Equal(last) {
+			digest := configDigest(path)
+			if digest == last {
 				continue
 			}
-			last = mod
+			last = digest
+			if _, err := os.Stat(path); err != nil {
+				if os.IsNotExist(err) {
+					log.Printf("ℹ️ 配置文件已删除，保持当前运行配置")
+					continue
+				}
+			}
 			next, err := config.Load(path)
 			if err != nil {
 				log.Printf("⚠️ 配置文件热加载失败: %v", err)
 				continue
 			}
-			changed := configSectionsChanged(c, next)
+			var changed []string
+			if lastCfg == nil {
+				changed = configTopSections(next)
+			} else {
+				changed = configSectionsChanged(lastCfg, next)
+			}
+			lastCfg = next
 			if len(changed) == 0 {
 				continue
 			}
 			applied := map[string]bool{}
 			skipped := map[string]bool{}
 			if containsString(changed, "tcp_relay") {
-				if sc.Settings != nil && sc.Settings.HasPagePrefix("tcp_relay.") {
-					skipped["tcp_relay"] = true
-				} else {
-					c.TCPRelay = next.TCPRelay
+				if sc.Settings != nil && sc.Settings.ApplyBaseTCPRelay(next.TCPRelay) {
 					sc.ReloadTCPRelay(ctx)
 					applied["tcp_relay"] = true
+				} else {
+					skipped["tcp_relay"] = true
 				}
 			}
 			var hot, restart, override []string
@@ -586,15 +606,27 @@ func watchConfigFile(ctx context.Context, path string, c *config.Config, sc *svc
 	}
 }
 
-func configModTime(path string) time.Time {
-	info, err := os.Stat(path)
+func configDigest(path string) string {
+	b, err := os.ReadFile(path)
 	if err != nil {
-		return time.Time{}
+		return ""
 	}
-	return info.ModTime()
+	h := fnv.New64a()
+	_, _ = h.Write(b)
+	return fmt.Sprintf("%x:%d", h.Sum64(), len(b))
 }
 
 // configSectionsChanged 返回发生变化的顶层配置 section。
+func configTopSections(cfg *config.Config) []string {
+	m := configYAMLMap(cfg)
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func configSectionsChanged(oldCfg, newCfg *config.Config) []string {
 	oldMap := configYAMLMap(oldCfg)
 	newMap := configYAMLMap(newCfg)

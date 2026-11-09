@@ -100,21 +100,23 @@ func tunnelRelayInfo(sc *svc.ServiceContext, r *http.Request) (mode, addr, token
 	if sc == nil || sc.Relay == nil {
 		return "auto", "", ""
 	}
-	mode = sc.Relay.Mode()
-	token = sc.Relay.Token()
-	port := sc.Relay.Port()
+	info := sc.Relay.Info()
+	mode = info.Mode
+	token = info.Token
+	port := info.Port
 	if port <= 0 {
 		return mode, "", token
 	}
-	if adv := strings.TrimSpace(sc.Relay.Advertise()); adv != "" {
+	if adv := strings.TrimSpace(info.Advertise); adv != "" {
 		if _, _, err := net.SplitHostPort(adv); err == nil {
 			return mode, adv, token
 		}
 		return mode, net.JoinHostPort(strings.Trim(adv, "[]"), strconv.Itoa(port)), token
 	}
 	host := ""
-	if sc.Config != nil {
-		host = hostFromURL(sc.Config.Server.ExternalURL)
+	if sc.Settings != nil {
+		// 通过设置快照读取，避免与页面保存并发写 Config 产生数据竞争。
+		host = hostFromURL(sc.Settings.Snapshot().Server.ExternalURL)
 	}
 	if host == "" {
 		host = hostFromRequestHost(r.Host)

@@ -1,7 +1,9 @@
 package liaison
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/binary"
 	"fmt"
 	"net/http"
 	"sync"
@@ -16,6 +18,7 @@ import (
 
 // Web DB：管理外部数据库连接，执行只读/查询 SQL（结果集返回 JSON）。
 // 连接配置存库（liaison_db_connections），连接池按需建立并缓存。
+// 主键由 Go 侧生成（BIGINT），DDL 同时兼容 PostgreSQL 与 SQLite。
 
 type dbConnEntry struct {
 	Name   string `json:"name"`
@@ -37,14 +40,25 @@ func newDBRegistry(db *sql.DB) *dbRegistry {
 
 func (r *dbRegistry) ensureTable() {
 	r.once.Do(func() {
+		// BIGINT + 显式 ID：PG 的 BIGSERIAL 与 SQLite 的 INTEGER 都兼容显式插入，
+		// 避免 SQLite 下 BIGSERIAL 不会自增导致 id 为 NULL。
 		_, _ = r.db.Exec(store.SQL(`
 			CREATE TABLE IF NOT EXISTS liaison_db_connections (
-				id     BIGSERIAL PRIMARY KEY,
+				id     BIGINT PRIMARY KEY,
 				name   VARCHAR(128) NOT NULL DEFAULT '',
 				driver VARCHAR(32)  NOT NULL DEFAULT 'postgres',
 				dsn    TEXT NOT NULL DEFAULT ''
 			)`))
 	})
+}
+
+// newDBConnID 生成 63 位正随机 ID（跨 PG/SQLite，避免依赖自增序列）。
+func newDBConnID() int64 {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return time.Now().UnixNano()
+	}
+	return int64(binary.BigEndian.Uint64(b[:]) >> 1)
 }
 
 // handleDBList 列出数据库连接（DSN 脱敏）。
@@ -88,11 +102,16 @@ func (s *Service) handleDBCreate(w http.ResponseWriter, r *http.Request) {
 	if req.Driver == "" {
 		req.Driver = "postgres"
 	}
+	switch req.Driver {
+	case "postgres", "sqlite":
+	default:
+		httpx.Fail(w, http.StatusBadRequest, "driver 只能是 postgres / sqlite")
+		return
+	}
 	s.dbReg.ensureTable()
-	var id int64
-	err := s.db.QueryRow(`INSERT INTO liaison_db_connections (name, driver, dsn) VALUES ($1,$2,$3) RETURNING id`,
-		req.Name, req.Driver, req.DSN).Scan(&id)
-	if err != nil {
+	id := newDBConnID()
+	if _, err := s.db.Exec(`INSERT INTO liaison_db_connections (id, name, driver, dsn) VALUES ($1,$2,$3,$4)`,
+		id, req.Name, req.Driver, req.DSN); err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -111,6 +130,8 @@ func (s *Service) handleDBDelete(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// 同步关闭缓存的连接池，避免删除后仍占用数据库连接。
+	s.dbReg.close(id)
 	httpx.OK(w, nil)
 }
 
@@ -135,7 +156,7 @@ func (s *Service) handleDBQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	start := time.Now()
-	rows, err := conn.Query(req.SQL)
+	rows, err := conn.QueryContext(r.Context(), req.SQL)
 	if err != nil {
 		httpx.Fail(w, http.StatusInternalServerError, err.Error())
 		return
@@ -165,6 +186,10 @@ func (s *Service) handleDBQuery(w http.ResponseWriter, r *http.Request) {
 		out = append(out, vals)
 		n++
 	}
+	if err := rows.Err(); err != nil {
+		httpx.Fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	httpx.OK(w, map[string]any{
 		"columns": cols, "rows": out, "truncated": n >= maxRows,
 		"elapsed_ms": time.Since(start).Milliseconds(),
@@ -192,6 +217,19 @@ func (r *dbRegistry) get(id int64) (*sql.DB, error) {
 	conn.SetConnMaxLifetime(5 * time.Minute)
 	r.cache[id] = conn
 	return conn, nil
+}
+
+// close 关闭并移除指定连接池。
+func (r *dbRegistry) close(id int64) {
+	r.mu.Lock()
+	c, ok := r.cache[id]
+	if ok {
+		delete(r.cache, id)
+	}
+	r.mu.Unlock()
+	if ok && c != nil {
+		_ = c.Close()
+	}
 }
 
 // normDBValue 把数据库值归一化为 JSON 友好的类型（时间 → RFC3339 字符串，[]byte → string）。

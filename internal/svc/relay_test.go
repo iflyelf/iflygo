@@ -3,13 +3,10 @@ package svc
 import (
 	"context"
 	"testing"
-
-	"github.com/iflyelf/iflygo/internal/config"
 )
 
 func TestRelayRuntimeApply(t *testing.T) {
-	c := &config.Config{Server: config.ServerConfig{Host: "127.0.0.1", Port: 8090}}
-	r := NewRelayRuntime(c)
+	r := NewRelayRuntime()
 	ctx := context.Background()
 	defer r.Stop()
 
@@ -19,8 +16,9 @@ func TestRelayRuntimeApply(t *testing.T) {
 	if r.Port() == 0 {
 		t.Fatalf("应已监听并分配端口")
 	}
-	if r.Mode() != "auto" || r.Token() != "tok1" || r.Advertise() != "relay.example.com:8443" {
-		t.Fatalf("unexpected: mode=%s token=%s adv=%s", r.Mode(), r.Token(), r.Advertise())
+	info := r.Info()
+	if info.Mode != "auto" || info.Token != "tok1" || info.Advertise != "relay.example.com:8443" {
+		t.Fatalf("unexpected: %+v", info)
 	}
 	firstPort := r.Port()
 
@@ -68,15 +66,11 @@ func TestRelayRuntimeApply(t *testing.T) {
 	}
 }
 
-func TestRelayRuntimeDefaultListen(t *testing.T) {
-	// 留空 listen 时按控制面端口 +1 推导；端口占用时返回错误而不是 panic。
-	c := &config.Config{Server: config.ServerConfig{Host: "127.0.0.1", Port: 39090}}
-	r := NewRelayRuntime(c)
-	defer r.Stop()
-	if err := r.Apply(context.Background(), "auto", "", "", ""); err == nil {
-		// 端口可能空闲，成功则校验端口为控制面端口 +1
-		if r.Port() != 39091 {
-			t.Fatalf("默认端口应为 39091，got %d", r.Port())
-		}
+func TestDefaultRelayListen(t *testing.T) {
+	if got := defaultRelayListen("127.0.0.1", 8090); got != "127.0.0.1:8091" {
+		t.Fatalf("got %s", got)
+	}
+	if got := defaultRelayListen("", 9000); got != "0.0.0.0:9001" {
+		t.Fatalf("got %s", got)
 	}
 }

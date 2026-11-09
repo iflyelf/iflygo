@@ -17,8 +17,10 @@ type Client struct {
 	Server   string
 	ClientID int64
 	Secret   string
-	HTTP     *http.Client
 }
+
+// httpClient 控制面请求统一超时，避免服务端无响应时长时间阻塞主循环。
+var httpClient = &http.Client{Timeout: 20 * time.Second}
 
 // RegInfo Agent 注册信息。
 type RegInfo struct {
@@ -36,12 +38,7 @@ type envelope struct {
 
 // New 创建客户端。
 func New(server string, id int64, secret string) *Client {
-	return &Client{
-		Server:   server,
-		ClientID: id,
-		Secret:   secret,
-		HTTP:     &http.Client{Timeout: 15 * time.Second},
-	}
+	return &Client{Server: server, ClientID: id, Secret: secret}
 }
 
 func (c *Client) bearer() string {
@@ -111,7 +108,7 @@ func doJSON(ctx context.Context, method, url, bearer string, body any, out any) 
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}

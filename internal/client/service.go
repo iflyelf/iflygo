@@ -53,8 +53,11 @@ WantedBy=multi-user.target
 
 // InstallService 安装为系统服务；relay/token/config 非空时写入 unit 的启动参数。
 func InstallService(exe, stateDir, relay, token, configPath string) error {
+	if runtime.GOOS == "windows" {
+		return installWindowsService(exe, stateDir, relay, token, configPath)
+	}
 	if runtime.GOOS != "linux" {
-		return fmt.Errorf("暂不支持 %s 服务安装（Linux systemd 已支持，Windows 后续版本）", runtime.GOOS)
+		return fmt.Errorf("暂不支持 %s 服务安装（Linux systemd / Windows SCM 已支持）", runtime.GOOS)
 	}
 	if strings.ContainsAny(relay+token+configPath, " \t\r\n\"'\\") {
 		return fmt.Errorf("服务启动参数不能包含空白或引号")
@@ -78,6 +81,9 @@ func InstallService(exe, stateDir, relay, token, configPath string) error {
 
 // UninstallService 卸载系统服务。
 func UninstallService() error {
+	if runtime.GOOS == "windows" {
+		return uninstallWindowsService()
+	}
 	if runtime.GOOS != "linux" {
 		return fmt.Errorf("暂不支持 %s 服务卸载", runtime.GOOS)
 	}

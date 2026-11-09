@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"hash/fnv"
 	"log"
 	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -101,7 +103,7 @@ func Run(opts RunOptions) error {
 	cfgTicker := time.NewTicker(2 * time.Second)
 	defer cfgTicker.Stop()
 
-	cfgMod := fileModTime(cfgPath)
+	cfgDigest := fileDigest(cfgPath)
 
 	// restartRelay 用新的数据面策略重建桥并重启 overlay。
 	restartRelay := func(next RelaySettings) {
@@ -111,12 +113,16 @@ func Run(opts RunOptions) error {
 		scope := newBridgeScope()
 		if err := restartOverlay(ov, dir, next, scope.ctx); err != nil {
 			scope.Close()
+			bridges.Close() // overlay 已停止，旧桥不再有用，回收避免泄漏
 			log.Printf("⚠️ 切换数据面模式失败: %v", err)
 			return
 		}
 		bridges.Close()
 		bridges = scope
 		relay = next
+		if err := rm.Reapply(); err != nil {
+			log.Printf("⚠️ 重新应用不安全路由失败: %v", err)
+		}
 		logRelay(relay)
 	}
 
@@ -153,14 +159,17 @@ func Run(opts RunOptions) error {
 				} else {
 					bridges.Close()
 					bridges = scope
+					if err := rm.Reapply(); err != nil {
+						log.Printf("⚠️ 重新应用不安全路由失败: %v", err)
+					}
 				}
 			}
 		case <-cfgTicker.C:
-			mod := fileModTime(cfgPath)
-			if mod.Equal(cfgMod) {
+			digest := fileDigest(cfgPath)
+			if digest == cfgDigest {
 				continue
 			}
-			cfgMod = mod
+			cfgDigest = digest
 			next, err := LoadFileConfig(cfgPath)
 			if err != nil {
 				log.Printf("⚠️ 客户端配置热加载失败: %v", err)
@@ -202,13 +211,18 @@ func logRelay(r RelaySettings) {
 	}
 }
 
-// fileModTime 返回文件修改时间；不存在返回零值。
-func fileModTime(path string) time.Time {
-	info, err := os.Stat(path)
+// fileDigest 返回文件内容摘要；不存在返回空串。
+//
+// 用内容而非 mtime 判断变化：避免同一秒内连续保存（部分文件系统 mtime 精度为 1s）
+// 或「大小不变但内容变化」时漏掉热加载。
+func fileDigest(path string) string {
+	b, err := os.ReadFile(path)
 	if err != nil {
-		return time.Time{}
+		return ""
 	}
-	return info.ModTime()
+	h := fnv.New64a()
+	_, _ = h.Write(b)
+	return strconv.FormatUint(h.Sum64(), 16) + ":" + strconv.Itoa(len(b))
 }
 
 // bridgeScope 管理一组 TCP 中继桥的生命周期（一个 overlay 配置对应一组桥）。
