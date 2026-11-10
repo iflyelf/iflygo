@@ -1,15 +1,85 @@
+# ============================================================================
+#  iFlyGo 控制面快速部署（Console + PostgreSQL）
+#
+#  用法：
+#    cp .env.example .env
+#    # 编辑 .env，至少设置 POSTGRES_PASSWORD / ADMIN_PASSWORD / SESSION_SECRET
+#    docker compose up -d
+#
+#  默认只启动「控制面」：Web/API 8090、TCP 中继 8091。
+#  数据面节点（lighthouse/relay/edge/gateway）建议独立部署，见 README
+#  「方式三：数据面节点」；如需单机体验，取消 server.command / ports /
+#  volumes 中对应注释，并准备 Nebula 配置包。
+# ============================================================================
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: iflygo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-iflygo}
+      POSTGRES_USER: ${POSTGRES_USER:-iflygo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}
+      TZ: Asia/Shanghai
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-iflygo} -d ${POSTGRES_DB:-iflygo}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    # 默认只允许容器网络访问；需要宿主机/外部访问再放开：
+    # ports:
+    #   - "127.0.0.1:5432:5432"
+
   server:
-    image: iflyelf/iflygo:latest
+    image: ${IFLYGO_IMAGE:-iflyelf/iflygo:latest}
     container_name: iflygo-server
     restart: unless-stopped
-    command: ["-role", "console,lighthouse,relay,edge"]
-    network_mode: host
-    cap_add:
-      - NET_ADMIN
-    devices:
-      - /dev/net/tun
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # 单个 -c 即可：server.port 等从挂载的 config 读取；DB/管理员/密钥由环境变量覆盖。
+    command: ["-c", "/etc/iflygo/config.yaml"]
+    # 单机体验（含数据面角色）时取消注释，并准备 /etc/iflygo/node/config.yml：
+    # command: ["-c", "/etc/iflygo/config.yaml", "-role", "console,lighthouse,relay,edge",
+    #           "-overlay-config", "/etc/iflygo/node/config.yml",
+    #           "-edge-addr", ":443", "-edge-routes", "/etc/iflygo/edge-routes.json"]
     environment:
-      - TZ=Asia/Shanghai
+      TZ: Asia/Shanghai
+      DATABASE_URL: postgresql://${POSTGRES_USER:-iflygo}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-iflygo}?sslmode=disable
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?请在 .env 设置 ADMIN_PASSWORD}
+      SESSION_SECRET: ${SESSION_SECRET:?请在 .env 设置 SESSION_SECRET}
+      SERVER_EXTERNAL_URL: ${SERVER_EXTERNAL_URL:-http://127.0.0.1:8090}
+      ARTIFACT_DIR: /data/artifacts
+      TCP_RELAY_ADVERTISE: ${TCP_RELAY_ADVERTISE:-}
+    ports:
+      - "8090:8090"          # 控制面 Web/API
+      - "8091:8091"          # TCP 中继（默认控制面端口 +1）
+      # 数据面角色需要时再开放（或直接用 --network host）：
+      # - "80:80/tcp"        # ACME HTTP-01
+      # - "443:443/tcp"      # Edge HTTPS
+      # - "443:443/udp"      # Nebula / Edge
+      # - "6688:6688/udp"    # Lighthouse / Relay
     volumes:
-      - ./data:/data
+      - ./config.yaml:/etc/iflygo/config.yaml:ro
+      - iflygo-data:/data
+      # 数据面角色：Nebula 配置包（ca.crt/node.crt/node.key/config.yml）
+      # - ./node:/etc/iflygo/node:ro
+      # - ./edge-routes.json:/etc/iflygo/edge-routes.json:ro
+    # 纯控制面不需要 TUN；启用数据面角色时取消注释：
+    # cap_add:
+    #   - NET_ADMIN
+    # devices:
+    #   - /dev/net/tun:/dev/net/tun
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${SERVER_PORT:-8090}/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  pgdata:
+  iflygo-data:

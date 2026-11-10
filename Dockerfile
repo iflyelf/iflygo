@@ -59,13 +59,21 @@ RUN set -eux && \
 COPY --from=builder /out/iflygo-server /usr/local/bin/iflygo-server
 COPY --from=builder /out/iflygo-client /usr/local/bin/iflygo-client
 
-# 控制面 / edge / lighthouse
-EXPOSE 8080/tcp
+# 控制面 / TCP 中继 / edge / lighthouse
+# 8090 控制面 Web/API（默认 server.port）
+# 8091 TCP 中继（默认控制面端口 +1）
+# 443  edge HTTPS / Nebula（edge 与 443/UDP 按角色使用）
+# 6688 UDP lighthouse/relay
+# 80   可选：ACME HTTP-01
+EXPOSE 8090/tcp
+EXPOSE 8091/tcp
+EXPOSE 80/tcp
 EXPOSE 443/tcp
 EXPOSE 443/udp
 EXPOSE 6688/udp
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8080/health || exit 1
+# 健康检查由部署方按角色设置：
+#   控制面：--health-cmd 'curl -fsS http://127.0.0.1:8090/health'
+#   数据面：不启动 8090，建议使用进程/端口检查或直接依赖容器重启策略。
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/iflygo-server"]

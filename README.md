@@ -15,6 +15,7 @@
 - ✅ **不安全路由 HA**：多网关加权 ECMP + 健康检查 + 自动故障切换
 - ✅ **Web 管理**：Token 接入、IPAM、证书签发、配置下发、自定义域名/二级前缀
 - ✅ **跨平台**：`CGO_ENABLED=0` 交叉编译，Linux / Windows / macOS / 树莓派 / NAS
+- ✅ **多种部署**：二进制/systemd、Windows 服务（SCM）、Docker Compose、Nginx 反向代理示例
 
 ### 升级控制平台（完整复刻 upgrade_mgr）
 - ✅ 主机清单 / 组件 / 制品 / 升级任务（灰度编排、批次、重试、取消、回滚）
@@ -72,6 +73,7 @@
 - [x] Liaison 远程管理套件：Casbin RBAC / Web SSH / 文件管理 / Web DB / LLM 网关
 - [x] 数据面模式 auto/tcp/udp + TCP Relay（UDP 被封锁时经 TCP 承载 overlay 流量）
 - [x] 服务端/客户端配置文件热加载；服务端中继配置与网络 Nebula 设置可在页面配置
+- [x] 部署文档与模板：systemd / Windows SCM / Docker Compose / Nginx
 
 ## 🔌 控制面 API（已实现）
 
@@ -134,23 +136,458 @@ CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/iflygo-server ./cmd/ser
 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/iflygo-client ./cmd/client
 ```
 
-## 🐳 Docker
+## 🚀 部署
+
+> 发布产物：GitHub Releases 的 `latest` 提供 7 个平台的
+> `iflygo-server-*` / `iflygo-client-*`（Linux/macOS 为 `.tar.gz`，Windows 为 `.zip`，
+> zip 内已包含 `wintun.dll`）。
+> 容器镜像：`iflyelf/iflygo:latest`、`swr.cn-east-3.myhuaweicloud.com/iflyelf/iflygo:latest`
+>（`linux/amd64`、`linux/arm64`）。
+
+### 部署拓扑
+
+| 组件 | 典型位置 | 说明 |
+|---|---|---|
+| `iflygo-server`（console） | 控制面主机 + PostgreSQL | Web/API、IPAM、PKI、配置生成、DDNSTO/Liaison |
+| `iflygo-server`（lighthouse/relay/edge/gateway） | 独立节点/容器 | Nebula 数据面；每个节点从控制台下载自己的配置包 |
+| `iflygo-client` | Linux / Windows / macOS | enroll 后运行；需要 TUN 与 `NET_ADMIN` |
+| PostgreSQL / SQLite | console 依赖 | 生产推荐 PostgreSQL；SQLite 适合单机/体验 |
+
+### 前置条件
+
+- Linux：内核支持 TUN/TAP，存在 `/dev/net/tun`；客户端与数据面节点需要 root 或 `CAP_NET_ADMIN`。
+- Windows 客户端：Windows 10/11 或 Server 2016+，管理员权限；使用 zip 包（内含 `wintun.dll`）。
+- 端口（默认值，均可配置）：
+
+| 端口 | 协议 | 用途 |
+|---|---|---|
+| 8090 | TCP | 控制面 Web/API（`server.port`） |
+| 8091 | TCP | TCP 中继（默认控制面端口 +1；`tcp_relay.listen`） |
+| 443 | TCP/UDP | Edge HTTPS / Nebula（数据面节点） |
+| 6688 | UDP | Lighthouse / Relay |
+| 80 | TCP | 可选：ACME HTTP-01 |
+| 5432 / 6379 | TCP | 外部 PostgreSQL / Redis（不对外暴露） |
+
+- 生产建议 HTTPS。`server.external_url` 必须填**浏览器/客户端实际访问地址**，不是监听地址。
+
+---
+
+### 方式一：二进制部署（Linux systemd，推荐）
+
+#### 1. 下载并安装
 
 ```bash
-docker build -t iflyelf/iflygo:latest .
-docker run --rm iflyelf/iflygo:latest -version
+# 按需替换 ARCH：amd64 / arm64 / arm
+ARCH=amd64
+BASE=https://github.com/iflyelf/iflygo/releases/latest/download
+
+wget -c -O /tmp/iflygo-server.tar.gz  "$BASE/iflygo-server-linux-${ARCH}.tar.gz"
+wget -c -O /tmp/iflygo-client.tar.gz  "$BASE/iflygo-client-linux-${ARCH}.tar.gz"
+tar -xzf /tmp/iflygo-server.tar.gz -C /tmp
+tar -xzf /tmp/iflygo-client.tar.gz -C /tmp
+
+install -m 0755 "/tmp/iflygo-server-linux-${ARCH}" /usr/local/bin/iflygo-server
+install -m 0755 "/tmp/iflygo-client-linux-${ARCH}" /usr/local/bin/iflygo-client
 ```
 
-镜像基于 `iflyelf/ubuntu:latest` 构建、运行于 `iflyelf/ubuntu:lite`，支持多架构 `linux/amd64,linux/arm64`。
+> 国内访问慢时可使用代理前缀（可选）：
+> `https://proxy.xiaonuo.live/proxy?url=<原始 GitHub URL>`。
+
+#### 2. 准备数据库
+
+生产推荐 PostgreSQL 12+：
+
+```bash
+sudo -u postgres psql <<'SQL'
+CREATE USER iflygo WITH PASSWORD 'change-me';
+CREATE DATABASE iflygo OWNER iflygo;
+SQL
+```
+
+单机/体验也可用 SQLite：
+
+```bash
+export DATABASE_DRIVER=sqlite
+export SQLITE_PATH=/var/lib/iflygo/iflygo.db
+```
+
+> 首次启动会自动执行迁移，无需手工导入 SQL。SQLite 仅建议单实例。
+
+#### 3. 目录与配置
+
+```bash
+install -d -m 0755 /etc/iflygo /var/lib/iflygo/artifacts
+```
+
+`/etc/iflygo/config.yaml`：
+
+```yaml
+server:
+  host: 0.0.0.0
+  port: 8090
+  external_url: https://iflygo.example.com
+  web_embedded: true
+  cookie_secure: auto
+  trust_proxy: true
+  # Nginx 在其它机器时追加代理 IP/CIDR
+  trusted_proxies: ["127.0.0.1", "::1"]
+
+database:
+  driver: postgres
+  dsn: postgresql://iflygo:change-me@127.0.0.1:5432/iflygo?sslmode=disable
+  max_open_conns: 50
+  max_idle_conns: 10
+
+auth:
+  provider: builtin
+  admin_username: admin
+  admin_password: ""          # 建议用 ADMIN_PASSWORD 环境变量覆盖
+
+artifact:
+  dir: /var/lib/iflygo/artifacts
+  storage_type: local
+  max_concurrent_uploads: 4
+  lock_wait: 30m
+
+tcp_relay:
+  mode: auto                  # auto / tcp / udp
+  listen: ""                  # 留空 = 8091（控制面端口 +1）
+  advertise: ""               # 反向代理/端口映射时填对外地址，如 iflygo.example.com:8091
+  token: ""                   # 可选共享令牌，客户端自动获取
+
+log:
+  level: info
+```
+
+敏感项建议放入环境变量文件 `/etc/iflygo/server.env`：
+
+```bash
+ADMIN_PASSWORD=change-me
+SESSION_SECRET=$(openssl rand -hex 32)
+DATABASE_URL=postgresql://iflygo:change-me@127.0.0.1:5432/iflygo?sslmode=disable
+SERVER_EXTERNAL_URL=https://iflygo.example.com
+# TCP_RELAY_ADVERTISE=iflygo.example.com:8091
+# TCP_RELAY_TOKEN=change-me
+```
+
+> 优先级：**页面设置 > 环境变量 > 配置文件 > 内置默认值**。
+> 管理员密码为空时首次启动会生成随机密码并打印一次日志。
+
+#### 4. systemd 启动
+
+```bash
+# 从仓库复制 deploy/systemd/iflygo-server.service（仅下载二进制时也可按文件内容手写）
+install -m 0644 deploy/systemd/iflygo-server.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now iflygo-server
+journalctl -u iflygo-server -f
+```
+
+首次登录：`http://<server>:8090`，用户名 `admin`，密码为 `ADMIN_PASSWORD`
+（未设置时见首次启动日志）。
+
+> 仅部署 console 时，可从 service 文件删除 `AmbientCapabilities` / `CapabilityBoundingSet`。
+> 数据面角色（lighthouse/relay/edge/gateway）需要 `CAP_NET_ADMIN`，edge 绑定 443 需要 `CAP_NET_BIND_SERVICE`。
+
+#### 5. 接入 Linux 客户端
+
+1. 页面 → **隧道 → 客户端 → 创建客户端**，复制 enroll token 或安装命令；
+2. 在目标主机执行：
+
+```bash
+sudo iflygo-client enroll \
+  --server https://iflygo.example.com \
+  --token '<ENROLL_TOKEN>' \
+  --state-dir /var/lib/iflygo-client
+
+# 前台运行（需要 root / TUN）
+sudo iflygo-client run --state-dir /var/lib/iflygo-client
+
+# 或安装为 systemd 服务
+sudo iflygo-client service install \
+  --state-dir /var/lib/iflygo-client \
+  --config /etc/iflygo/client.yaml
+```
+
+客户端配置文件 `/etc/iflygo/client.yaml`（支持约 2 秒热加载）：
+
+```yaml
+interval: 30s
+data_plane:
+  mode: auto                 # auto / tcp / udp
+  tcp_relay: ""              # 留空自动从服务端发现
+  tcp_relay_token: ""        # 留空自动获取
+```
+
+查看状态 / 重新拉取配置：
+
+```bash
+iflygo-client status --state-dir /var/lib/iflygo-client
+iflygo-client config --state-dir /var/lib/iflygo-client
+```
+
+> 客户端只需要出站 TCP 8090/8091（以及出站 UDP，用于 P2P/打洞）；不需要固定的入站 UDP 端口。
+> TCP 中继模式说明见下方「数据面与 TCP Relay」。
+
+#### 6. 接入 Windows 客户端
+
+1. 下载 `iflygo-client-windows-amd64.zip`（或 `arm64`）并解压；
+2. **保持目录结构**：`iflygo-client-windows-amd64.exe` 与
+   `dist\windows\wintun\bin\amd64\wintun.dll` 在同一父目录下；
+3. 以管理员身份打开 PowerShell：
+
+```powershell
+.\iflygo-client-windows-amd64.exe enroll `
+  --server https://iflygo.example.com `
+  --token "<ENROLL_TOKEN>" `
+  --state-dir C:\ProgramData\iflygo
+
+.\iflygo-client-windows-amd64.exe run --state-dir C:\ProgramData\iflygo
+
+# 安装为 Windows 服务（SCM，开机自启）
+.\iflygo-client-windows-amd64.exe service install `
+  --state-dir C:\ProgramData\iflygo `
+  --config C:\ProgramData\iflygo\client.yaml
+```
+
+> Windows 服务以 LocalSystem 运行，需要管理员权限以加载 wintun 驱动。
+> 若使用裸 `.exe`（不下载 zip），需手动补齐 `dist\windows\wintun\bin\<arch>\wintun.dll`。
+
+#### 7. 升级 / 卸载
+
+```bash
+# 升级：替换二进制后重启，迁移自动执行
+install -m 0755 /tmp/iflygo-server-linux-amd64 /usr/local/bin/iflygo-server
+systemctl restart iflygo-server
+
+# 卸载
+systemctl disable --now iflygo-server
+rm -f /etc/systemd/system/iflygo-server.service
+rm -rf /opt/iflygo /var/lib/iflygo   # 确认已备份 CA/数据库/制品后再删
+```
+
+---
+
+### 方式二：Docker / Docker Compose（快速体验/控制面）
+
+#### 镜像
+
+- Docker Hub：`iflyelf/iflygo:latest`
+- 华为云 SWR：`swr.cn-east-3.myhuaweicloud.com/iflyelf/iflygo:latest`
+
+镜像内同时包含 `iflygo-server` 与 `iflygo-client`，默认入口是 `iflygo-server`。
+
+#### Compose 一键启动（Console + PostgreSQL）
+
+```bash
+cd deploy/docker
+cp .env.example .env
+cp config.example.yaml config.yaml
+# 编辑 .env：至少设置 POSTGRES_PASSWORD / ADMIN_PASSWORD / SESSION_SECRET
+# 编辑 config.yaml：external_url、tcp_relay.advertise 等
+docker compose up -d
+docker compose logs -f server
+```
+
+默认映射：
+
+- `8090/tcp` 控制面 Web/API
+- `8091/tcp` TCP 中继
+
+访问 `http://<host>:8090`，用 `admin` + `ADMIN_PASSWORD` 登录。
+
+> 数据卷：`pgdata`（PostgreSQL）、`iflygo-data`（`/data/artifacts`）。
+> 配置文件以只读方式挂载；修改后 `docker compose restart server`（`tcp_relay` 支持热加载）。
+
+#### 最小 docker run（SQLite，单机体验）
+
+```bash
+docker run -d --name iflygo \
+  -p 8090:8090 -p 8091:8091 \
+  -e TZ=Asia/Shanghai \
+  -e SERVER_EXTERNAL_URL=http://127.0.0.1:8090 \
+  -e ADMIN_USERNAME=admin \
+  -e ADMIN_PASSWORD=change-me \
+  -e SESSION_SECRET="$(openssl rand -hex 32)" \
+  -e DATABASE_DRIVER=sqlite \
+  -e SQLITE_PATH=/data/iflygo.db \
+  -e ARTIFACT_DIR=/data/artifacts \
+  -v iflygo-data:/data \
+  iflyelf/iflygo:latest
+```
+
+#### 数据面角色容器
+
+lighthouse/relay/edge 需要 Nebula 配置包、UDP 与 TUN，推荐 **host 网络**：
+
+```bash
+docker run -d --name iflygo-lighthouse \
+  --network host \
+  --cap-add NET_ADMIN \
+  --device /dev/net/tun \
+  --workdir /etc/iflygo/node \
+  -v /etc/iflygo/node:/etc/iflygo/node:ro \
+  -e TZ=Asia/Shanghai \
+  iflyelf/iflygo:latest \
+  -role lighthouse \
+  -overlay-config /etc/iflygo/node/config.yml
+```
+
+edge 示例：
+
+```bash
+docker run -d --name iflygo-edge \
+  --network host \
+  --cap-add NET_ADMIN \
+  --device /dev/net/tun \
+  --workdir /etc/iflygo/node \
+  -v /etc/iflygo/node:/etc/iflygo/node:ro \
+  -v /etc/iflygo/edge-routes.json:/etc/iflygo/edge-routes.json:ro \
+  iflyelf/iflygo:latest \
+  -role edge \
+  -overlay-config /etc/iflygo/node/config.yml \
+  -edge-addr :443 \
+  -edge-routes /etc/iflygo/edge-routes.json
+```
+
+> 控制面与 edge 不要同时占用宿主机 443；生产建议 console 与 edge 分机部署，或使用独立 IP/端口。
+
+#### 客户端容器（可选）
+
+客户端需要 TUN 与 host 网络（P2P 打洞/源地址更稳定）：
+
+```bash
+# enroll（一次性）
+docker run --rm --network host \
+  -v iflygo-client:/var/lib/iflygo-client \
+  --entrypoint /usr/local/bin/iflygo-client \
+  iflyelf/iflygo:latest enroll \
+    --server https://iflygo.example.com \
+    --token '<ENROLL_TOKEN>' \
+    --state-dir /var/lib/iflygo-client
+
+# 长期运行
+docker run -d --name iflygo-client \
+  --network host \
+  --cap-add NET_ADMIN \
+  --device /dev/net/tun \
+  -v iflygo-client:/var/lib/iflygo-client \
+  --entrypoint /usr/local/bin/iflygo-client \
+  iflyelf/iflygo:latest run --state-dir /var/lib/iflygo-client
+```
+
+> 客户端容器需要覆盖 `--entrypoint`（镜像默认入口是 server）；容器内不建议用
+> `service install`，直接 `run` 即可。
+
+---
+
+### 方式三：数据面节点（lighthouse / relay / edge / gateway）
+
+> 数据面节点使用 `-role <角色> -overlay-config ...` 启动时进入**纯数据面模式**：
+> 不连接数据库、不启动 8090 控制面，只运行 Nebula/Edge。需要同时提供控制面时，
+> 把 `console` 加入 `-role`（如 `-role console,lighthouse`）。
+
+1. 控制台创建网络；
+2. **服务端节点**中创建节点，填写 `roles`（如 `lighthouse`、`relay`、`edge`）与
+   `public_host` / `public_port`（必须与节点实际监听/映射一致）；
+3. 在页面下载该节点的配置包（或调用
+   `GET /api/server-nodes/{id}/bundle`），保存为：
+
+```text
+/etc/iflygo/node/ca.crt
+/etc/iflygo/node/node.crt
+/etc/iflygo/node/node.key
+/etc/iflygo/node/config.yml
+```
+
+4. 按角色启动：
+
+```bash
+# lighthouse（UDP 发现 / 打洞协调）
+iflygo-server -role lighthouse -overlay-config /etc/iflygo/node/config.yml
+
+# relay（UDP 中继）
+iflygo-server -role relay -overlay-config /etc/iflygo/node/config.yml
+
+# edge（HTTPS/域名入口；路由表从页面下载或 GET /api/server-nodes/{id}/edge-routes）
+iflygo-server -role edge \
+  -overlay-config /etc/iflygo/node/config.yml \
+  -edge-addr :443 \
+  -edge-routes /etc/iflygo/edge-routes.json
+
+# gateway（不安全路由/NAT/子网探测）
+iflygo-server -role gateway -overlay-config /etc/iflygo/node/config.yml
+```
+
+> 使用仓库中的 `deploy/systemd/iflygo-node.service`（已设置
+> `WorkingDirectory=/etc/iflygo/node`，config.yml 内的相对 pki 路径可直接使用），
+> 按角色修改 `ExecStart` 后安装即可。也可把 `pki.ca/cert/key` 改为绝对路径：
+> ```yaml
+> pki:
+>   ca: /etc/iflygo/node/ca.crt
+>   cert: /etc/iflygo/node/node.crt
+>   key: /etc/iflygo/node/node.key
+> ```
+>
+> 一个进程可用逗号组合角色（如 `-role lighthouse,relay`），共用同一份 overlay 配置；
+> 控制台（console）与数据面建议分开部署，避免重启/升级互相影响；
+> 纯数据面节点无需 PostgreSQL，也不需要 `-c` 配置文件。
+>
+> edge 的 TLS 可用 `-edge-tls-cert/-edge-tls-key` 或 ACME：
+> `-edge-acme-email ops@example.com -edge-acme-cache /var/lib/iflygo/acme`。
+
+---
+
+### Nginx / HTTPS 反向代理（可选）
+
+参考 `deploy/nginx/iflygo.conf`，关键点：
+
+- 必须转发 `Upgrade` / `Connection`，并给 `/api/liaison/ws`、`/api/agent/*` 设置较长
+  `proxy_read_timeout`（Web SSH/桌面、Agent 长轮询）；
+- 制品上传按需增大 `client_max_body_size`（示例 2g）；
+- `server.external_url` 填 HTTPS 域名；`trusted_proxies` 加入 Nginx 地址；
+- TCP 中继 8091 默认直连；若经 Nginx `stream` 转发，设置
+  `TCP_RELAY_ADVERTISE=<域名>:8091`，确保客户端能连到该端口。
+
+---
+
+### 备份 / 升级 / 排障
+
+**备份**（至少包含数据库与制品目录；CA/证书在数据库中）：
+
+```bash
+pg_dump -Fc -U iflygo iflygo > iflygo-$(date +%F).dump
+tar -czf artifacts-$(date +%F).tar.gz -C /var/lib/iflygo artifacts
+# SQLite：
+sqlite3 /var/lib/iflygo/iflygo.db ".backup '/var/lib/iflygo/iflygo-$(date +%F).db'"
+```
+
+**升级**：替换二进制 → `systemctl restart iflygo-server`；Docker 用
+`docker compose pull && docker compose up -d`。迁移在启动时自动执行；回滚时换回旧二进制/镜像。
+
+**常见问题**：
+
+- 页面打不开：默认端口是 **8090**（不是 8080）；确认 `server.host: 0.0.0.0` 与防火墙。
+- 客户端连不上 TCP 中继：放通 8091/TCP；反向代理场景设置 `TCP_RELAY_ADVERTISE`；
+  未设置 `tcp_relay.token` 时中继不校验令牌，建议设置并限制来源。
+- Windows 客户端启动失败：使用 zip 包（含 wintun.dll），以管理员运行；
+  确认 `dist\windows\wintun\bin\<arch>\wintun.dll` 与 exe 的相对位置。
+- enroll 401：token 一次性/已过期，在页面重新生成。
+- 多副本：必须使用 PostgreSQL + 共享 `SESSION_SECRET`；SQLite 不支持多副本。
+- 数据面 443 与 Nginx 冲突：console 与 edge 分机部署，或使用不同 IP/端口。
+
+---
 
 ## 📡 端口
 
 | 端口 | 协议 | 用途 |
 |---|---|---|
-| 8080 | TCP | 控制面 Web/API |
-| 443 | TCP/UDP | Edge 入口 / TCP 隧道 |
-| 6688 | UDP | Lighthouse/Relay |
-| 控制面端口 +1（默认，可配置） | TCP | TCP 中继（默认自动开启；`tcp_relay.listen=off` 关闭） |
+| 8090 | TCP | 控制面 Web/API（默认 `server.port`） |
+| 8091 | TCP | TCP 中继（默认控制面端口 +1，可配置/关闭） |
+| 443 | TCP/UDP | Edge 入口 / Nebula 数据面 |
+| 6688 | UDP | Lighthouse / Relay（`public_port` 可覆盖） |
+| 80 | TCP | 可选：ACME HTTP-01 |
+| 5432 / 6379 | TCP | 外部 PostgreSQL / Redis（不对外暴露） |
 
 ## 🧵 数据面与 TCP Relay
 
@@ -239,6 +676,7 @@ iflygo-client run --tcp-relay off   # 等价 --data-plane udp
 ## 🚀 发布流程
 
 - 推 tag `v*` 触发：Docker 多架构发布（Docker Hub + 华为云 SWR）+ 全平台二进制 Release
+- Windows 发布包（zip）内置 `wintun.dll`，解压即用
 - `workflow_dispatch` 手动触发构建
 - `update-version.yml` 每天检测上游 Nebula 最新版本并自动开 PR
 

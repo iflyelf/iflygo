@@ -118,10 +118,20 @@ jobs:
           go build -trimpath -ldflags "${LDFLAGS}" -o "bin/iflygo-server-${{ matrix.os }}-${{ matrix.arch }}${ext}" ./cmd/server
           go build -trimpath -ldflags "${LDFLAGS}" -o "bin/iflygo-client-${{ matrix.os }}-${{ matrix.arch }}${ext}" ./cmd/client
 
+      # Windows 客户端/服务端使用 Nebula wintun 驱动；按 exe 期望的
+      # <exe 目录>/dist/windows/wintun/bin/<arch>/wintun.dll 布局放入产物。
+      - name: 打包 Windows wintun 驱动
+        if: matrix.os == 'windows'
+        run: |
+          arch="${{ matrix.arch }}"
+          mkdir -p "bin/dist/windows/wintun/bin/${arch}"
+          cp "third_party/nebula/dist/windows/wintun/bin/${arch}/wintun.dll" \
+             "bin/dist/windows/wintun/bin/${arch}/wintun.dll"
+
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: binaries-${{ matrix.os }}-${{ matrix.arch }}
-          path: bin/*
+          path: bin/
 
   # 打包并发布：main -> latest Release；tag v* -> 版本 Release
   release:
@@ -148,7 +158,17 @@ jobs:
             esac
             case "$f" in
               *.exe)
-                zip -q "${f%.exe}.zip" "$f"
+                arch=""
+                case "$f" in
+                  *-amd64.exe) arch=amd64 ;;
+                  *-arm64.exe) arch=arm64 ;;
+                esac
+                dll="dist/windows/wintun/bin/${arch}/wintun.dll"
+                if [ -n "$arch" ] && [ -f "$dll" ]; then
+                  zip -q "${f%.exe}.zip" "$f" "$dll"
+                else
+                  zip -q "${f%.exe}.zip" "$f"
+                fi
                 sha256sum "$f" >> checksums.txt
                 sha256sum "${f%.exe}.zip" >> checksums.txt
                 ;;

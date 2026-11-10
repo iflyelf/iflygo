@@ -54,6 +54,14 @@ func main() {
 		return
 	}
 
+	// 纯数据面模式：-role 不含 console 且提供了 overlay 配置。
+	// 此时不连接数据库、不启动控制面 HTTP 服务，只运行 Nebula/Edge 数据面。
+	if isDataPlaneOnly(*role, *overlayConf) {
+		log.Printf("🔗 数据面-only 模式启动 (roles=%s, overlay=%s)", *role, *overlayConf)
+		startTunnelDataPlane()
+		select {} // 保持进程运行；收到 SIGTERM 时由默认信号处理退出
+	}
+
 	c, err := config.Load(*configFile)
 	if err != nil {
 		log.Fatalf("加载配置失败: %v", err)
@@ -495,6 +503,14 @@ func registerTunnelRoutes(mux *http.ServeMux, sc *svc.ServiceContext) {
 }
 
 // startTunnelDataPlane 启动隧道数据面（overlay + edge 代理）。
+// isDataPlaneOnly 判断是否只运行数据面（不启动 console/数据库）。
+//
+// 约定：显式提供 -overlay-config 且 -role 不含 console 时，按纯数据面节点运行。
+// 需要同时提供控制面时，把 console 加入 -role 即可。
+func isDataPlaneOnly(role, overlayConf string) bool {
+	return strings.TrimSpace(overlayConf) != "" && !strings.Contains(role, "console")
+}
+
 func startTunnelDataPlane() {
 	// lighthouse/relay/edge 数据面：读取预生成 Nebula 配置并启动 overlay
 	if *overlayConf != "" {

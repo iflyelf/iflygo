@@ -1,0 +1,24 @@
+[Unit]
+Description=iFlyGo Data Plane Node (lighthouse/relay/edge/gateway)
+Documentation=https://github.com/iflyelf/iflygo
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 使用节点配置包目录作为工作目录，config.yml 内的相对 pki 路径可直接使用。
+WorkingDirectory=/etc/iflygo/node
+# 按节点角色修改 -role；edge 还需 -edge-addr/-edge-routes/-edge-tls-* 等参数。
+ExecStart=/usr/local/bin/iflygo-server \
+  -role lighthouse \
+  -overlay-config /etc/iflygo/node/config.yml
+Restart=always
+RestartSec=3
+LimitNOFILE=65535
+# 数据面需要创建 TUN、配置路由/NAT；edge 绑定 443 还需要 CAP_NET_BIND_SERVICE。
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
