@@ -20,13 +20,14 @@ COPY . .
 ARG VERSION=0.1.0
 ARG COMMIT=dev
 
+# 前端已由 make prepare / CI 合并并提交到 web/dist；
+# 镜像构建不依赖 third_party/upgrade_mgr（.dockerignore 已排除该子模块）。
 RUN set -eux && \
     GOVER=$(grep -oP '^go \K[0-9]+\.[0-9]+(\.[0-9]+)?' go.mod | head -1) && \
     case "$GOVER" in *.*.*) GT=go${GOVER} ;; *.*) GT=go${GOVER}.0 ;; esac && \
     export GOTOOLCHAIN=$GT && \
     go version && \
     python3 scripts/patch_grdp.py third_party/grdp && \
-    python3 scripts/inject_tunnel_frontend.py && \
     node --check web/dist/assets/app.js && \
     mkdir -p /out && \
     LDFLAGS="-s -w \
