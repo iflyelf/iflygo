@@ -71,7 +71,7 @@
 - [x] 证书续期 / 吊销（pki.blocklist）
 - [x] Web 管理页面：客户端 / 网络 / 节点 / 路由 / 域名
 - [x] 前端合并：upgrade_mgr 完整控制台（主机/组件/制品/任务/AI/RBAC/审计/设置）+ 隧道管理 + DDNSTO 远程访问 + Liaison 远程管理
-- [x] 双数据库（PostgreSQL + SQLite）全量支持（81 handler + 180 路由 + 44 迁移）
+- [x] 双数据库（PostgreSQL + SQLite）全量支持（58 handler + 192 路由 + 44 迁移）
 - [x] DDNSTO 远程访问：子域名自动分配 + edge 穿透
 - [x] Liaison 远程管理套件：Casbin RBAC / Web SSH / 文件管理 / Web DB / LLM 网关
 - [x] 数据面模式 auto/tcp/udp + TCP Relay（UDP 被封锁时经 TCP 承载 overlay 流量）
