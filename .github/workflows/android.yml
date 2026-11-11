@@ -5,13 +5,7 @@ name: Android APK
 on:
   push:
     branches: [main]
-    paths:
-      - 'mobile/**'
-      - 'internal/**'
-      - 'go.mod'
-      - 'go.sum'
-      - '.github/workflows/android.yml'
-  tags: ['v*']
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
