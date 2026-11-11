@@ -100,7 +100,9 @@ jobs:
         working-directory: web/e2e
         run: |
           npm ci
-          npx playwright install --with-deps chromium
+          # 不执行 apt 安装系统依赖：ubuntu-latest 已包含 Chromium 运行库，
+          # 避免部分 runner 的 apt 源临时不可用导致整个 E2E 失败。
+          npx playwright install chromium
 
       - name: 运行 E2E
         working-directory: web/e2e
