@@ -55,10 +55,17 @@ jobs:
       - name: 构建 APK
         run: gradle -p mobile/android assembleDebug --no-daemon
 
+      - name: 生成发布用 APK
+        run: |
+          cp mobile/android/app/build/outputs/apk/debug/app-debug.apk iflygo-android.apk
+          sha256sum iflygo-android.apk > iflygo-android.apk.sha256
+
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: iflygo-android-apk
-          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            iflygo-android.apk
+            iflygo-android.apk.sha256
 
       - name: 附加到 Release
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
@@ -66,4 +73,6 @@ jobs:
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
           name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
-          files: mobile/android/app/build/outputs/apk/debug/app-debug.apk
+          files: |
+            iflygo-android.apk
+            iflygo-android.apk.sha256
