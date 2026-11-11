@@ -46,6 +46,14 @@ EXTRA_CSS = """
 .tunnel-table .tunnel-name { min-width: 96px; }
 .tunnel-table .tunnel-wrap { min-width: 110px; }
 .tunnel-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.tunnel-script {
+  width: 100%; box-sizing: border-box; min-height: 320px; padding: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px; line-height: 1.55; white-space: pre; overflow: auto;
+  background: var(--panel-bg); color: var(--text-color);
+  border: 1px solid var(--border-color); border-radius: 8px;
+}
+@media (max-width: 720px) { .tunnel-script { min-height: 240px; font-size: 11px; } }
 @media (max-width: 720px) {
   .tunnel-modal { max-width: 100%; padding: 12px; }
   .tunnel-table { font-size: 12px; }
@@ -73,6 +81,10 @@ TUNNEL_JS = r'''
   state.tunnelMsg = '';
   state.tunnelOk = false;
   state.tunnelLoaded = false;
+  state.tunnelSettings = null;
+  state.tunnelParamsNet = 0;
+  state.tunnelParamsDetail = null;
+  state.tunnelParamsDetailFor = 0;
 
   function tunnelSetMsg(ok, text) { state.tunnelMsg = text || ''; state.tunnelOk = !!ok; }
   function tunnelMsgEl() {
@@ -114,6 +126,7 @@ TUNNEL_JS = r'''
     if (!state.tunnelLoaded) { state.tunnelLoaded = true; tunnelLoadAll().then(render); }
     var body;
     switch (state.tunnelSection) {
+      case 'clientSettings': body = tunnelClientSettingsView(); break;
       case 'networks': body = tunnelNetworksView(); break;
       case 'serverNodes': body = tunnelServerNodesView(); break;
       case 'routes': body = tunnelRoutesView(); break;
@@ -186,10 +199,14 @@ TUNNEL_JS = r'''
     var mode = tunnelSelect([
       ['inherit', '跟随默认'], ['auto', 'auto'], ['tcp', 'tcp'], ['udp', 'udp']
     ], cs.data_plane_mode || 'inherit');
+    var dnsRoute = tunnelSelect([
+      ['inherit', '跟随全局'], ['on', '启用'], ['off', '关闭']
+    ], cs.dns_route === true ? 'on' : (cs.dns_route === false ? 'off' : 'inherit'));
     return {
       fields: [
         { label: '服务端 DNS', input: dnsMode, hint: '可单独关闭该主机的服务端 DNS；关闭后不下发 DNS。' },
         { label: 'DNS（覆盖网络/全局）', input: dns },
+        { label: '公网 DNS 主机路由', input: dnsRoute, hint: 'DNS 不在 overlay 网段时，下发 /32 或 /128 主机路由经网关；需在网关执行 NAT 脚本。' },
         { label: '客户端 MTU（0=跟随默认）', input: mtu },
         { label: '心跳间隔（如 30s）', input: interval },
         { label: '数据面模式', input: mode }
@@ -200,6 +217,9 @@ TUNNEL_JS = r'''
         if (dm === 'on') { out.use_server_dns = true; }
         else if (dm === 'off') { out.use_server_dns = false; }
         out.dns = dns.value.trim();
+        var dr = dnsRoute.value;
+        if (dr === 'on') { out.dns_route = true; }
+        else if (dr === 'off') { out.dns_route = false; }
         var m = Number(mtu.value || 0);
         if (m > 0) { out.mtu = m; }
         out.interval = interval.value.trim();
@@ -217,6 +237,8 @@ TUNNEL_JS = r'''
     if (cs.mtu) { parts.push('MTU=' + cs.mtu); }
     if (cs.interval) { parts.push('心跳=' + cs.interval); }
     if (cs.data_plane_mode) { parts.push('数据面=' + cs.data_plane_mode); }
+    if (cs.dns_route === true) { parts.push('DNS路由=开'); }
+    else if (cs.dns_route === false) { parts.push('DNS路由=关'); }
     return parts.length ? parts.join(' ') : '跟随网络/全局';
   }
   function tunnelNetName(id) {
@@ -224,6 +246,176 @@ TUNNEL_JS = r'''
       if (state.tunnelNetworks[i].id === id) { return state.tunnelNetworks[i].name; }
     }
     return '#' + id;
+  }
+
+  function tunnelSettingsMap() {
+    var m = {};
+    (state.tunnelSettings || []).forEach(function (x) { if (x && x.key) { m[x.key] = x; } });
+    return m;
+  }
+  function tunnelSettingValue(m, key, def) {
+    return (m[key] && m[key].value != null) ? m[key].value : (def || '');
+  }
+  function tunnelOpenGlobalDefaults() {
+    var m = tunnelSettingsMap();
+    var dns = tunnelInput({ value: tunnelSettingValue(m, 'client.dns', ''), placeholder: '如 10.77.0.1（留空不启用）' });
+    var mtu = tunnelInput({ type: 'number', min: 576, max: 9000, value: tunnelSettingValue(m, 'client.mtu', '1280') });
+    var interval = tunnelInput({ value: tunnelSettingValue(m, 'client.interval', '30s') });
+    var mode = tunnelSelect([['auto', 'auto'], ['tcp', 'tcp'], ['udp', 'udp']], tunnelSettingValue(m, 'tcp_relay.mode', 'auto'));
+    var dnsRoute = tunnelSelect([['false', '关闭'], ['true', '启用']], tunnelSettingValue(m, 'client.dns_route', 'false'));
+    tunnelFormModal({
+      title: '编辑客户端全局默认',
+      fields: [
+        { label: '客户端默认 DNS', input: dns, hint: '建议 overlay 内可达（如 10.77.0.1）；留空则不下发。' },
+        { label: '客户端默认 MTU', input: mtu },
+        { label: '客户端心跳间隔', input: interval },
+        { label: '客户端默认数据面模式', input: mode, hint: 'auto：UDP 优先自动兜底 TCP；tcp：强制中继；udp：仅 UDP。' },
+        { label: '公网 DNS 主机路由', input: dnsRoute, hint: '开启后公网 DNS 自动下发 /32 或 /128 主机路由，需网关 NAT（下方可生成脚本）。' }
+      ],
+      submitText: '保存全局默认',
+      onSubmit: function () {
+        var body = {
+          'client.dns': dns.value.trim(),
+          'client.mtu': String(Number(mtu.value || 0)),
+          'client.interval': interval.value.trim(),
+          'client.dns_route': dnsRoute.value,
+          'tcp_relay.mode': mode.value
+        };
+        return api('/api/settings', { method: 'PUT', body: JSON.stringify(body) }).then(function () {
+          tunnelSetMsg(true, '全局默认已保存，客户端下次心跳自动应用');
+        });
+      },
+      after: function () { state.tunnelSettings = null; tunnelLoadAll().then(render); }
+    });
+  }
+  function tunnelOpenDNSNAT(n) {
+    api('/api/networks/' + n.id + '/dns-nat').then(function (d) {
+      var ta = h('textarea', { class: 'tunnel-script', rows: 18, readonly: 'readonly', spellcheck: 'false' }, [d.script || '']);
+      var copy = h('button', { class: 'btn primary', type: 'button' }, ['复制脚本']);
+      var close = h('button', { class: 'btn ghost', type: 'button' }, ['关闭']);
+      var mask = h('div', { class: 'modal-mask', onclick: function (e) { if (e.target === mask) { tunnelCloseModal(mask); } } }, [
+        h('div', { class: 'modal tunnel-modal' }, [
+          h('div', { class: 'modal-head' }, [h('h3', {}, ['网关 DNS NAT 脚本 · ' + (n.name || ('#' + n.id))]), close]),
+          hint('在网关节点 ' + (d.gateway4 || d.gateway6 || '') + ' 上以 root 执行；脚本含转发与 MASQUERADE，按发行版自行持久化。'),
+          ta,
+          h('div', { class: 'toolbar' }, [copy])
+        ])
+      ]);
+      close.onclick = function () { tunnelCloseModal(mask); };
+      copy.onclick = function () {
+        if (navigator.clipboard) { navigator.clipboard.writeText(ta.value).catch(function () {}); }
+        tunnelSetMsg(true, 'NAT 脚本已复制');
+      };
+      document.body.appendChild(mask);
+    }).catch(function (e) { tunnelSetMsg(false, e.message); render(); });
+  }
+  function tunnelClientSettingsView() {
+    if (state.tunnelSettings === null) {
+      state.tunnelSettings = [];
+      api('/api/settings').then(function (d) {
+        state.tunnelSettings = d || [];
+        render();
+      }).catch(function (e) {
+        state.tunnelSettings = [];
+        tunnelSetMsg(false, e.message);
+        render();
+      });
+    }
+    var m = tunnelSettingsMap();
+    var nid = state.tunnelParamsNet || (state.tunnelNetworks[0] && state.tunnelNetworks[0].id) || 0;
+    state.tunnelParamsNet = nid;
+    if (nid && state.tunnelParamsDetailFor !== nid) {
+      state.tunnelParamsDetailFor = nid;
+      api('/api/networks/' + nid).then(function (d) {
+        state.tunnelParamsDetail = d;
+        render();
+      }).catch(function () { state.tunnelParamsDetail = null; });
+    }
+    var detail = state.tunnelParamsDetailFor === nid ? state.tunnelParamsDetail : null;
+    var nb = (detail && detail.nebula) || {};
+    var netSel = tunnelNetSelect(nid, function () {
+      state.tunnelParamsNet = Number(netSel.value);
+      state.tunnelParamsDetail = null;
+      state.tunnelParamsDetailFor = 0;
+      render();
+    });
+
+    var globalRows = [
+      ['客户端默认 DNS', tunnelSettingValue(m, 'client.dns', '') || '未设置'],
+      ['客户端默认 MTU', tunnelSettingValue(m, 'client.mtu', '1280')],
+      ['客户端心跳间隔', tunnelSettingValue(m, 'client.interval', '30s')],
+      ['客户端默认数据面', tunnelSettingValue(m, 'tcp_relay.mode', 'auto')],
+      ['公网 DNS 主机路由', tunnelSettingValue(m, 'client.dns_route', 'false') === 'true' ? '启用' : '关闭']
+    ].map(function (r) {
+      return h('tr', {}, [h('td', {}, [r[0]]), h('td', { class: 'tunnel-wrap' }, [String(r[1])])]);
+    });
+
+    var netRows = [
+      ['网络级 DNS', (detail && detail.dns) || '跟随全局'],
+      ['网络级 MTU', detail ? String(detail.mtu || '') : '—'],
+      ['加密算法', nb.cipher || '默认 aes-256-gcm'],
+      ['监听端口', nb.listen_port || '默认'],
+      ['Lighthouse 间隔', nb.lighthouse_interval ? nb.lighthouse_interval + 's' : '默认'],
+      ['NAT 打洞 / 响应', (nb.punch ? '开' : '关') + ' / ' + (nb.punch_respond ? '开' : '关')],
+      ['使用中继 / relays', (nb.use_relays ? '开' : '关') + ' / ' + ((nb.relays || []).join(', ') || '无')],
+      ['TUN 设备 / MTU', (nb.tun_device || '默认') + ' / ' + (nb.tun_disabled ? '禁用' : '启用')],
+      ['日志', (nb.log_level || 'info') + ' / ' + (nb.log_format || 'text')],
+      ['统计', (nb.stats_type || '关闭') + (nb.stats_listen ? ' @ ' + nb.stats_listen : '')]
+    ].map(function (r) {
+      return h('tr', {}, [h('td', {}, [r[0]]), h('td', { class: 'tunnel-wrap' }, [String(r[1])])]);
+    });
+
+    var hostRows = state.tunnelClients.map(function (c) {
+      return h('tr', {}, [
+        h('td', { class: 'tunnel-name' }, [c.name || '']),
+        h('td', {}, [c.ipv4 || '—']),
+        h('td', { class: 'tunnel-wrap' }, [tunnelNetName(c.network_id)]),
+        h('td', { class: 'tunnel-wrap' }, [tunnelClientSummary(c)]),
+        h('td', {}, [h('div', { class: 'tunnel-actions' }, [
+          h('button', { class: 'btn sm primary', onclick: function () { tunnelOpenClientEdit(c); } }, ['编辑'])
+        ])])
+      ]);
+    });
+
+    return h('div', {}, [
+      h('div', { class: 'card' }, [
+        h('div', { class: 'card-head' }, [
+          h('h3', {}, ['客户端下发 · 全局默认']),
+          h('button', { class: 'btn primary', onclick: function () { tunnelOpenGlobalDefaults(); } }, ['编辑全局默认'])
+        ]),
+        h('div', { class: 'muted' }, ['全局默认作用于所有客户端；网络级与主机级可逐层覆盖。保存后自动递增客户端配置版本。']),
+        h('div', { class: 'table-wrap' }, [
+          h('table', { class: 'tunnel-table' }, [
+            h('thead', {}, [h('tr', {}, [h('th', {}, ['参数']), h('th', {}, ['当前值'])])]),
+            h('tbody', {}, globalRows)
+          ])
+        ])
+      ]),
+      h('div', { class: 'card' }, [
+        h('div', { class: 'card-head' }, [h('h3', {}, ['客户端下发 · 网络级']) ]),
+        field('所属网络', netSel),
+        h('div', { class: 'table-wrap' }, [
+          h('table', { class: 'tunnel-table' }, [
+            h('thead', {}, [h('tr', {}, [h('th', {}, ['参数']), h('th', {}, ['当前值'])])]),
+            h('tbody', {}, netRows)
+          ])
+        ]),
+        h('div', { class: 'toolbar', style: 'margin-top:10px' }, [
+          h('button', { class: 'btn primary', onclick: function () { if (nid) { tunnelOpenNetworkEdit({ id: nid, name: nid === (detail && detail.id) ? detail.name : ('#' + nid) }); } } }, ['编辑网络级参数']),
+          h('button', { class: 'btn', onclick: function () { if (nid) { tunnelOpenDNSNAT({ id: nid, name: (detail && detail.name) || ('#' + nid) }); } } }, ['生成网关 NAT 脚本'])
+        ])
+      ]),
+      h('div', { class: 'card' }, [
+        h('div', { class: 'card-head' }, [h('h3', {}, ['客户端下发 · 每主机覆盖'])]),
+        h('div', { class: 'muted' }, ['每台主机可单独覆盖 DNS/MTU/心跳/数据面/DNS 主机路由；修改 IP 后自动重签证书并下发。']),
+        h('div', { class: 'table-wrap' }, [
+          h('table', { class: 'tunnel-table' }, [
+            h('thead', {}, [h('tr', {}, [h('th', {}, ['名称']), h('th', {}, ['IPv4']), h('th', {}, ['网络']), h('th', {}, ['覆盖参数']), h('th', {}, ['操作'])])]),
+            h('tbody', {}, hostRows.length ? hostRows : [h('tr', {}, [h('td', { colspan: 5, class: 'muted' }, ['暂无客户端'])])])
+          ])
+        ])
+      ])
+    ]);
   }
 
   function tunnelClientsView() {
@@ -1211,6 +1403,7 @@ REMOTE_SWITCHVIEW = r"""    else if (v === 'ddnsto') loadDDNSTO().then(render);
 TUNNEL_NAV = r'''
         navDropdown('隧道', [
           { label: '客户端', active: state.view === 'tunnel' && state.tunnelSection === 'clients', onclick: function () { state.tunnelSection = 'clients'; switchView('tunnel'); } },
+          { label: '参数下发', active: state.view === 'tunnel' && state.tunnelSection === 'clientSettings', onclick: function () { state.tunnelSection = 'clientSettings'; switchView('tunnel'); } },
           { label: '网络', active: state.view === 'tunnel' && state.tunnelSection === 'networks', onclick: function () { state.tunnelSection = 'networks'; switchView('tunnel'); } },
           { label: '服务端节点', active: state.view === 'tunnel' && state.tunnelSection === 'serverNodes', onclick: function () { state.tunnelSection = 'serverNodes'; switchView('tunnel'); } },
           { label: '路由', active: state.view === 'tunnel' && state.tunnelSection === 'routes', onclick: function () { state.tunnelSection = 'routes'; switchView('tunnel'); } },

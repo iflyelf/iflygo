@@ -130,8 +130,40 @@ test('隧道管理：编辑客户端参数与 IP 自动下发', async ({ page })
   expect(saved.client_settings.data_plane_mode).toBe('udp');
 });
 
+test('隧道管理：参数下发聚合页', async ({ page }) => {
+  autoAccept(page);
+  const suffix = Date.now();
+  await login(page);
+
+  // 前置：网络（公网 DNS）+ gateway 节点，用于生成 NAT 脚本
+  const pre = await page.evaluate(async (suffix) => {
+    const post = (url, body) => fetch(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(r => r.json());
+    const net = await post('/api/networks', { name: 'nat-net-' + suffix, cidr4: '10.44.0.0/16', dns: '8.8.8.8' });
+    const netId = net && net.data && net.data.id;
+    await post('/api/server-nodes', { network_id: netId, name: 'gw-' + suffix, roles: 'gateway', overlay_ip4: '10.44.0.1' });
+    return { netId };
+  }, suffix);
+  expect(pre.netId).toBeTruthy();
+
+  await openTunnel(page, '参数下发');
+  await expect(page.getByRole('heading', { name: '客户端下发 · 全局默认', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '编辑全局默认', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '编辑客户端全局默认', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '取消', exact: true }).click();
+
+  await page.getByLabel('所属网络').selectOption({ label: 'nat-net-' + suffix + ' (10.44.0.0/16)' });
+  await page.getByRole('button', { name: '生成网关 NAT 脚本', exact: true }).click();
+  await expect(page.locator('.tunnel-script')).toContainText('MASQUERADE');
+  await expect(page.locator('.tunnel-script')).toContainText('8.8.8.8/32');
+  await expect(page.locator('.tunnel-script')).toContainText('10.44.0.1');
+  await page.getByRole('button', { name: '关闭', exact: true }).click();
+});
+
 test('隧道管理：五个子页可切换', async ({ page }) => {
-  for (const section of ['客户端', '网络', '服务端节点', '路由', '边缘服务']) {
+  for (const section of ['客户端', '参数下发', '网络', '服务端节点', '路由', '边缘服务']) {
     await openTunnel(page, section);
     await expect(page.locator('.card h3').first()).toBeVisible();
   }

@@ -282,6 +282,7 @@ client:
   dns: "10.77.0.1"            # 客户端默认 DNS（网络级 DNS 优先）
   mtu: 1280                   # 客户端默认 MTU（网络级 MTU 优先）
   interval: 30s               # 客户端心跳间隔
+  dns_route: false            # 公网 DNS 自动下发 /32 主机路由（需网关 NAT）
 
 log:
   level: info
@@ -299,6 +300,7 @@ SERVER_EXTERNAL_URL=https://iflygo.example.com
 # CLIENT_DNS=10.77.0.1
 # CLIENT_MTU=1280
 # CLIENT_INTERVAL=30s
+# CLIENT_DNS_ROUTE=false
 ```
 
 > 优先级：**页面设置 > 环境变量 > 配置文件 > 内置默认值**。
@@ -708,20 +710,48 @@ tcp_relay:
 
 | 页面位置 | 配置项 | 下发方式 |
 |---|---|---|
-| 设置 → 客户端下发 | `client.dns`、`client.mtu`、`client.interval`（全局默认） | Bundle → `client.yaml` / 客户端 State |
+| 设置 → 客户端下发 | `client.dns`、`client.mtu`、`client.interval`、`client.dns_route`（全局默认） | Bundle → `client.yaml` / 客户端 State |
+| 隧道 → 参数下发 | 聚合全局默认 + 网络级 Nebula + 每主机覆盖；一键生成网关 NAT 脚本 | 同上 |
 | 设置 → 数据面 / TCP 中继 | `tcp_relay.mode`（客户端默认 auto/tcp/udp）、中继令牌 | Bundle `client.data_plane_mode` + 心跳 |
 | 隧道 → 网络 → 编辑 | cipher、punch、relays、TUN、握手、日志、统计、网络 DNS/MTU | Nebula `config.yml` / Bundle DNS/MTU |
 | 隧道 → 客户端 → 编辑 | 名称、IPv4/IPv6、分组、子网、**每主机 DNS/MTU/心跳/数据面/DNS 开关** | Bundle / State |
 | 隧道 → 路由 → 编辑 | 不安全路由 CIDR、网关、权重 | `routes.json` / Nebula `unsafe_routes` |
 | 隧道 → 客户端 | enroll token / 安装命令 | Bundle / State |
 
+推荐入口：**隧道 → 参数下发**。该页把全局默认、网络级 Nebula、每主机覆盖
+聚合到一个页面，所有编辑仍在弹窗内完成：
+
+- **全局默认**：DNS、MTU、心跳、数据面模式、公网 DNS 主机路由；
+- **网络级**：网络 DNS/MTU、cipher、punch、relays、TUN、握手、日志、统计等；
+- **每主机**：DNS/MTU/心跳/数据面/DNS 开关/DNS 主机路由与 IP；
+- **网关 NAT 脚本**：按当前网络与公网 DNS 生成转发 + `MASQUERADE` 脚本。
+
 每台主机都可以在「隧道 → 客户端 → 编辑」弹窗中单独覆盖参数：
 
 - **服务端 DNS**：跟随网络/全局、启用、关闭三态；关闭后 Bundle 不下发 DNS；
 - **DNS**：覆盖网络级与全局 DNS；
+- **公网 DNS 主机路由**：跟随全局、启用、关闭三态；
 - **MTU**：0 表示跟随网络/全局；
 - **心跳间隔**：如 `30s`，留空跟随默认；
 - **数据面模式**：auto / tcp / udp，留空跟随默认。
+
+### 公网 DNS 走 VPN（主机路由 + 网关 NAT）
+
+如果客户端 DNS 填的是公网解析器（如 `8.8.8.8`），默认情况下该流量不会进入
+VPN。开启 **公网 DNS 主机路由** 后：
+
+1. 服务端为每个不在 overlay 网段内的 DNS 生成 `/32`（IPv6 为 `/128`）主机路由；
+2. 路由网关按「默认路由 > `gateway` 角色节点 > 网络网关 > 任意服务端节点」选择；
+3. 路由同时写入客户端 `routes.json` 与 Nebula `unsafe_routes`，Android/CLI 均生效；
+4. 在 **隧道 → 参数下发 → 生成网关 NAT 脚本** 中复制脚本，到网关节点以 root 执行：
+   开启转发、放行 overlay → DNS 的 FORWARD、并对回包做 `MASQUERADE`；
+5. 执行后客户端解析公网域名即可正常走 overlay 网关。
+
+> 网关需具备出公网能力；脚本按 iptables 通用语法生成，Debian/Ubuntu 可用
+> `iptables-persistent`、RHEL/CentOS 可用 `iptables-services` 持久化。
+> 若 DNS 本身在 overlay 网段内（如 `10.77.0.1`），无需主机路由与 NAT。
+
+全局/网络/主机级参数保存后会自动递增客户端 `config_rev`，客户端下一次心跳自动拉取。
 
 优先级：
 

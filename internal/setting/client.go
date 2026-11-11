@@ -44,5 +44,11 @@ func clientRegistry() []Item {
 				}
 				return nil
 			}},
+		{Key: "client.dns_route", Group: "客户端下发",
+			Label: "为公网 DNS 自动添加主机路由（/32 或 /128，经 overlay 网关）", Type: "bool",
+			Note: "开启后，若客户端 DNS 不在 overlay 网段内，会下发对应主机路由；" +
+				"需在网关节点执行 NAT 策略（隧道 → 参数下发页可生成脚本）。主机级可单独覆盖。",
+			Get: func(c *config.Config) string { return b2s(c.Client.DNSRoute) },
+			Set: func(c *config.Config, v string) { c.Client.DNSRoute = v == "true" }},
 	}
 }

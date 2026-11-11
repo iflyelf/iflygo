@@ -26,6 +26,7 @@ client:
   dns: ""             # 客户端默认 DNS（网络级 DNS 优先）
   mtu: 1280           # 客户端默认 MTU
   interval: 30s       # 客户端心跳间隔
+  dns_route: false    # 公网 DNS 自动下发 /32 主机路由（需网关 NAT）
 
 log:
   level: info

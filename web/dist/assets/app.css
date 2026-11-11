@@ -712,6 +712,14 @@ select { max-width: 100%; }
 .tunnel-table .tunnel-name { min-width: 96px; }
 .tunnel-table .tunnel-wrap { min-width: 110px; }
 .tunnel-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.tunnel-script {
+  width: 100%; box-sizing: border-box; min-height: 320px; padding: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px; line-height: 1.55; white-space: pre; overflow: auto;
+  background: var(--panel-bg); color: var(--text-color);
+  border: 1px solid var(--border-color); border-radius: 8px;
+}
+@media (max-width: 720px) { .tunnel-script { min-height: 240px; font-size: 11px; } }
 @media (max-width: 720px) {
   .tunnel-modal { max-width: 100%; padding: 12px; }
   .tunnel-table { font-size: 12px; }

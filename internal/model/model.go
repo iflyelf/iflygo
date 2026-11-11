@@ -42,6 +42,8 @@ type ClientOverride struct {
 	MTU           int    `json:"mtu,omitempty"`
 	Interval      string `json:"interval,omitempty"`
 	DataPlaneMode string `json:"data_plane_mode,omitempty"`
+	// DNSRoute 为公网 DNS 添加主机路由（三态：nil 跟随全局，true 启用，false 关闭）。
+	DNSRoute *bool `json:"dns_route,omitempty"`
 }
 
 // Scan 实现 sql.Scanner（DB 中存 JSON 文本）。

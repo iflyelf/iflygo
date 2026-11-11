@@ -481,6 +481,7 @@ func registerTunnelRoutes(mux *http.ServeMux, sc *svc.ServiceContext) {
 	mux.Handle("POST /api/networks", auth(handler.CreateNetwork(sc)))
 	mux.Handle("GET /api/networks/{id}", auth(handler.GetNetwork(sc)))
 	mux.Handle("PUT /api/networks/{id}", auth(handler.UpdateNetwork(sc)))
+	mux.Handle("GET /api/networks/{id}/dns-nat", auth(handler.DNSNATScript(sc)))
 	mux.Handle("DELETE /api/networks/{id}", auth(handler.DeleteNetwork(sc)))
 
 	// 服务端节点（lighthouse/relay/edge/gateway）

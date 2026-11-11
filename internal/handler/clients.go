@@ -486,18 +486,7 @@ func buildBundle(sc *svc.ServiceContext, c *clientRow) (*model.Bundle, error) {
 	if err != nil {
 		return nil, err
 	}
-	input, err := buildNebulaInput(sc, c.NetworkID, false, 0, false)
-	if err != nil {
-		return nil, err
-	}
-	cfgBytes, err := configgen.Build(*input)
-	if err != nil {
-		return nil, err
-	}
-	_, routeSpecs, err := loadRouteConfig(sc, c.NetworkID)
-	if err != nil {
-		return nil, err
-	}
+
 	// 参数优先级：主机级覆盖 > 网络级 > 全局「设置 → 客户端下发」默认。
 	cfg := sc.Config
 	if sc.Settings != nil {
@@ -508,9 +497,11 @@ func buildBundle(sc *svc.ServiceContext, c *clientRow) (*model.Bundle, error) {
 	mtu := 0
 	interval := "30s"
 	mode := "auto"
+	dnsRoute := false
 	if cfg != nil {
 		dns = strings.TrimSpace(cfg.Client.DNS)
 		mtu = cfg.Client.MTU
+		dnsRoute = cfg.Client.DNSRoute
 		if v := strings.TrimSpace(cfg.Client.Interval); v != "" {
 			interval = v
 		}
@@ -537,10 +528,32 @@ func buildBundle(sc *svc.ServiceContext, c *clientRow) (*model.Bundle, error) {
 	if v := strings.TrimSpace(ov.DataPlaneMode); v != "" {
 		mode = v
 	}
+	if ov.DNSRoute != nil {
+		dnsRoute = *ov.DNSRoute
+	}
 	// 每台主机可单独关闭服务端 DNS；关闭后 Bundle 不下发 DNS。
 	if ov.UseServerDNS != nil && !*ov.UseServerDNS {
 		dns = ""
 	}
+
+	input, err := buildNebulaInput(sc, c.NetworkID, false, 0, false)
+	if err != nil {
+		return nil, err
+	}
+	// 公网 DNS 主机路由：/32 或 /128 经 overlay 网关，客户端与 Nebula 同时生效。
+	dnsCfgRoutes, dnsSpecs := dnsHostRoutes(sc, net, dns, dnsRoute)
+	if len(dnsCfgRoutes) > 0 {
+		input.UnsafeRoutes = append(input.UnsafeRoutes, dnsCfgRoutes...)
+	}
+	cfgBytes, err := configgen.Build(*input)
+	if err != nil {
+		return nil, err
+	}
+	_, routeSpecs, err := loadRouteConfig(sc, c.NetworkID)
+	if err != nil {
+		return nil, err
+	}
+	routeSpecs = append(routeSpecs, dnsSpecs...)
 
 	clientSet := model.ClientSettings{DataPlaneMode: mode, Interval: interval}
 	if sc.Relay != nil {
@@ -564,6 +577,117 @@ func buildBundle(sc *svc.ServiceContext, c *clientRow) (*model.Bundle, error) {
 		CA: caCert, Cert: c.CertPEM, Key: c.KeyPEM, Config: string(cfgBytes), ConfigRev: c.ConfigRev,
 		Routes: routeSpecs, Client: clientSet,
 	}, nil
+}
+
+// dnsHostRoutes 为不在 overlay 网段内的 DNS 生成主机路由（/32 或 /128）。
+// 路由网关按「默认路由 > gateway 角色节点 > 网络网关 > 任意服务端节点」选择。
+func dnsHostRoutes(sc *svc.ServiceContext, net *model.Network, dnsCSV string, enabled bool) ([]configgen.Route, []model.RouteSpec) {
+	if !enabled || strings.TrimSpace(dnsCSV) == "" {
+		return nil, nil
+	}
+	var cfgRoutes []configgen.Route
+	var specs []model.RouteSpec
+	seen := map[string]bool{}
+	gateway := map[bool]string{}
+	loaded := map[bool]bool{}
+	for _, raw := range strings.Split(dnsCSV, ",") {
+		addr, err := netip.ParseAddr(strings.TrimSpace(raw))
+		if err != nil {
+			continue
+		}
+		// overlay 内可达的 DNS 不需要主机路由。
+		if prefixContains(net.Cidr4, addr) || prefixContains(net.Cidr6, addr) {
+			continue
+		}
+		bits := 128
+		if addr.Is4() {
+			bits = 32
+		}
+		cidr := netip.PrefixFrom(addr, bits).String()
+		if seen[cidr] {
+			continue
+		}
+		if !loaded[addr.Is4()] {
+			gateway[addr.Is4()] = resolveDNSGateway(sc, net, addr.Is4())
+			loaded[addr.Is4()] = true
+		}
+		gw := gateway[addr.Is4()]
+		if gw == "" {
+			continue
+		}
+		seen[cidr] = true
+		cfgRoutes = append(cfgRoutes, configgen.Route{Route: cidr, Via: gw, MTU: net.MTU})
+		specs = append(specs, model.RouteSpec{
+			CIDR: cidr, MTU: net.MTU, Mode: "active_active", AllDownPolicy: "fail_closed",
+			Gateways: []model.GatewaySpec{{IP: gw, Weight: 1}},
+		})
+	}
+	return cfgRoutes, specs
+}
+
+func prefixContains(cidr string, addr netip.Addr) bool {
+	if strings.TrimSpace(cidr) == "" {
+		return false
+	}
+	p, err := netip.ParsePrefix(cidr)
+	return err == nil && p.Contains(addr)
+}
+
+// resolveDNSGateway 选择公网 DNS 主机路由的 overlay 网关。
+func resolveDNSGateway(sc *svc.ServiceContext, net *model.Network, ipv4 bool) string {
+	routes, _ := loadRoutes(sc, net.ID)
+	// 1. 默认路由（0.0.0.0/0 或 ::/0）的网关最符合「上公网」语义。
+	want := "0.0.0.0/0"
+	if !ipv4 {
+		want = "::/0"
+	}
+	for _, rt := range routes {
+		if rt.CIDR != want {
+			continue
+		}
+		for _, g := range rt.Gateways {
+			if g.OverlayIP != "" {
+				return g.OverlayIP
+			}
+		}
+	}
+	// 2. 角色含 gateway 的服务端节点。
+	col := "overlay_ip4"
+	if !ipv4 {
+		col = "overlay_ip6"
+	}
+	var ip string
+	q := sc.Store.Rebind(`SELECT COALESCE(` + col + `,'') FROM server_nodes
+		WHERE network_id = $1 AND roles LIKE '%gateway%' AND COALESCE(` + col + `,'') <> ''
+		ORDER BY id LIMIT 1`)
+	if err := sc.Store.DB.QueryRow(q, net.ID).Scan(&ip); err == nil && ip != "" {
+		return ip
+	}
+	// 3. 网络配置的网关地址。
+	if ipv4 && net.Gateway4 != "" {
+		return net.Gateway4
+	}
+	if !ipv4 && net.Gateway6 != "" {
+		return net.Gateway6
+	}
+	// 4. 任意带该地址族的服务端节点。
+	q = sc.Store.Rebind(`SELECT COALESCE(` + col + `,'') FROM server_nodes
+		WHERE network_id = $1 AND COALESCE(` + col + `,'') <> '' ORDER BY id LIMIT 1`)
+	if err := sc.Store.DB.QueryRow(q, net.ID).Scan(&ip); err == nil && ip != "" {
+		return ip
+	}
+	// 5. 任意已配置路由的网关。
+	for _, rt := range routes {
+		for _, g := range rt.Gateways {
+			if g.OverlayIP == "" {
+				continue
+			}
+			if a, err := netip.ParseAddr(g.OverlayIP); err == nil && a.Is4() == ipv4 {
+				return g.OverlayIP
+			}
+		}
+	}
+	return ""
 }
 
 func enrollCommand(baseURL, token, name string) string {

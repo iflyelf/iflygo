@@ -53,8 +53,22 @@ func UpdateSettings(s *svc.ServiceContext) http.HandlerFunc {
 		if setting.NeedsTCPRelayReload(applied) {
 			s.ReloadTCPRelay(context.WithoutCancel(r.Context()))
 		}
+		// 客户端下发参数变化：递增所有客户端配置版本，下一次心跳自动拉取。
+		if settingAffectsClients(applied) {
+			_, _ = s.Store.DB.Exec(s.Store.Rebind(`UPDATE client_nodes SET config_rev = config_rev + 1`))
+		}
 		httpx.OK(w, map[string]any{"applied": applied})
 	}
+}
+
+// settingAffectsClients 判断设置变更是否需要让客户端重新拉取配置。
+func settingAffectsClients(keys []string) bool {
+	for _, k := range keys {
+		if strings.HasPrefix(k, "client.") || k == "tcp_relay.mode" {
+			return true
+		}
+	}
+	return false
 }
 
 // RevealSetting 返回密钥项的完整值（仅 superadmin；每次查看写审计）。
