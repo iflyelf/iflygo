@@ -45,21 +45,30 @@ type ClientNode struct {
 }
 
 // Bundle 客户端配置包（证书 + 配置）。
+// ClientSettings 服务端下发给客户端的运行参数（写入 client.yaml）。
+type ClientSettings struct {
+	DataPlaneMode string `json:"data_plane_mode,omitempty"` // auto/tcp/udp
+	TCPRelay      string `json:"tcp_relay,omitempty"`
+	TCPRelayToken string `json:"tcp_relay_token,omitempty"`
+	Interval      string `json:"interval,omitempty"`
+}
+
 type Bundle struct {
-	Name      string      `json:"name,omitempty"`
-	Network   string      `json:"network"`
-	Cidr4     string      `json:"cidr4,omitempty"`
-	Cidr6     string      `json:"cidr6,omitempty"`
-	IPv4      string      `json:"ipv4"`
-	IPv6      string      `json:"ipv6"`
-	MTU       int         `json:"mtu"`
-	DNS       string      `json:"dns"`
-	CA        string      `json:"ca"`
-	Cert      string      `json:"cert"`
-	Key       string      `json:"key"`
-	Config    string      `json:"config"`
-	ConfigRev int64       `json:"config_rev"`
-	Routes    []RouteSpec `json:"routes,omitempty"`
+	Name      string         `json:"name,omitempty"`
+	Network   string         `json:"network"`
+	Cidr4     string         `json:"cidr4,omitempty"`
+	Cidr6     string         `json:"cidr6,omitempty"`
+	IPv4      string         `json:"ipv4"`
+	IPv6      string         `json:"ipv6"`
+	MTU       int            `json:"mtu"`
+	DNS       string         `json:"dns"`
+	CA        string         `json:"ca"`
+	Cert      string         `json:"cert"`
+	Key       string         `json:"key"`
+	Config    string         `json:"config"`
+	ConfigRev int64          `json:"config_rev"`
+	Routes    []RouteSpec    `json:"routes,omitempty"`
+	Client    ClientSettings `json:"client,omitempty"`
 }
 
 // ServerNode 服务端节点（lighthouse / relay / edge / gateway）。

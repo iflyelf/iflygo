@@ -1,8 +1,11 @@
 package handler
 
 import (
+	stdnet "net"
 	"net/http"
 	"net/netip"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -267,11 +270,51 @@ func buildBundle(sc *svc.ServiceContext, c *clientRow) (*model.Bundle, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 网络级 DNS/MTU 优先；为空时使用「设置 → 客户端下发」的全局默认。
+	cfg := sc.Config
+	if sc.Settings != nil {
+		snap := sc.Settings.Snapshot()
+		cfg = &snap
+	}
+	dns := net.DNS
+	mtu := net.MTU
+	if cfg != nil {
+		if strings.TrimSpace(dns) == "" {
+			dns = cfg.Client.DNS
+		}
+		if mtu <= 0 {
+			mtu = cfg.Client.MTU
+		}
+	}
+	clientSet := model.ClientSettings{DataPlaneMode: "auto", Interval: "30s"}
+	if cfg != nil {
+		if strings.TrimSpace(cfg.TCPRelay.Mode) != "" {
+			clientSet.DataPlaneMode = cfg.TCPRelay.Mode
+		}
+		if strings.TrimSpace(cfg.Client.Interval) != "" {
+			clientSet.Interval = cfg.Client.Interval
+		}
+	}
+	if sc.Relay != nil {
+		info := sc.Relay.Info()
+		if info.Port > 0 {
+			clientSet.TCPRelayToken = info.Token
+			adv := strings.TrimSpace(info.Advertise)
+			if adv == "" && cfg != nil {
+				if u, err := url.Parse(cfg.Server.ExternalURL); err == nil && u.Hostname() != "" {
+					adv = stdnet.JoinHostPort(u.Hostname(), strconv.Itoa(info.Port))
+				}
+			}
+			if adv != "" {
+				clientSet.TCPRelay = adv
+			}
+		}
+	}
 	return &model.Bundle{
 		Name: c.Name, Network: net.Name, Cidr4: net.Cidr4, Cidr6: net.Cidr6,
-		IPv4: c.IPv4, IPv6: c.IPv6, MTU: net.MTU, DNS: net.DNS,
+		IPv4: c.IPv4, IPv6: c.IPv6, MTU: mtu, DNS: dns,
 		CA: caCert, Cert: c.CertPEM, Key: c.KeyPEM, Config: string(cfgBytes), ConfigRev: c.ConfigRev,
-		Routes: routeSpecs,
+		Routes: routeSpecs, Client: clientSet,
 	}, nil
 }
 

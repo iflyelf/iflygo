@@ -26,17 +26,20 @@ import (
 	"github.com/iflyelf/iflygo/internal/client"
 	"github.com/iflyelf/iflygo/internal/model"
 	"github.com/iflyelf/iflygo/internal/overlay"
+	"github.com/iflyelf/iflygo/internal/tcprelay"
 	"github.com/iflyelf/iflygo/internal/version"
+	"gopkg.in/yaml.v3"
 )
 
 // Client 移动端客户端核心。
 type Client struct {
-	mu       sync.Mutex
-	server   string
-	stateDir string
-	ov       *overlay.Overlay
-	hbCancel context.CancelFunc
-	lastErr  string
+	mu           sync.Mutex
+	server       string
+	stateDir     string
+	ov           *overlay.Overlay
+	hbCancel     context.CancelFunc
+	bridgeCancel context.CancelFunc
+	lastErr      string
 }
 
 // NewClient 创建移动客户端（gomobile 绑定入口）。
@@ -171,8 +174,39 @@ func (c *Client) Start(fd int) error {
 		c.lastErr = "改写 PKI 路径失败: " + err.Error()
 		return fmt.Errorf("%s", c.lastErr)
 	}
+
+	// 服务端下发的数据面策略：优先 client.yaml，其次初次心跳。
+	var hb *client.HeartbeatResult
+	hbCtx, hbCancel := context.WithTimeout(context.Background(), 8*time.Second)
+	if r, err := client.New(st.Server, st.ClientID, st.Secret).Heartbeat(hbCtx); err == nil {
+		hb = r
+	}
+	hbCancel()
+	fileCfg, _ := client.LoadFileConfig(client.DefaultFileConfigPath(c.stateDir))
+	relay := client.ResolveRelay("", "", "", fileCfg, hb)
+	if relay.Mode == "tcp" && relay.Addr == "" {
+		c.lastErr = "服务端未下发 TCP 中继地址，无法使用 tcp 模式"
+		return fmt.Errorf("%s", c.lastErr)
+	}
+	if relay.Mode != "udp" && relay.Addr != "" {
+		bridgeCtx, bridgeCancel := context.WithCancel(context.Background())
+		rewritten, rerr := tcprelay.RewriteConfigWithOptions(bridgeCtx, relay.Addr, relay.Token,
+			tcprelay.RewriteOptions{ForceRelay: relay.Mode == "tcp"}, cfg)
+		if rerr != nil {
+			bridgeCancel()
+			c.lastErr = "配置 TCP 中继失败: " + rerr.Error()
+			return fmt.Errorf("%s", c.lastErr)
+		}
+		cfg = rewritten
+		c.bridgeCancel = bridgeCancel
+	}
+
 	ov := overlay.New(mobileLogger())
 	if err := ov.StartWithFD(cfg, fd); err != nil {
+		if c.bridgeCancel != nil {
+			c.bridgeCancel()
+			c.bridgeCancel = nil
+		}
 		c.lastErr = "启动隧道失败: " + err.Error()
 		return fmt.Errorf("%s", c.lastErr)
 	}
@@ -189,6 +223,8 @@ func (c *Client) Stop() error {
 	c.ov = nil
 	cancel := c.hbCancel
 	c.hbCancel = nil
+	bridgeCancel := c.bridgeCancel
+	c.bridgeCancel = nil
 	c.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -198,6 +234,9 @@ func (c *Client) Stop() error {
 			c.setErr(err)
 			return err
 		}
+	}
+	if bridgeCancel != nil {
+		bridgeCancel()
 	}
 	c.setErr(nil)
 	return nil
@@ -214,7 +253,7 @@ func (c *Client) Status() string {
 
 	out := map[string]any{
 		"enrolled": false, "running": running, "server": server,
-		"name": "", "network": "", "ipv4": "", "ipv6": "", "error": lastErr,
+		"name": "", "network": "", "ipv4": "", "ipv6": "", "dns": "", "mtu": 0, "error": lastErr,
 	}
 	if st, err := client.LoadState(stateDir); err == nil {
 		out["enrolled"] = true
@@ -223,8 +262,12 @@ func (c *Client) Status() string {
 		out["network"] = st.Network
 		out["ipv4"] = st.IPv4
 		out["ipv6"] = st.IPv6
-	} else if lastErr == "" {
-		out["error"] = ""
+		out["dns"] = st.DNS
+		out["mtu"] = st.MTU
+	}
+	if fc, err := client.LoadFileConfig(client.DefaultFileConfigPath(stateDir)); err == nil {
+		out["data_plane_mode"] = fc.DataPlane.Mode
+		out["tcp_relay"] = fc.DataPlane.TCPRelay
 	}
 	b, _ := json.Marshal(out)
 	return string(b)
@@ -285,9 +328,39 @@ func (c *Client) VPNParams() (string, error) {
 			}
 		}
 	}
-	for _, d := range strings.Split(st.DNS, ",") {
-		if d = strings.TrimSpace(d); d != "" {
-			params.DNS = append(params.DNS, d)
+	seenDNS := map[string]bool{}
+	addDNS := func(dns string) {
+		for _, d := range strings.Split(dns, ",") {
+			if d = strings.TrimSpace(d); d != "" && !seenDNS[d] {
+				seenDNS[d] = true
+				params.DNS = append(params.DNS, d)
+			}
+		}
+	}
+	addDNS(st.DNS)
+	// 兼容旧 bundle：state 无 DNS 时从 Nebula 配置的 dns.server 读取。
+	if len(params.DNS) == 0 {
+		if raw, err := os.ReadFile(filepath.Join(stateDir, "config.yml")); err == nil {
+			var cfg struct {
+				DNS *struct {
+					Server string `yaml:"server"`
+				} `yaml:"dns"`
+			}
+			if yaml.Unmarshal(raw, &cfg) == nil && cfg.DNS != nil {
+				addDNS(cfg.DNS.Server)
+			}
+		}
+	}
+	if params.MTU <= 0 {
+		if raw, err := os.ReadFile(filepath.Join(stateDir, "config.yml")); err == nil {
+			var cfg struct {
+				Tun struct {
+					MTU int `yaml:"mtu"`
+				} `yaml:"tun"`
+			}
+			if yaml.Unmarshal(raw, &cfg) == nil && cfg.Tun.MTU > 0 {
+				params.MTU = cfg.Tun.MTU
+			}
 		}
 	}
 	b, _ := json.Marshal(params)

@@ -51,10 +51,11 @@ type Item struct {
 
 // Registry 全部可页面配置项（基础项 + 由 config.AIConfig 自动生成的 AI 项）。
 var Registry = func() []Item {
-	out := make([]Item, 0, len(baseRegistry)+len(aiRegistry())+len(relayRegistry()))
+	out := make([]Item, 0, len(baseRegistry)+len(aiRegistry())+len(relayRegistry())+len(clientRegistry()))
 	out = append(out, baseRegistry...)
 	out = append(out, aiRegistry()...)
 	out = append(out, relayRegistry()...)
+	out = append(out, clientRegistry()...)
 	return out
 }()
 

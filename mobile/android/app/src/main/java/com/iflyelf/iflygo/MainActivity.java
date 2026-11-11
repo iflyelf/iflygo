@@ -22,6 +22,8 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.iflyelf.iflygo.core.mobile.Client;
+
 import org.json.JSONObject;
 
 import java.util.concurrent.ExecutorService;
@@ -182,8 +184,19 @@ public class MainActivity extends Activity {
         saveServer();
         io.execute(() -> {
             try {
-                ((IflygoApp) getApplication()).client().refresh();
-                ui.post(() -> toast("配置已刷新"));
+                Client client = ((IflygoApp) getApplication()).client();
+                boolean wasRunning = new JSONObject(client.status()).optBoolean("running");
+                client.refresh();
+                if (wasRunning) {
+                    Intent i = new Intent(MainActivity.this, IflygoVpnService.class);
+                    i.setAction("restart");
+                    if (Build.VERSION.SDK_INT >= 26) {
+                        startForegroundService(i);
+                    } else {
+                        startService(i);
+                    }
+                }
+                ui.post(() -> toast(wasRunning ? "配置已刷新，隧道已重启" : "配置已刷新"));
             } catch (Exception e) {
                 ui.post(() -> toast("刷新失败: " + e.getMessage()));
             }
@@ -237,7 +250,11 @@ public class MainActivity extends Activity {
                     + "\n节点: " + o.optString("name")
                     + "\n网络: " + o.optString("network")
                     + "\nIPv4: " + o.optString("ipv4")
-                    + "\nIPv6: " + o.optString("ipv6");
+                    + "\nIPv6: " + o.optString("ipv6")
+                    + "\nDNS: " + o.optString("dns")
+                    + "\nMTU: " + o.optInt("mtu", 0)
+                    + "\n数据面: " + o.optString("data_plane_mode")
+                    + "\n中继: " + o.optString("tcp_relay");
             String err = o.optString("error");
             if (!err.isEmpty()) {
                 text += "\n错误: " + err;

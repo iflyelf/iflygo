@@ -23,9 +23,25 @@ public class IflygoVpnService extends VpnService {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         startForeground(1, notification());
+        String action = intent != null ? intent.getAction() : null;
+        if ("restart".equals(action)) {
+            new Thread(() -> {
+                stopTunnel();
+                try {
+                    Thread.sleep(300);
+                } catch (InterruptedException ignored) {
+                }
+                startTunnel();
+            }, "iflygo-restart").start();
+            return START_STICKY;
+        }
         if (running) {
             return START_STICKY;
         }
+        return startTunnel();
+    }
+
+    private int startTunnel() {
         IflygoApp app = (IflygoApp) getApplication();
         Client client = app.client();
         String raw;

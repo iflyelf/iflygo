@@ -17,6 +17,7 @@ import (
 	"github.com/iflyelf/iflygo/internal/model"
 	"github.com/iflyelf/iflygo/internal/overlay"
 	"github.com/iflyelf/iflygo/internal/tcprelay"
+	"gopkg.in/yaml.v3"
 )
 
 // RunOptions 客户端运行参数。
@@ -71,6 +72,14 @@ func Run(opts RunOptions) error {
 	}
 	if err := fetchAndApply(c, st, dir); err != nil {
 		log.Printf("⚠️ 拉取配置失败: %v", err)
+	} else if fc, lerr := LoadFileConfig(cfgPath); lerr == nil {
+		// ApplyBundle 可能刚写入服务端下发的 client.yaml，立即生效。
+		fileCfg = fc
+		if opts.Interval <= 0 {
+			if d := fc.IntervalDuration(30 * time.Second); d > 0 {
+				interval = d
+			}
+		}
 	}
 
 	relay := ResolveRelay(opts.Mode, opts.TCPRelay, opts.TCPRelayToken, fileCfg, hbInfo)
@@ -304,6 +313,26 @@ func ApplyBundle(dir string, b *model.Bundle) error {
 		}
 	} else {
 		_ = os.Remove(filepath.Join(dir, "routes.json"))
+	}
+	// 服务端下发的客户端运行参数写入 client.yaml（数据面模式/中继/心跳）。
+	// 这样 enroll 后客户端无需手工维护配置。
+	if b.Client.DataPlaneMode != "" || b.Client.Interval != "" ||
+		b.Client.TCPRelay != "" || b.Client.TCPRelayToken != "" {
+		fc := FileConfig{
+			Interval: b.Client.Interval,
+			DataPlane: DataPlaneConfig{
+				Mode:          b.Client.DataPlaneMode,
+				TCPRelay:      b.Client.TCPRelay,
+				TCPRelayToken: b.Client.TCPRelayToken,
+			},
+		}
+		data, err := yaml.Marshal(fc)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(dir, "client.yaml"), data, 0o600); err != nil {
+			return err
+		}
 	}
 	log.Printf("✅ 配置已应用到 %s", dir)
 	return nil

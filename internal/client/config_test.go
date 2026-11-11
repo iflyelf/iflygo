@@ -2,6 +2,8 @@ package client
 
 import (
 	"os"
+
+	"github.com/iflyelf/iflygo/internal/model"
 	"path/filepath"
 	"testing"
 	"time"
@@ -83,5 +85,28 @@ func TestResolveRelayPriority(t *testing.T) {
 	got = ResolveRelay("tcp", "cli.example.com:7443", "clitok", file, hb)
 	if got.Mode != "tcp" || got.Addr != "cli.example.com:7443" || got.Token != "clitok" {
 		t.Fatalf("unexpected: %+v", got)
+	}
+}
+
+func TestApplyBundleWritesClientYAML(t *testing.T) {
+	dir := t.TempDir()
+	b := &model.Bundle{
+		Network: "home", IPv4: "10.77.0.2", Cidr4: "10.77.0.0/16",
+		Config: "pki:\n  ca: ca.crt\n", ConfigRev: 3,
+		Client: model.ClientSettings{
+			DataPlaneMode: "tcp", TCPRelay: "relay.example.com:8443",
+			TCPRelayToken: "tok", Interval: "45s",
+		},
+	}
+	if err := ApplyBundle(dir, b); err != nil {
+		t.Fatalf("ApplyBundle: %v", err)
+	}
+	fc, err := LoadFileConfig(filepath.Join(dir, "client.yaml"))
+	if err != nil {
+		t.Fatalf("LoadFileConfig: %v", err)
+	}
+	if fc.Interval != "45s" || fc.DataPlane.Mode != "tcp" ||
+		fc.DataPlane.TCPRelay != "relay.example.com:8443" || fc.DataPlane.TCPRelayToken != "tok" {
+		t.Fatalf("client.yaml 未按服务端下发写入: %+v", fc)
 	}
 }

@@ -332,7 +332,11 @@ sudo iflygo-client service install \
   --config /etc/iflygo/client.yaml
 ```
 
-客户端配置文件 `/etc/iflygo/client.yaml`（支持约 2 秒热加载）：
+> `enroll` 会自动把服务端下发的全部文件写入状态目录：
+> `ca.crt`、`node.crt`、`node.key`、`config.yml`、`routes.json`、`client.yaml`。
+> 注册完成后直接 `run` 即可，无需手工维护配置。
+
+客户端配置文件 `/etc/iflygo/client.yaml`（支持约 2 秒热加载；默认由服务端 Bundle 自动写入）：
 
 ```yaml
 interval: 30s
@@ -351,6 +355,9 @@ iflygo-client config --state-dir /var/lib/iflygo-client
 
 > 客户端只需要出站 TCP 8090/8091（以及出站 UDP，用于 P2P/打洞）；不需要固定的入站 UDP 端口。
 > TCP 中继模式说明见下方「数据面与 TCP Relay」。
+>
+> 服务端页面配置的 DNS/MTU/心跳间隔/数据面模式/TCP 中继会随 enroll/config
+> 自动写入 `client.yaml`，客户端无需手工填写。
 
 #### 6. 接入 Windows 客户端
 
@@ -585,6 +592,9 @@ iflygo-server -role gateway -overlay-config /etc/iflygo/node/config.yml
   2. 安装 APK，填写控制面地址与 token，点「注册」；
   3. 点「启动」，允许 Android VPN 授权；
   4. 状态显示「运行中」，日志可查看 Nebula 输出。
+- **参数下发**：服务端「设置 → 客户端下发」（DNS/MTU/interval）与「数据面 / TCP 中继」、
+  「网络 → Nebula 设置」、路由页的参数会随 enroll/config 自动下发；点「刷新」后
+  App 会自动重启 VpnService 应用新的 DNS/MTU/路由。
 - **网络范围**：VpnService 只添加 overlay CIDR 与服务端下发的不安全路由；
   Nebula 自身 UDP 通过 `addDisallowedApplication` 排除，避免回环。
   当前版本不提供全局 0/0 代理；需要全局时须配合 socket protect/全隧道策略。
@@ -683,17 +693,43 @@ tcp_relay:
 
 环境变量：`TCP_RELAY_MODE`、`TCP_RELAY_LISTEN`、`TCP_RELAY_ADVERTISE`、`TCP_RELAY_TOKEN`。
 
+### 客户端参数下发（服务端页面）
+
+所有客户端运行参数都可以在服务端页面配置，并随 enroll token / 配置刷新自动下发：
+
+| 页面位置 | 配置项 | 下发方式 |
+|---|---|---|
+| 设置 → 客户端下发 | `client.dns`、`client.mtu`、`client.interval` | Bundle → `client.yaml` / 客户端 State |
+| 设置 → 数据面 / TCP 中继 | `tcp_relay.mode`（客户端默认 auto/tcp/udp）、中继令牌 | Bundle `client.data_plane_mode` + 心跳 |
+| 隧道 → 网络 → Nebula 设置 | cipher、punch、relays、TUN、握手、日志、统计、网络 DNS/MTU | Nebula `config.yml` / Bundle DNS/MTU |
+| 隧道 → 路由 | 不安全路由 CIDR | `routes.json` / Nebula `unsafe_routes` |
+| 隧道 → 客户端 | 名称、IPv4/IPv6、enroll token | Bundle / State |
+
+优先级：
+
+1. **网络级 DNS/MTU** 优先于全局「客户端下发」默认值；
+2. **命令行参数** 优先于 `client.yaml`；
+3. `client.yaml` 由服务端自动写入，优先级高于心跳自动发现；
+4. 修改页面后，客户端 `config`/心跳拉取会更新 `client.yaml`；Android 客户端点「刷新」会自动重启 VpnService 使 DNS/MTU/路由立即生效。
+
+> **DNS 建议填 overlay 内可达的解析器**（如 `10.77.0.1`）。Android VpnService 会把该 DNS
+> 下发给系统；由于 VPN 只接管 overlay CIDR 与不安全路由，公网 DNS 能否访问取决于
+> 网关是否提供转发/NAT。
+
 ### 客户端配置文件（支持热加载）
 
 默认路径 `<state-dir>/client.yaml`（可用 `--config` 或 `IFLYGO_CLIENT_CONFIG` 指定）：
 
 ```yaml
-interval: 30s
+interval: 30s                # 服务端 client.interval
 data_plane:
-  mode: auto                 # auto / tcp / udp
-  tcp_relay: ""              # 留空自动发现；也可填 relay.example.com:8443
-  tcp_relay_token: ""        # 留空自动从服务端获取
+  mode: auto                 # 服务端 tcp_relay.mode
+  tcp_relay: ""              # 服务端下发的可达地址
+  tcp_relay_token: ""        # 服务端下发的令牌
 ```
+
+> 该文件默认由 `enroll`/`config` 自动生成；如需本地覆盖，可直接编辑（约 2 秒热加载），
+> 但下一次服务端配置刷新会用下发值覆盖。命令行参数优先级最高。
 
 修改后约 2 秒内自动生效；数据面模式变化会自动重启 overlay（隧道短暂重连），
 心跳间隔变化立即生效。

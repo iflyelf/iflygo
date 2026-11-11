@@ -297,7 +297,7 @@ TUNNEL_JS = r'''
         h('div', { class: 'form-row2' }, [field('握手间隔', hsInterval), field('握手重试次数', hsRetries)]),
         field('优先网段 preferred_ranges（逗号分隔）', prefRanges),
         h('div', { class: 'form-row2' }, [field('日志级别', logLevel), field('日志格式', logFormat), field('统计类型', statsType)]),
-        h('div', { class: 'form-row2' }, [field('统计监听地址', statsListen), field('DNS', dns), field('MTU', mtu)]),
+        h('div', { class: 'form-row2' }, [field('统计监听地址', statsListen), field('DNS（客户端下发，覆盖全局默认）', dns), field('MTU（客户端）', mtu)]),
         save
       ])
     ]);

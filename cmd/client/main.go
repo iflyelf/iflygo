@@ -82,6 +82,9 @@ func cmdEnroll(args []string) {
 	}
 
 	if *name == "" {
+		*name = bundle.Name
+	}
+	if *name == "" {
 		*name = fmt.Sprintf("client-%d", id)
 	}
 	st := &client.State{
@@ -90,8 +93,12 @@ func cmdEnroll(args []string) {
 		Secret:    secret,
 		Name:      *name,
 		Network:   bundle.Network,
+		Cidr4:     bundle.Cidr4,
+		Cidr6:     bundle.Cidr6,
 		IPv4:      bundle.IPv4,
 		IPv6:      bundle.IPv6,
+		MTU:       bundle.MTU,
+		DNS:       bundle.DNS,
 		ConfigRev: bundle.ConfigRev,
 	}
 	if err := st.Save(*dir); err != nil {

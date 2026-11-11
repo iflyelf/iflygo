@@ -43,6 +43,18 @@ type Config struct {
 	// TCPRelay 可选：UDP 被封锁时，为 Nebula overlay 提供「UDP over TCP」中继。
 	// 默认自动启用（监听控制端口 +1），客户端会自动发现并智能切换。
 	TCPRelay TCPRelayConfig `yaml:"tcp_relay"`
+	// Client 客户端下发默认参数（网络级 DNS/MTU 优先）。
+	Client ClientConfig `yaml:"client"`
+}
+
+// ClientConfig 客户端下发默认参数（可被网络级 DNS/MTU 覆盖）。
+type ClientConfig struct {
+	// DNS 客户端默认 DNS（逗号分隔，建议为 overlay 内可达的解析器）。
+	DNS string `yaml:"dns"`
+	// MTU 客户端默认 MTU；网络级 MTU 优先。
+	MTU int `yaml:"mtu"`
+	// Interval 客户端心跳间隔（如 30s）；写入客户端 client.yaml。
+	Interval string `yaml:"interval"`
 }
 
 // TCPRelayConfig TCP 中继服务端配置。
@@ -344,6 +356,7 @@ func Default() *Config {
 		},
 		Auth:     AuthConfig{Provider: "builtin", AdminUsername: "admin"},
 		TCPRelay: TCPRelayConfig{Mode: "auto"},
+		Client:   ClientConfig{MTU: 1280, Interval: "30s"},
 		Consul:   ConsulConfig{Timeout: 10, Concurrency: 16, CleanupMissing: true},
 		Redis: RedisConfig{
 			Enabled: false, Mode: "single", Host: "localhost", Port: 6379,
@@ -445,6 +458,9 @@ func Load(path string) (*Config, error) {
 
 // applyEnv 用环境变量覆盖配置。
 func (c *Config) applyEnv() {
+	setStr(&c.Client.DNS, "CLIENT_DNS")
+	setInt(&c.Client.MTU, "CLIENT_MTU")
+	setStr(&c.Client.Interval, "CLIENT_INTERVAL")
 	setStr(&c.TCPRelay.Mode, "TCP_RELAY_MODE")
 	setStr(&c.TCPRelay.Listen, "TCP_RELAY_LISTEN")
 	setStr(&c.TCPRelay.Advertise, "TCP_RELAY_ADVERTISE")
