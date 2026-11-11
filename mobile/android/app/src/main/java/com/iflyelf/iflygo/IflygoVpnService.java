@@ -13,7 +13,7 @@ import android.util.Log;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import com.iflyelf.iflygo.core.Client;
+import com.iflyelf.iflygo.core.mobile.Client;
 
 public class IflygoVpnService extends VpnService {
     private static final String TAG = "IflygoVpnService";

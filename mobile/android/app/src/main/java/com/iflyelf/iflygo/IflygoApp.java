@@ -5,7 +5,7 @@ import android.content.SharedPreferences;
 
 import java.io.File;
 
-import com.iflyelf.iflygo.core.Client;
+import com.iflyelf.iflygo.core.mobile.Client;
 public class IflygoApp extends Application {
     private static final String PREFS = "iflygo";
     private Client client;
