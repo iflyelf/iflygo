@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"net/netip"
 	"strings"
 	"testing"
 
@@ -9,9 +10,10 @@ import (
 
 func TestBuildFullNATScript(t *testing.T) {
 	net := &model.Network{Name: "home", Cidr4: "10.44.0.0/16", Cidr6: "fd00:44::/64"}
-	script := buildFullNATScript(net, "10.44.0.1", "fd00:44::1")
+	script := buildFullNATScript(net, "10.44.0.1", "fd00:44::1", []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")})
 	for _, want := range []string{
 		"iptables -A FORWARD -s 10.44.0.0/16 -j ACCEPT",
+		"iptables -t nat -A POSTROUTING -s 10.44.0.0/16 -d 10.0.0.0/8 -j RETURN",
 		"iptables -t nat -A POSTROUTING -s 10.44.0.0/16 -j MASQUERADE",
 		"ip6tables -t nat -A POSTROUTING -s fd00:44::/64 -j MASQUERADE",
 		"# IPv4 网关: 10.44.0.1",

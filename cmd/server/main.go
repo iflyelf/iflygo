@@ -99,6 +99,8 @@ func main() {
 	go watchConfigFile(ctx, *configFile, sc)
 	sc.StartUserFieldSync(ctx)
 	sc.StartHostMerge(ctx)
+	// 网关健康检查 + 自动 NAT（NAT 脚本与 Agent 流程合并，零手工）。
+	handler.StartGatewayReconciler(ctx, sc)
 
 	mux := http.NewServeMux()
 	limiters := registerRoutes(mux, sc)

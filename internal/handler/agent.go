@@ -397,6 +397,9 @@ func AgentRegister(s *svc.ServiceContext) http.HandlerFunc {
 		auditAnon(s, r, audit.ActionAgentRegister, hostname, "agent", agentID, nil)
 		maybeAutoUpdateAgent(s, r, agentID)
 		httpx.OK(w, protocol.RegisterResponse{AgentID: agentID, Token: token, Secret: secret})
+		// Agent 注册成功后立即触发一次网关对账：网关节点安装 Agent 后，
+		// NAT 脚本会自动下发，无需等待下一轮后台检查或人工点击。
+		triggerGatewayReconcile(s)
 	}
 }
 

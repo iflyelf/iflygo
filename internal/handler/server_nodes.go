@@ -40,6 +40,7 @@ func ListServerNodes(sc *svc.ServiceContext) http.HandlerFunc {
 				httpx.FailErr(w, http.StatusInternalServerError, err)
 				return
 			}
+			n.Health = publicHostHealth(sc, n.PublicHost)
 			list = append(list, n)
 		}
 		httpx.OK(w, list)
@@ -121,6 +122,7 @@ func CreateServerNode(sc *svc.ServiceContext) http.HandlerFunc {
 			_ = sc.IPAM.BindNode(net.ID, ip6, nid)
 		}
 
+		triggerGatewayReconcile(sc)
 		httpx.OK(w, model.ServerNode{ID: nid, NetworkID: net.ID, Name: req.Name, Roles: req.Roles, Region: req.Region,
 			OverlayIP4: ip4, OverlayIP6: ip6, PublicHost: req.PublicHost, PublicPort: req.PublicPort, CreatedAt: now})
 	}
@@ -260,6 +262,7 @@ func UpdateServerNode(sc *svc.ServiceContext) http.HandlerFunc {
 			}
 		}
 		bumpConfigRev(sc, net.ID)
+		triggerGatewayReconcile(sc)
 		httpx.OK(w, model.ServerNode{ID: id, NetworkID: net.ID, Name: name, Roles: roles, Region: region,
 			OverlayIP4: ip4, OverlayIP6: ip6, PublicHost: host, PublicPort: port})
 	}
@@ -302,6 +305,11 @@ func ServerNodeBundle(sc *svc.ServiceContext) http.HandlerFunc {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
 		}
+		net, err := getNetwork(sc, n.NetworkID)
+		if err != nil {
+			httpx.FailErr(w, http.StatusInternalServerError, err)
+			return
+		}
 
 		isLighthouse := strings.Contains(n.Roles, "lighthouse")
 		isRelay := strings.Contains(n.Roles, "relay")
@@ -316,6 +324,26 @@ func ServerNodeBundle(sc *svc.ServiceContext) http.HandlerFunc {
 			return
 		}
 
-		httpx.OK(w, model.Bundle{CA: caCert, Cert: certPEM, Key: keyPEM, Config: string(cfg)})
+		bundle := model.Bundle{CA: caCert, Cert: certPEM, Key: keyPEM, Config: string(cfg)}
+		// 网关节点的部署包直接携带 NAT 脚本，与节点/Agent 部署流程合并。
+		if strings.Contains(n.Roles, "gateway") {
+			switch effectiveEgressMode(sc, net) {
+			case "full":
+				gw4, gw6 := "", ""
+				if net.Cidr4 != "" {
+					gw4 = resolveDNSGateway(sc, net, true)
+				}
+				if net.Cidr6 != "" {
+					gw6 = resolveDNSGateway(sc, net, false)
+				}
+				bundle.BootstrapScript = buildFullNATScript(net, gw4, gw6, egressExcludePrefixes(sc, net))
+			case "dns":
+				v4, v6, gw4, gw6, nerr := computeDNSNAT(sc, net, "", "")
+				if nerr == nil {
+					bundle.BootstrapScript = buildDNSNATScript(net, v4, v6, gw4, gw6)
+				}
+			}
+		}
+		httpx.OK(w, bundle)
 	}
 }

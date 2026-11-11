@@ -267,6 +267,8 @@ TUNNEL_JS = r'''
     var interval = tunnelInput({ value: tunnelSettingValue(m, 'client.interval', '30s') });
     var mode = tunnelSelect([['auto', 'auto'], ['tcp', 'tcp'], ['udp', 'udp']], tunnelSettingValue(m, 'tcp_relay.mode', 'auto'));
     var dnsRoute = tunnelSelect([['false', '关闭'], ['true', '启用']], tunnelSettingValue(m, 'client.dns_route', 'false'));
+    var autoNAT = tunnelSelect([['true', '启用'], ['false', '关闭']], tunnelSettingValue(m, 'client.auto_nat', 'true'));
+    var egressExclude = tunnelInput({ value: tunnelSettingValue(m, 'client.egress_exclude', ''), placeholder: '额外排除 CIDR，逗号分隔（可选）' });
     tunnelFormModal({
       title: '编辑客户端全局默认',
       fields: [
@@ -274,7 +276,9 @@ TUNNEL_JS = r'''
         { label: '客户端默认 MTU', input: mtu },
         { label: '客户端心跳间隔', input: interval },
         { label: '客户端默认数据面模式', input: mode, hint: 'auto：UDP 优先自动兜底 TCP；tcp：强制中继；udp：仅 UDP。' },
-        { label: '公网 DNS 主机路由', input: dnsRoute, hint: '开启后公网 DNS 自动下发 /32 或 /128 主机路由，需网关 NAT（下方可生成脚本）。' }
+        { label: '公网 DNS 主机路由', input: dnsRoute, hint: '开启后公网 DNS 自动下发 /32 或 /128 主机路由，需网关 NAT（下方可生成脚本）。' },
+        { label: '自动网关 NAT', input: autoNAT, hint: '网关匹配到 Agent 后自动应用 NAT；网关离线时自动切换。' },
+        { label: '全量出口全局排除网段', input: egressExclude, hint: '在内置内网/控制面排除策略之外追加。' }
       ],
       submitText: '保存全局默认',
       onSubmit: function () {
@@ -283,6 +287,8 @@ TUNNEL_JS = r'''
           'client.mtu': String(Number(mtu.value || 0)),
           'client.interval': interval.value.trim(),
           'client.dns_route': dnsRoute.value,
+          'client.auto_nat': autoNAT.value,
+          'client.egress_exclude': egressExclude.value.trim(),
           'tcp_relay.mode': mode.value
         };
         return api('/api/settings', { method: 'PUT', body: JSON.stringify(body) }).then(function () {
@@ -300,7 +306,7 @@ TUNNEL_JS = r'''
     var gwOpts = [['', '自动选择']];
     gwNodes.forEach(function (sn) {
       var ip = sn.overlay_ip4 || sn.overlay_ip6;
-      gwOpts.push([ip, (sn.name || 'gateway') + ' (' + ip + ')']);
+      gwOpts.push([ip, (sn.name || 'gateway') + ' (' + ip + ') · ' + (sn.health || 'unknown')]);
     });
     var curGw = (detail && detail.dns_gateway) || '';
     if (curGw && !gwOpts.some(function (o) { return o[0] === curGw; })) {
@@ -313,7 +319,6 @@ TUNNEL_JS = r'''
     ], 'dns');
     var dnsInput = tunnelInput({ value: (detail && detail.dns) || '', placeholder: '如 8.8.8.8,1.1.1.1；留空自动汇总' });
     var hostSel = h('select', {}, [h('option', { value: '' }, ['自动匹配网关 public_host'])]);
-    var ensureRoute = h('input', { type: 'checkbox', checked: true }, []);
     var startNow = h('input', { type: 'checkbox', checked: true }, []);
     var msg = h('div', { class: 'hint' }, ['选择模式与网关后，可先预览脚本，再通过 Agent 自动执行。']);
     var scriptBox = h('textarea', { class: 'tunnel-script', rows: 12, readonly: 'readonly', spellcheck: 'false' }, ['点击「预览脚本」查看']);
@@ -330,7 +335,7 @@ TUNNEL_JS = r'''
       var idx = gwSel.selectedIndex - 1;
       return idx >= 0 ? gwNodes[idx] : null;
     }
-    function reqBody(start, ensure) {
+    function reqBody(start) {
       var sn = selectedNode();
       return {
         mode: modeSel.value,
@@ -338,7 +343,6 @@ TUNNEL_JS = r'''
         gateway: gwSel.value,
         server_node_id: sn ? sn.id : 0,
         host_ip: hostSel.value,
-        ensure_default_route: ensure,
         start: start
       };
     }
@@ -355,16 +359,16 @@ TUNNEL_JS = r'''
       msg.textContent = '正在生成并提交…';
       api('/api/networks/' + n.id + '/nat/apply', {
         method: 'POST',
-        body: JSON.stringify(reqBody(startNow.checked, ensureRoute.checked))
+        body: JSON.stringify(reqBody(startNow.checked))
       }).then(function (d) {
         scriptBox.value = d.script || '';
         if (d.started) {
           msg.textContent = '已创建任务 #' + d.task_id + '，目标主机 ' + d.host_ip +
             '；Agent 下一次心跳自动执行。' +
-            (d.default_route_changed ? ' 默认路由已更新。' : '');
+            (d.egress_mode_changed ? ' 网络已切换为全量出口，客户端将自动拉取。' : '');
           tunnelSetMsg(true, msg.textContent);
         } else {
-          msg.textContent = '脚本已生成，未提交执行。' + (d.default_route_changed ? ' 默认路由已更新。' : '');
+          msg.textContent = '脚本已生成，未提交执行。' + (d.egress_mode_changed ? ' 网络已切换为全量出口。' : '');
         }
       }).catch(function (e) { msg.textContent = e.message; });
     }
@@ -377,12 +381,11 @@ TUNNEL_JS = r'''
     }, [
       h('div', { class: 'modal tunnel-modal' }, [
         h('div', { class: 'modal-head' }, [h('h3', {}, ['DNS NAT / 全量公网出口 · ' + (n.name || ('#' + n.id))]), close]),
-        hint('DNS 模式只 NAT 公网 DNS；全量模式会上/下默认路由并 NAT 所有 overlay 出公网流量。执行需要管理员权限且已开启 agent.allow_exec_mode。'),
+        hint('DNS 模式只 NAT 公网 DNS；全量模式会为客户端下发「公网前缀集合」（自动排除内网/控制面），并在网关 NAT 所有 overlay 出公网流量。执行需要管理员权限且已开启 agent.allow_exec_mode。'),
         field('模式', modeSel),
         field('DNS（仅 DNS 模式）', dnsInput, '留空自动汇总全局/网络/每主机 DNS。'),
         field('网关', gwSel, '多网关场景可显式选择 DNS 网关；留空自动选择。'),
         field('执行主机（Agent）', hostSel, '留空按网关节点 public_host 自动匹配；也可直接选择已安装 Agent 的主机。'),
-        h('label', { class: 'check' }, [ensureRoute, ' 全量模式：同时创建/更新 0.0.0.0/0（及 ::/0）默认路由']),
         h('label', { class: 'check' }, [startNow, ' 通过 Agent 自动执行（关闭则只生成脚本）']),
         msg,
         scriptBox,
@@ -437,6 +440,8 @@ TUNNEL_JS = r'''
     var netRows = [
       ['网络级 DNS', (detail && detail.dns) || '跟随全局'],
       ['网络级 MTU', detail ? String(detail.mtu || '') : '—'],
+      ['出口模式', (detail && detail.egress_mode) || '自动'],
+      ['出口排除', (detail && detail.egress_exclude) || '内置内网/控制面策略'],
       ['加密算法', nb.cipher || '默认 aes-256-gcm'],
       ['监听端口', nb.listen_port || '默认'],
       ['Lighthouse 间隔', nb.lighthouse_interval ? nb.lighthouse_interval + 's' : '默认'],
@@ -678,12 +683,21 @@ TUNNEL_JS = r'''
         gwOpts.push([curGw, curGw]);
       }
       var dnsGw = tunnelSelect(gwOpts, curGw);
+      var egressMode = tunnelSelect([
+        ['', '自动（按 DNS 路由开关）'],
+        ['off', '关闭'],
+        ['dns', '仅公网 DNS'],
+        ['full', '全量公网出口']
+      ], (cur && cur.egress_mode) || '');
+      var egressExclude = tunnelInput({ value: (cur && cur.egress_exclude) || '', placeholder: '额外排除 CIDR，逗号分隔（可选）' });
       tunnelFormModal({
         title: '网络设置 · ' + (n.name || ('#' + n.id)),
         fields: [
           { label: 'DNS（网络级，客户端下发）', input: dns },
           { label: 'MTU（网络级）', input: mtu },
           { label: 'DNS 网关（overlay IP）', input: dnsGw, hint: '多网关场景下显式指定；留空自动选择。' },
+          { label: '出口模式', input: egressMode, hint: '全量出口只下发未被排除的公网前缀，内网/控制面默认保留直连。' },
+          { label: '全量出口排除网段', input: egressExclude, hint: '在内置内网/控制面排除策略之外追加，如 10.0.0.0/8,192.168.0.0/16。' },
           { label: '加密算法', input: cipher },
           { label: '监听端口', input: listenPort },
           { label: 'Lighthouse 间隔(s)', input: lhInterval },
@@ -710,6 +724,8 @@ TUNNEL_JS = r'''
               dns: dns.value.trim(),
               mtu: Number(mtu.value || 0),
               dns_gateway: dnsGw.value,
+              egress_mode: egressMode.value,
+              egress_exclude: egressExclude.value.trim(),
               nebula: {
                 cipher: cipher.value,
                 listen_port: Number(listenPort.value || 0),
@@ -842,6 +858,7 @@ TUNNEL_JS = r'''
         h('td', { class: 'tunnel-wrap' }, [n.roles || '']),
         h('td', {}, [n.overlay_ip4 || '—']),
         h('td', { class: 'tunnel-wrap' }, [(n.public_host || '') + (n.public_port ? ':' + n.public_port : '')]),
+        h('td', { class: 'tunnel-wrap' }, [n.health || 'unknown']),
         h('td', {}, [h('div', { class: 'tunnel-actions' }, [
           h('button', { class: 'btn sm primary', onclick: function () { tunnelOpenServerNodeEdit(n); } }, ['编辑']),
           h('button', { class: 'btn sm danger', onclick: function () { tunnelDelServerNode(n.id); } }, ['删除'])
@@ -853,10 +870,11 @@ TUNNEL_JS = r'''
         h('h3', {}, ['服务端节点（lighthouse/relay/edge/gateway）']),
         h('button', { class: 'btn primary', onclick: tunnelOpenServerNodeCreate }, ['新建节点'])
       ]),
+      h('div', { class: 'muted' }, ['gateway 节点安装 Agent 后会自动应用 DNS/全量出口 NAT；健康状态变化会自动切换并通知客户端。']),
       h('div', { class: 'table-wrap' }, [
         h('table', { class: 'tunnel-table' }, [
-          h('thead', {}, [h('tr', {}, [h('th', {}, ['名称']), h('th', {}, ['角色']), h('th', {}, ['overlay IP']), h('th', {}, ['公网入口']), h('th', {}, ['操作'])])]),
-          h('tbody', {}, rows.length ? rows : [h('tr', {}, [h('td', { colspan: 5, class: 'muted' }, ['暂无节点'])])])
+          h('thead', {}, [h('tr', {}, [h('th', {}, ['名称']), h('th', {}, ['角色']), h('th', {}, ['overlay IP']), h('th', {}, ['公网入口']), h('th', {}, ['健康']), h('th', {}, ['操作'])])]),
+          h('tbody', {}, rows.length ? rows : [h('tr', {}, [h('td', { colspan: 6, class: 'muted' }, ['暂无节点'])])])
         ])
       ])
     ]);

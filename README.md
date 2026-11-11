@@ -283,6 +283,8 @@ client:
   mtu: 1280                   # 客户端默认 MTU（网络级 MTU 优先）
   interval: 30s               # 客户端心跳间隔
   dns_route: false            # 公网 DNS 自动下发 /32 主机路由（需网关 NAT）
+  auto_nat: true              # 网关匹配 Agent 后自动应用 NAT，健康切换自动重建
+  egress_exclude: ""          # 全量出口额外排除网段（逗号分隔 CIDR）
 
 log:
   level: info
@@ -301,6 +303,8 @@ SERVER_EXTERNAL_URL=https://iflygo.example.com
 # CLIENT_MTU=1280
 # CLIENT_INTERVAL=30s
 # CLIENT_DNS_ROUTE=false
+# CLIENT_AUTO_NAT=true
+# CLIENT_EGRESS_EXCLUDE=10.0.0.0/8,192.168.0.0/16
 ```
 
 > 优先级：**页面设置 > 环境变量 > 配置文件 > 内置默认值**。
@@ -710,7 +714,7 @@ tcp_relay:
 
 | 页面位置 | 配置项 | 下发方式 |
 |---|---|---|
-| 设置 → 客户端下发 | `client.dns`、`client.mtu`、`client.interval`、`client.dns_route`（全局默认） | Bundle → `client.yaml` / 客户端 State |
+| 设置 → 客户端下发 | `client.dns`、`client.mtu`、`client.interval`、`client.dns_route`、`client.auto_nat`、`client.egress_exclude`（全局默认） | Bundle → `client.yaml` / 客户端 State |
 | 隧道 → 参数下发 | 聚合全局默认 + 网络级 Nebula + 每主机覆盖；NAT 脚本预览/Agent 自动执行/全量出口默认路由 | 同上 |
 | 设置 → 数据面 / TCP 中继 | `tcp_relay.mode`（客户端默认 auto/tcp/udp）、中继令牌 | Bundle `client.data_plane_mode` + 心跳 |
 | 隧道 → 网络 → 编辑 | cipher、punch、relays、TUN、握手、日志、统计、网络 DNS/MTU | Nebula `config.yml` / Bundle DNS/MTU |
@@ -748,19 +752,39 @@ VPN。开启 **公网 DNS 主机路由** 后：
    - **手动执行**：复制脚本到网关节点以 root 执行；
    - **Agent 自动执行**：选择已安装 Agent 的主机（留空则按网关节点 `public_host` 自动匹配），
      服务端创建并立即启动命令任务，Agent 下一次心跳自动执行；
-5. 执行后客户端解析公网域名即可正常走 overlay 网关；
-6. 脚本会开启转发、放行 overlay → DNS 的 FORWARD，并对回包做 `MASQUERADE`。
+5. 网关角色节点的部署包（ServerNodeBundle）会直接携带 NAT 脚本；
+6. 只要网关节点已安装 Agent，服务端会自动应用 NAT：
+   - Agent 注册成功后**立即触发**一次对账，之后每分钟巡检；
+   - 无需手工点击，NAT 与 Agent 安装流程自动衔接；
+   - 网关离线/恢复时自动切换，并递增客户端 `config_rev` 让客户端自动拉取新网关；
+   - 失败任务自动重试（10 分钟退避），脚本/网关变化时自动重建；
+7. 执行后客户端解析公网域名即可正常走 overlay 网关；
+8. 脚本会开启转发、放行 overlay → DNS 的 FORWARD，并对回包做 `MASQUERADE`。
 
 **多网关显式选择**：网络编辑弹窗与客户端编辑弹窗均新增「DNS 网关（overlay IP）」，
-可分别指定网络级/每主机公网 DNS 主机路由的下一跳；留空自动选择。该字段只影响
-DNS 主机路由，不影响已有默认路由。
+可分别指定网络级/每主机公网 DNS 主机路由的下一跳；留空自动选择。该字段影响
+DNS 主机路由与全量出口的下一跳；不会修改已有路由表条目。
 
-**全量公网出口**：在同一个弹窗把模式切为「全量公网出口」，勾选「同时创建/更新默认路由」，
-服务端会自动写入 `0.0.0.0/0`（及 `::/0`）默认路由，并生成统一的出口 NAT 脚本
-（`POSTROUTING -s <overlay CIDR> -j MASQUERADE`），适合需要所有公网流量经网关的场景。
+**网关健康检查与自动切换**：服务端通过网关节点 `public_host` 匹配 Agent，读取
+`agents.status`；显式网关离线时自动切换到下一个健康网关，全部离线时保留最后候选
+并在恢复后自动重建 NAT。服务节点列表会展示 `online / unknown / offline` 健康状态。
 
-> Agent 自动执行需要：管理员的命令任务权限、`agent.allow_exec_mode=true`，
-> 且目标主机已安装并在线运行 Agent。手动模式仍可直接复制脚本执行。
+**全量公网出口**：网络编辑弹窗新增「出口模式」：
+- `off`：关闭；
+- `dns`：仅公网 DNS；
+- `full`：全量公网出口。
+
+全量出口不会下发单一 `0.0.0.0/0`，而是按排除策略拆分公网前缀：
+- 自动排除 RFC1918 内网、回环、链路本地、CGNAT、组播、保留地址；
+- 自动排除 overlay 网段；
+- 自动排除控制面 `external_url` 解析到的地址（也可在 `client.egress_exclude` /
+  网络「全量出口排除网段」中追加）；
+- 网关 NAT 脚本同时写入 `RETURN` 规则，避免对排除网段做源 NAT。
+
+这样全量出口只会把**公网流量**送入隧道，内网、控制面、局域网访问保持直连。
+
+> Agent 自动执行需要：`agent.allow_exec_mode=true`，且目标主机已安装并在线运行 Agent。
+> 手动模式仍可直接复制脚本执行。
 >
 > 网关需具备出公网能力；脚本按 iptables 通用语法生成，Debian/Ubuntu 可用
 > `iptables-persistent`、RHEL/CentOS 可用 `iptables-services` 持久化。

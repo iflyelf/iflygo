@@ -54,7 +54,7 @@ func DNSNATScript(sc *svc.ServiceContext) http.HandlerFunc {
 			}
 			httpx.OK(w, map[string]any{
 				"mode": "full", "gateway4": gw4, "gateway6": gw6,
-				"script": buildFullNATScript(net, gw4, gw6),
+				"script": buildFullNATScript(net, gw4, gw6, egressExcludePrefixes(sc, net)),
 			})
 			return
 		}
@@ -140,31 +140,26 @@ func NATApply(sc *svc.ServiceContext) http.HandlerFunc {
 				httpx.Fail(w, http.StatusBadRequest, "未找到可用网关：请选择网关节点或配置默认路由")
 				return
 			}
-			script = buildFullNATScript(net, gw4, gw6)
+			script = buildFullNATScript(net, gw4, gw6, egressExcludePrefixes(sc, net))
 			label = "全量出口 NAT"
 		default:
 			httpx.Fail(w, http.StatusBadRequest, "mode 只能是 dns / full")
 			return
 		}
 
-		// full 模式默认创建/更新默认路由；显式传 false 可关闭。
-		ensureRoute := mode == "full"
-		if req.EnsureDefaultRoute != nil {
-			ensureRoute = *req.EnsureDefaultRoute
-		}
-		routeChanged := false
-		if mode == "full" && ensureRoute {
-			changed, rerr := ensureDefaultRoute(sc, net, gw4, gw6)
-			if rerr != nil {
-				httpx.FailErr(w, http.StatusInternalServerError, rerr)
-				return
+		// full 模式写入网络出口模式；全量路由由 Bundle 按排除策略动态生成。
+		egressChanged := false
+		if mode == "full" && net.EgressMode != "full" {
+			if _, err := sc.Store.DB.Exec(sc.Store.Rebind(`UPDATE networks SET egress_mode = 'full' WHERE id = $1`), net.ID); err == nil {
+				net.EgressMode = "full"
+				bumpConfigRev(sc, net.ID)
+				egressChanged = true
 			}
-			routeChanged = changed
 		}
 
 		resp := map[string]any{
 			"mode": mode, "gateway4": gw4, "gateway6": gw6,
-			"script": script, "default_route_changed": routeChanged,
+			"script": script, "egress_mode_changed": egressChanged,
 		}
 		if !req.Start {
 			httpx.OK(w, resp)
@@ -357,64 +352,12 @@ func resolveNATHost(sc *svc.ServiceContext, net *model.Network, hostIP string, s
 	}
 	var h natHost
 	q := sc.Store.Rebind(`SELECT id, ip, COALESCE(hostname,''), COALESCE(agent_id,'') FROM hosts
-		WHERE (ip = $1 OR hostname = $2 OR exit_ip = $3) AND COALESCE(agent_id,'') <> ''
+		WHERE (ip = $1 OR hostname = $2 OR exit_ip = $3 OR tunnel_ip = $4) AND COALESCE(agent_id,'') <> ''
 		ORDER BY id LIMIT 1`)
-	if err := sc.Store.DB.QueryRow(q, candidate, candidate, candidate).Scan(&h.ID, &h.IP, &h.Hostname, &h.AgentID); err != nil {
+	if err := sc.Store.DB.QueryRow(q, candidate, candidate, candidate, candidate).Scan(&h.ID, &h.IP, &h.Hostname, &h.AgentID); err != nil {
 		return nil, fmt.Errorf("未找到与 %s 匹配的 Agent 主机，请在页面选择目标主机", candidate)
 	}
 	return &h, nil
-}
-
-// ensureDefaultRoute 创建/更新全量公网出口默认路由。
-func ensureDefaultRoute(sc *svc.ServiceContext, net *model.Network, gw4, gw6 string) (bool, error) {
-	changed := false
-	if gw4 != "" {
-		c, err := upsertDefaultRoute(sc, net, "0.0.0.0/0", gw4)
-		if err != nil {
-			return changed, err
-		}
-		changed = changed || c
-	}
-	if gw6 != "" {
-		c, err := upsertDefaultRoute(sc, net, "::/0", gw6)
-		if err != nil {
-			return changed, err
-		}
-		changed = changed || c
-	}
-	if changed {
-		bumpConfigRev(sc, net.ID)
-	}
-	return changed, nil
-}
-
-func upsertDefaultRoute(sc *svc.ServiceContext, net *model.Network, cidr, gw string) (bool, error) {
-	now := nowStr()
-	var rid int64
-	err := sc.Store.DB.QueryRow(sc.Store.Rebind(`SELECT id FROM subnet_routes WHERE network_id = $1 AND cidr = $2 ORDER BY id LIMIT 1`),
-		net.ID, cidr).Scan(&rid)
-	if err == nil {
-		if _, err := sc.Store.DB.Exec(sc.Store.Rebind(`UPDATE subnet_routes SET mtu=$1, mode='active_active', all_down_policy='fail_closed', enabled=1, description=$2 WHERE id=$3`),
-			net.MTU, "全量公网出口（自动生成）", rid); err != nil {
-			return false, err
-		}
-		if _, err := sc.Store.DB.Exec(sc.Store.Rebind(`DELETE FROM route_gateways WHERE route_id = $1`), rid); err != nil {
-			return false, err
-		}
-	} else {
-		if err := sc.Store.DB.QueryRow(sc.Store.Rebind(`INSERT INTO subnet_routes
-			(network_id,cidr,mtu,metric,mode,all_down_policy,enabled,description,created_at)
-			VALUES ($1,$2,$3,0,'active_active','fail_closed',1,$4,$5) RETURNING id`),
-			net.ID, cidr, net.MTU, "全量公网出口（自动生成）", now).Scan(&rid); err != nil {
-			return false, err
-		}
-	}
-	if _, err := sc.Store.DB.Exec(sc.Store.Rebind(`INSERT INTO route_gateways
-		(route_id,node_id,overlay_ip,weight,priority,health_target,health_port,enabled,created_at)
-		VALUES ($1,0,$2,1,0,'',0,1,$3)`), rid, gw, now); err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 func buildDNSNATScript(net *model.Network, v4, v6 []string, gw4, gw6 string) string {
@@ -470,8 +413,19 @@ func buildDNSNATScript(net *model.Network, v4, v6 []string, gw4, gw6 string) str
 	return b.String()
 }
 
+// writeNATExcludeRules 为全量出口写入 RETURN 规则，避免对排除网段做源 NAT。
+func writeNATExcludeRules(b *strings.Builder, bin, src string, excludes []netip.Prefix, ipv4 bool) {
+	for _, ex := range excludes {
+		if ex.Addr().Is4() != ipv4 {
+			continue
+		}
+		fmt.Fprintf(b, "%s -t nat -C POSTROUTING -s %s -d %s -j RETURN 2>/dev/null || %s -t nat -A POSTROUTING -s %s -d %s -j RETURN\n",
+			bin, src, ex.String(), bin, src, ex.String())
+	}
+}
+
 // buildFullNATScript 生成全量公网出口 NAT 脚本（overlay → 任意公网地址）。
-func buildFullNATScript(net *model.Network, gw4, gw6 string) string {
+func buildFullNATScript(net *model.Network, gw4, gw6 string, excludes []netip.Prefix) string {
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\n")
 	b.WriteString("# iflygo 全量公网出口 NAT 策略（需 root 执行）\n")
@@ -488,12 +442,14 @@ func buildFullNATScript(net *model.Network, gw4, gw6 string) string {
 		b.WriteString("sysctl -w net.ipv4.ip_forward=1\n")
 		b.WriteString("iptables -C FORWARD -s " + net.Cidr4 + " -j ACCEPT 2>/dev/null || iptables -A FORWARD -s " + net.Cidr4 + " -j ACCEPT\n")
 		b.WriteString("iptables -C FORWARD -d " + net.Cidr4 + " -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -A FORWARD -d " + net.Cidr4 + " -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT\n")
+		writeNATExcludeRules(&b, "iptables", net.Cidr4, excludes, true)
 		b.WriteString("iptables -t nat -C POSTROUTING -s " + net.Cidr4 + " -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s " + net.Cidr4 + " -j MASQUERADE\n\n")
 	}
 	if net.Cidr6 != "" {
 		b.WriteString("sysctl -w net.ipv6.conf.all.forwarding=1\n")
 		b.WriteString("ip6tables -C FORWARD -s " + net.Cidr6 + " -j ACCEPT 2>/dev/null || ip6tables -A FORWARD -s " + net.Cidr6 + " -j ACCEPT\n")
 		b.WriteString("ip6tables -C FORWARD -d " + net.Cidr6 + " -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || ip6tables -A FORWARD -d " + net.Cidr6 + " -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT\n")
+		writeNATExcludeRules(&b, "ip6tables", net.Cidr6, excludes, false)
 		b.WriteString("ip6tables -t nat -C POSTROUTING -s " + net.Cidr6 + " -j MASQUERADE 2>/dev/null || ip6tables -t nat -A POSTROUTING -s " + net.Cidr6 + " -j MASQUERADE\n\n")
 	}
 	b.WriteString("# 持久化（按发行版选择其一）\n")

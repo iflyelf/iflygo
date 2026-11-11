@@ -146,7 +146,8 @@ test('隧道管理：参数下发聚合页', async ({ page }) => {
     const net = await post('/api/networks', { name: 'nat-net-' + suffix, cidr4: '10.44.0.0/16', dns: '8.8.8.8' });
     const netId = net && net.data && net.data.id;
     await post('/api/server-nodes', { network_id: netId, name: 'gw-' + suffix, roles: 'gateway', overlay_ip4: '10.44.0.1' });
-    return { netId };
+    const cli = await post('/api/clients', { network_id: netId, name: 'nat-client-' + suffix });
+    return { netId, clientId: cli && cli.data && cli.data.client && cli.data.client.id };
   }, suffix);
   expect(pre.netId).toBeTruthy();
 
@@ -169,15 +170,20 @@ test('隧道管理：参数下发聚合页', async ({ page }) => {
   await page.getByRole('button', { name: '预览脚本', exact: true }).click();
   await expect(page.locator('.tunnel-script')).toHaveValue(/POSTROUTING -s 10\.44\.0\.0\/16 -j MASQUERADE/);
 
-  // 仅生成并创建默认路由（不实际下发 Agent 任务）
+  // 仅生成并切换为全量出口（不实际下发 Agent 任务）
   await page.getByRole('checkbox', { name: /通过 Agent 自动执行/ }).uncheck();
   await page.getByRole('button', { name: '通过 Agent 生成/执行', exact: true }).click();
-  await expect(page.getByText(/默认路由已更新/)).toBeVisible();
-  const routes = await page.evaluate(async (id) => {
-    const r = await fetch('/api/networks/' + id + '/routes').then(x => x.json());
-    return r.data || [];
-  }, pre.netId);
-  expect(routes.some(r => r.cidr === '0.0.0.0/0')).toBeTruthy();
+  await expect(page.getByText(/网络已切换为全量出口/)).toBeVisible();
+  const result = await page.evaluate(async (ids) => {
+    const net = await fetch('/api/networks/' + ids.netId).then(x => x.json());
+    const bundle = await fetch('/api/clients/' + ids.clientId + '/bundle').then(x => x.json());
+    return { egress: net.data.egress_mode, routes: (bundle.data && bundle.data.routes) || [] };
+  }, { netId: pre.netId, clientId: pre.clientId });
+  expect(result.egress).toBe('full');
+  expect(result.routes.length).toBeGreaterThan(0);
+  expect(result.routes.some(r => r.cidr === '0.0.0.0/0')).toBeFalsy();
+  expect(result.routes.some(r => r.cidr === '10.0.0.0/8')).toBeFalsy();
+  expect(result.routes.some(r => r.cidr === '1.0.0.0/8')).toBeTruthy();
   await page.getByRole('button', { name: '关闭', exact: true }).click();
 });
 

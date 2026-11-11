@@ -24,14 +24,18 @@ type networkReq struct {
 	DNS      string `json:"dns"`
 	MTU      int    `json:"mtu"`
 	// DNSGateway 显式 DNS 网关（overlay IP，可选）。
-	DNSGateway string               `json:"dns_gateway"`
-	Nebula     model.NebulaSettings `json:"nebula"`
+	DNSGateway string `json:"dns_gateway"`
+	// EgressMode 出口模式：off / dns / full。
+	EgressMode string `json:"egress_mode"`
+	// EgressExclude 全量出口排除网段（逗号分隔 CIDR）。
+	EgressExclude string               `json:"egress_exclude"`
+	Nebula        model.NebulaSettings `json:"nebula"`
 }
 
 // ListNetworks 列出网络。
 func ListNetworks(sc *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := sc.Store.DB.Query(sc.Store.Rebind(`SELECT id,name,cidr4,cidr6,gateway4,gateway6,dns,mtu,dns_gateway,created_at FROM networks ORDER BY id`))
+		rows, err := sc.Store.DB.Query(sc.Store.Rebind(`SELECT id,name,cidr4,cidr6,gateway4,gateway6,dns,mtu,dns_gateway,egress_mode,egress_exclude,created_at FROM networks ORDER BY id`))
 		if err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
@@ -40,7 +44,7 @@ func ListNetworks(sc *svc.ServiceContext) http.HandlerFunc {
 		list := []model.Network{}
 		for rows.Next() {
 			var n model.Network
-			if err := rows.Scan(&n.ID, &n.Name, &n.Cidr4, &n.Cidr6, &n.Gateway4, &n.Gateway6, &n.DNS, &n.MTU, &n.DNSGateway, &n.CreatedAt); err != nil {
+			if err := rows.Scan(&n.ID, &n.Name, &n.Cidr4, &n.Cidr6, &n.Gateway4, &n.Gateway6, &n.DNS, &n.MTU, &n.DNSGateway, &n.EgressMode, &n.EgressExclude, &n.CreatedAt); err != nil {
 				httpx.FailErr(w, http.StatusInternalServerError, err)
 				return
 			}
@@ -84,8 +88,8 @@ func CreateNetwork(sc *svc.ServiceContext) http.HandlerFunc {
 			return
 		}
 		var nid int64
-		err = sc.Store.DB.QueryRow(sc.Store.Rebind(`INSERT INTO networks (name,cidr4,cidr6,gateway4,gateway6,dns,mtu,dns_gateway,nebula,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`),
-			req.Name, req.Cidr4, req.Cidr6, req.Gateway4, req.Gateway6, req.DNS, req.MTU, req.DNSGateway, string(nebulaJSON), now).Scan(&nid)
+		err = sc.Store.DB.QueryRow(sc.Store.Rebind(`INSERT INTO networks (name,cidr4,cidr6,gateway4,gateway6,dns,mtu,dns_gateway,egress_mode,egress_exclude,nebula,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`),
+			req.Name, req.Cidr4, req.Cidr6, req.Gateway4, req.Gateway6, req.DNS, req.MTU, req.DNSGateway, req.EgressMode, req.EgressExclude, string(nebulaJSON), now).Scan(&nid)
 		if err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
@@ -97,7 +101,7 @@ func CreateNetwork(sc *svc.ServiceContext) http.HandlerFunc {
 			return
 		}
 
-		httpx.OK(w, model.Network{ID: nid, Name: req.Name, Cidr4: req.Cidr4, Cidr6: req.Cidr6, Gateway4: req.Gateway4, Gateway6: req.Gateway6, DNS: req.DNS, MTU: req.MTU, DNSGateway: req.DNSGateway, CreatedAt: now})
+		httpx.OK(w, model.Network{ID: nid, Name: req.Name, Cidr4: req.Cidr4, Cidr6: req.Cidr6, Gateway4: req.Gateway4, Gateway6: req.Gateway6, DNS: req.DNS, MTU: req.MTU, DNSGateway: req.DNSGateway, EgressMode: req.EgressMode, EgressExclude: req.EgressExclude, CreatedAt: now})
 	}
 }
 
@@ -120,8 +124,8 @@ func DeleteNetwork(sc *svc.ServiceContext) http.HandlerFunc {
 // getNetwork 读取网络。
 func getNetwork(sc *svc.ServiceContext, id int64) (*model.Network, error) {
 	var n model.Network
-	q := sc.Store.Rebind(`SELECT id,name,cidr4,cidr6,gateway4,gateway6,dns,mtu,dns_gateway,created_at FROM networks WHERE id = $1`)
-	if err := sc.Store.DB.QueryRow(q, id).Scan(&n.ID, &n.Name, &n.Cidr4, &n.Cidr6, &n.Gateway4, &n.Gateway6, &n.DNS, &n.MTU, &n.DNSGateway, &n.CreatedAt); err != nil {
+	q := sc.Store.Rebind(`SELECT id,name,cidr4,cidr6,gateway4,gateway6,dns,mtu,dns_gateway,egress_mode,egress_exclude,created_at FROM networks WHERE id = $1`)
+	if err := sc.Store.DB.QueryRow(q, id).Scan(&n.ID, &n.Name, &n.Cidr4, &n.Cidr6, &n.Gateway4, &n.Gateway6, &n.DNS, &n.MTU, &n.DNSGateway, &n.EgressMode, &n.EgressExclude, &n.CreatedAt); err != nil {
 		return nil, err
 	}
 	return &n, nil
@@ -183,10 +187,12 @@ func GetNetwork(sc *svc.ServiceContext) http.HandlerFunc {
 }
 
 type networkSettingsReq struct {
-	DNS        string               `json:"dns"`
-	MTU        int                  `json:"mtu"`
-	DNSGateway string               `json:"dns_gateway"`
-	Nebula     model.NebulaSettings `json:"nebula"`
+	DNS           string               `json:"dns"`
+	MTU           int                  `json:"mtu"`
+	DNSGateway    string               `json:"dns_gateway"`
+	EgressMode    string               `json:"egress_mode"`
+	EgressExclude string               `json:"egress_exclude"`
+	Nebula        model.NebulaSettings `json:"nebula"`
 }
 
 // UpdateNetwork 更新网络的 DNS/MTU/Nebula 设置，并递增该网络下客户端的配置版本，
@@ -242,6 +248,20 @@ func UpdateNetwork(sc *svc.ServiceContext) http.HandlerFunc {
 			}
 			if !prefixContains(existing.Cidr4, addr) && !prefixContains(existing.Cidr6, addr) {
 				httpx.Fail(w, http.StatusBadRequest, "DNS 网关必须在该网络的 overlay 网段内")
+				return
+			}
+		}
+		req.EgressMode = strings.ToLower(strings.TrimSpace(req.EgressMode))
+		switch req.EgressMode {
+		case "", "off", "dns", "full":
+		default:
+			httpx.Fail(w, http.StatusBadRequest, "egress_mode 只能是 off / dns / full")
+			return
+		}
+		req.EgressExclude = strings.TrimSpace(req.EgressExclude)
+		for _, c := range splitList(req.EgressExclude) {
+			if _, err := netip.ParsePrefix(c); err != nil {
+				httpx.Fail(w, http.StatusBadRequest, "排除网段不是合法 CIDR: "+c)
 				return
 			}
 		}
@@ -302,8 +322,8 @@ func UpdateNetwork(sc *svc.ServiceContext) http.HandlerFunc {
 			httpx.FailErr(w, http.StatusBadRequest, err)
 			return
 		}
-		q := sc.Store.Rebind(`UPDATE networks SET dns = $1, mtu = $2, nebula = $3, dns_gateway = $4 WHERE id = $5`)
-		if _, err := sc.Store.DB.Exec(q, req.DNS, req.MTU, string(nebulaJSON), req.DNSGateway, id); err != nil {
+		q := sc.Store.Rebind(`UPDATE networks SET dns = $1, mtu = $2, nebula = $3, dns_gateway = $4, egress_mode = $5, egress_exclude = $6 WHERE id = $7`)
+		if _, err := sc.Store.DB.Exec(q, req.DNS, req.MTU, string(nebulaJSON), req.DNSGateway, req.EgressMode, req.EgressExclude, id); err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
 		}

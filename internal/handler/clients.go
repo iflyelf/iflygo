@@ -544,6 +544,9 @@ func buildBundle(sc *svc.ServiceContext, c *clientRow) (*model.Bundle, error) {
 	if ov.DNSRoute != nil {
 		dnsRoute = *ov.DNSRoute
 	}
+	if net.EgressMode == "dns" || net.EgressMode == "full" {
+		dnsRoute = true
+	}
 	// 每台主机可单独关闭服务端 DNS；关闭后 Bundle 不下发 DNS。
 	if ov.UseServerDNS != nil && !*ov.UseServerDNS {
 		dns = ""
@@ -554,9 +557,30 @@ func buildBundle(sc *svc.ServiceContext, c *clientRow) (*model.Bundle, error) {
 		return nil, err
 	}
 	// 公网 DNS 主机路由：/32 或 /128 经 overlay 网关，客户端与 Nebula 同时生效。
-	dnsCfgRoutes, dnsSpecs := dnsHostRoutes(sc, net, dns, dnsRoute, ov.DNSGateway)
-	if len(dnsCfgRoutes) > 0 {
-		input.UnsafeRoutes = append(input.UnsafeRoutes, dnsCfgRoutes...)
+	var dnsCfgRoutes []configgen.Route
+	var dnsSpecs []model.RouteSpec
+	// 全量出口已覆盖公网前缀（含 DNS），无需再单独添加 DNS 主机路由，
+	// 也避免覆盖「控制面/内网排除」策略。
+	if net.EgressMode != "full" {
+		dnsCfgRoutes, dnsSpecs = dnsHostRoutes(sc, net, dns, dnsRoute, ov.DNSGateway)
+		if len(dnsCfgRoutes) > 0 {
+			input.UnsafeRoutes = append(input.UnsafeRoutes, dnsCfgRoutes...)
+		}
+	}
+	// 全量公网出口：按排除策略拆分 0/0，避免把内网/控制面流量送入隧道。
+	if net.EgressMode == "full" {
+		gw4, gw6 := "", ""
+		if net.Cidr4 != "" {
+			gw4 = gatewayForFamily(sc, net, ov.DNSGateway, true)
+		}
+		if net.Cidr6 != "" {
+			gw6 = gatewayForFamily(sc, net, ov.DNSGateway, false)
+		}
+		fullCfg, fullSpecs := fullEgressRoutes(sc, net, gw4, gw6)
+		if len(fullCfg) > 0 {
+			input.UnsafeRoutes = append(input.UnsafeRoutes, fullCfg...)
+			dnsSpecs = append(dnsSpecs, fullSpecs...)
+		}
 	}
 	cfgBytes, err := configgen.Build(*input)
 	if err != nil {
@@ -647,15 +671,31 @@ func prefixContains(cidr string, addr netip.Addr) bool {
 }
 
 // resolveDNSGateway 选择公网 DNS 主机路由的 overlay 网关。
+// resolveDNSGateway 选择公网 DNS/全量出口的 overlay 网关。
+//
+// 候选顺序：显式 DNS 网关 > 默认路由 > gateway 角色节点 > 网络网关 > 任意服务端节点 > 任意路由网关。
+// 候选节点若匹配到离线 Agent 会自动跳过，实现网关健康检查与自动切换。
 func resolveDNSGateway(sc *svc.ServiceContext, net *model.Network, ipv4 bool) string {
-	// 0. 网络显式配置的 DNS 网关优先（多网关场景）。
-	if v := strings.TrimSpace(net.DNSGateway); v != "" {
-		if a, err := netip.ParseAddr(v); err == nil && a.Is4() == ipv4 {
-			return v
+	var cands []string
+	add := func(ip string) {
+		ip = strings.TrimSpace(ip)
+		if ip == "" {
+			return
 		}
+		a, err := netip.ParseAddr(ip)
+		if err != nil || a.Is4() != ipv4 {
+			return
+		}
+		for _, c := range cands {
+			if c == ip {
+				return
+			}
+		}
+		cands = append(cands, ip)
 	}
+
+	add(net.DNSGateway)
 	routes, _ := loadRoutes(sc, net.ID)
-	// 1. 默认路由（0.0.0.0/0 或 ::/0）的网关最符合「上公网」语义。
 	want := "0.0.0.0/0"
 	if !ipv4 {
 		want = "::/0"
@@ -665,48 +705,116 @@ func resolveDNSGateway(sc *svc.ServiceContext, net *model.Network, ipv4 bool) st
 			continue
 		}
 		for _, g := range rt.Gateways {
-			if g.OverlayIP != "" {
-				return g.OverlayIP
-			}
+			add(g.OverlayIP)
 		}
 	}
-	// 2. 角色含 gateway 的服务端节点。
 	col := "overlay_ip4"
 	if !ipv4 {
 		col = "overlay_ip6"
 	}
-	var ip string
-	q := sc.Store.Rebind(`SELECT COALESCE(` + col + `,'') FROM server_nodes
-		WHERE network_id = $1 AND roles LIKE '%gateway%' AND COALESCE(` + col + `,'') <> ''
-		ORDER BY id LIMIT 1`)
-	if err := sc.Store.DB.QueryRow(q, net.ID).Scan(&ip); err == nil && ip != "" {
-		return ip
-	}
-	// 3. 网络配置的网关地址。
-	if ipv4 && net.Gateway4 != "" {
-		return net.Gateway4
-	}
-	if !ipv4 && net.Gateway6 != "" {
-		return net.Gateway6
-	}
-	// 4. 任意带该地址族的服务端节点。
-	q = sc.Store.Rebind(`SELECT COALESCE(` + col + `,'') FROM server_nodes
-		WHERE network_id = $1 AND COALESCE(` + col + `,'') <> '' ORDER BY id LIMIT 1`)
-	if err := sc.Store.DB.QueryRow(q, net.ID).Scan(&ip); err == nil && ip != "" {
-		return ip
-	}
-	// 5. 任意已配置路由的网关。
-	for _, rt := range routes {
-		for _, g := range rt.Gateways {
-			if g.OverlayIP == "" {
-				continue
-			}
-			if a, err := netip.ParseAddr(g.OverlayIP); err == nil && a.Is4() == ipv4 {
-				return g.OverlayIP
+	rows, err := sc.Store.DB.Query(sc.Store.Rebind(`SELECT COALESCE(`+col+`,'') FROM server_nodes
+		WHERE network_id = $1 AND roles LIKE '%gateway%' ORDER BY id`), net.ID)
+	if err == nil {
+		for rows.Next() {
+			var ip string
+			if rows.Scan(&ip) == nil {
+				add(ip)
 			}
 		}
+		rows.Close()
 	}
-	return ""
+	if ipv4 {
+		add(net.Gateway4)
+	} else {
+		add(net.Gateway6)
+	}
+	rows, err = sc.Store.DB.Query(sc.Store.Rebind(`SELECT COALESCE(`+col+`,'') FROM server_nodes
+		WHERE network_id = $1 ORDER BY id`), net.ID)
+	if err == nil {
+		for rows.Next() {
+			var ip string
+			if rows.Scan(&ip) == nil {
+				add(ip)
+			}
+		}
+		rows.Close()
+	}
+	for _, rt := range routes {
+		for _, g := range rt.Gateways {
+			add(g.OverlayIP)
+		}
+	}
+	if len(cands) == 0 {
+		return ""
+	}
+	for _, ip := range cands {
+		if gatewayHealth(sc, net.ID, ip) != "offline" {
+			return ip
+		}
+	}
+	// 全部离线时仍返回第一候选，避免完全无路由；NAT/配置会在网关恢复后自动重建。
+	return cands[0]
+}
+
+// gatewayHealth 返回网关健康状态：online / unknown / offline。
+// 通过 server_nodes.public_host 匹配 Agent 主机，再读取 agents.status。
+func gatewayHealth(sc *svc.ServiceContext, networkID int64, gatewayIP string) string {
+	var pub string
+	q := sc.Store.Rebind(`SELECT COALESCE(public_host,'') FROM server_nodes
+		WHERE network_id = $1 AND (overlay_ip4 = $2 OR overlay_ip6 = $3) ORDER BY id LIMIT 1`)
+	if err := sc.Store.DB.QueryRow(q, networkID, gatewayIP, gatewayIP).Scan(&pub); err != nil {
+		return "unknown"
+	}
+	if strings.TrimSpace(pub) == "" {
+		return tunnelIPHealth(sc, gatewayIP)
+	}
+	return publicHostHealth(sc, pub)
+}
+
+// tunnelIPHealth 在缺少 public_host 时，用 Agent 上报的 overlay 地址判断网关健康。
+func tunnelIPHealth(sc *svc.ServiceContext, gatewayIP string) string {
+	var status string
+	q := sc.Store.Rebind(`SELECT COALESCE(a.status,'') FROM hosts h
+		LEFT JOIN agents a ON a.agent_id = h.agent_id
+		WHERE h.tunnel_ip = $1 AND COALESCE(h.agent_id,'') <> '' ORDER BY h.id LIMIT 1`)
+	if err := sc.Store.DB.QueryRow(q, gatewayIP).Scan(&status); err != nil {
+		return "unknown"
+	}
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "online":
+		return "online"
+	case "offline", "error", "crash_loop", "restarting":
+		return "offline"
+	default:
+		return "unknown"
+	}
+}
+
+// publicHostHealth 按主机 IP/hostname 匹配 Agent 并返回健康状态。
+func publicHostHealth(sc *svc.ServiceContext, publicHost string) string {
+	host := strings.TrimSpace(publicHost)
+	if h, _, err := stdnet.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if host == "" {
+		return "unknown"
+	}
+	var status string
+	q := sc.Store.Rebind(`SELECT COALESCE(a.status,'') FROM hosts h
+		LEFT JOIN agents a ON a.agent_id = h.agent_id
+		WHERE (h.ip = $1 OR h.hostname = $2 OR h.exit_ip = $3) AND COALESCE(h.agent_id,'') <> ''
+		ORDER BY h.id LIMIT 1`)
+	if err := sc.Store.DB.QueryRow(q, host, host, host).Scan(&status); err != nil {
+		return "unknown"
+	}
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "online":
+		return "online"
+	case "offline", "error", "crash_loop", "restarting":
+		return "offline"
+	default:
+		return "unknown"
+	}
 }
 
 func enrollCommand(baseURL, token, name string) string {

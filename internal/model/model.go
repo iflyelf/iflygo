@@ -19,7 +19,11 @@ type Network struct {
 	MTU      int    `json:"mtu"`
 	// DNSGateway 显式 DNS 网关（overlay IP）；空表示自动选择。
 	DNSGateway string `json:"dns_gateway"`
-	CreatedAt  string `json:"created_at"`
+	// EgressMode 出口模式：off / dns / full；空表示按全局 DNS 路由开关自动推断。
+	EgressMode string `json:"egress_mode"`
+	// EgressExclude 全量出口排除网段（逗号分隔 CIDR）；空使用内置策略。
+	EgressExclude string `json:"egress_exclude"`
+	CreatedAt     string `json:"created_at"`
 }
 
 // CA 证书颁发机构（每个网络一个）。
@@ -103,6 +107,8 @@ type ClientNode struct {
 	UpdatedAt string `json:"updated_at"`
 	// ClientSettings 每主机客户端参数覆盖（JSON）。
 	ClientSettings ClientOverride `json:"client_settings"`
+	// Health 计算字段：网关节点健康状态（online/unknown/offline）。
+	Health string `json:"health,omitempty"`
 }
 
 // Bundle 客户端配置包（证书 + 配置）。
@@ -130,6 +136,8 @@ type Bundle struct {
 	ConfigRev int64          `json:"config_rev"`
 	Routes    []RouteSpec    `json:"routes,omitempty"`
 	Client    ClientSettings `json:"client,omitempty"`
+	// BootstrapScript 网关节点部署脚本（NAT 等）；仅 ServerNodeBundle 返回。
+	BootstrapScript string `json:"bootstrap_script,omitempty"`
 }
 
 // ServerNode 服务端节点（lighthouse / relay / edge / gateway）。
@@ -144,6 +152,8 @@ type ServerNode struct {
 	PublicHost string `json:"public_host"`
 	PublicPort int    `json:"public_port"`
 	CreatedAt  string `json:"created_at"`
+	// Health 计算字段：网关节点健康状态（online/unknown/offline）。
+	Health string `json:"health,omitempty"`
 }
 
 // NebulaSettings 网络级 Nebula 选项（存于 networks.nebula，JSON）。

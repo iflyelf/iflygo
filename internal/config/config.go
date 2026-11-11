@@ -58,6 +58,10 @@ type ClientConfig struct {
 	// DNSRoute 为公网 DNS 自动添加主机路由（/32 或 /128），经 overlay 网关转发；
 	// 需在网关节点执行 NAT 策略（页面「客户端下发 → 生成 NAT 脚本」）。
 	DNSRoute bool `yaml:"dns_route"`
+	// AutoNAT 自动为健康网关应用 DNS/全量出口 NAT（需 Agent 与命令执行权限）。
+	AutoNAT bool `yaml:"auto_nat"`
+	// EgressExclude 全量出口额外排除网段（逗号分隔 CIDR）。
+	EgressExclude string `yaml:"egress_exclude"`
 }
 
 // TCPRelayConfig TCP 中继服务端配置。
@@ -359,7 +363,7 @@ func Default() *Config {
 		},
 		Auth:     AuthConfig{Provider: "builtin", AdminUsername: "admin"},
 		TCPRelay: TCPRelayConfig{Mode: "auto"},
-		Client:   ClientConfig{MTU: 1280, Interval: "30s"},
+		Client:   ClientConfig{MTU: 1280, Interval: "30s", AutoNAT: true},
 		Consul:   ConsulConfig{Timeout: 10, Concurrency: 16, CleanupMissing: true},
 		Redis: RedisConfig{
 			Enabled: false, Mode: "single", Host: "localhost", Port: 6379,
@@ -465,6 +469,8 @@ func (c *Config) applyEnv() {
 	setInt(&c.Client.MTU, "CLIENT_MTU")
 	setStr(&c.Client.Interval, "CLIENT_INTERVAL")
 	setBool(&c.Client.DNSRoute, "CLIENT_DNS_ROUTE")
+	setBool(&c.Client.AutoNAT, "CLIENT_AUTO_NAT")
+	setStr(&c.Client.EgressExclude, "CLIENT_EGRESS_EXCLUDE")
 	setStr(&c.TCPRelay.Mode, "TCP_RELAY_MODE")
 	setStr(&c.TCPRelay.Listen, "TCP_RELAY_LISTEN")
 	setStr(&c.TCPRelay.Advertise, "TCP_RELAY_ADVERTISE")
