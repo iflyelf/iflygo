@@ -8,6 +8,7 @@ package rbac
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -32,6 +33,9 @@ func notAdminCond() string {
 	}
 	return store.SQL(`NOT (COALESCE(roles, ARRAY['user']::text[]) && ARRAY['admin','superadmin']::text[])`)
 }
+
+// errUserNotFound 本地授权记录不存在（Casdoor 用户尚未分配过租户/角色）。
+var errUserNotFound = errors.New("用户不存在")
 
 // validRoles 允许分配的角色白名单。
 // superadmin 具备跨租户权限，必须显式列出，防止任意字符串被写入 roles。
@@ -159,10 +163,88 @@ func (s *Service) Create(ctx context.Context, actor *auth.User, req CreateReques
 	return id, nil
 }
 
-// SetTenantRoles 调整用户的租户与角色。
+// EnableSSOUser 为已存在于 Casdoor/FlyIAM 的用户创建本地授权记录。
+//
+// 与 Create 的区别：不设置本地密码（password_hash=”），账号只用于 SSO 登录；
+// 已存在时不覆盖其租户/角色（幂等）。用于用户管理页「开通本地账号」。
+func (s *Service) EnableSSOUser(ctx context.Context, actor *auth.User, username, display string, tenantID int64, roles []string) (int64, error) {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return 0, fmt.Errorf("用户名为空")
+	}
+	if len(username) > 100 {
+		return 0, fmt.Errorf("用户名过长（最多 100 字符）")
+	}
+	norm, err := normalizeRoles(roles)
+	if err != nil {
+		return 0, err
+	}
+	target, err := s.resolveTarget(actor, tenantID, norm)
+	if err != nil {
+		return 0, err
+	}
+	isAdmin := containsRole(norm, auth.RoleAdmin) || containsRole(norm, auth.RoleSuperAdmin)
+	if len(display) > 200 {
+		display = display[:200]
+	}
+
+	var id int64
+	err = s.db.QueryRowContext(ctx, `
+		INSERT INTO local_users (username, password_hash, display_name, is_admin, tenant_id, roles)
+		VALUES ($1,'',$2,$3,$4,$5)
+		ON CONFLICT (username) DO NOTHING
+		RETURNING id`, username, display, isAdmin, target, store.Array(norm)).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		// 已存在：直接返回已有 ID，绝不覆盖密码/角色/租户。
+		if e := s.db.QueryRowContext(ctx,
+			`SELECT id FROM local_users WHERE username=$1`, username).Scan(&id); e != nil {
+			return 0, e
+		}
+		return id, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// ensureLocalUser 确保本地授权记录存在（Casdoor 用户首次分配角色/禁用时隐式创建）。
+//
+// 与旧「开通本地账号」的区别：不再需要单独的显式开通步骤，管理员在用户管理页
+// 直接分配角色/租户或禁用时自动建档，默认角色 user、租户为操作者所在租户。
+func (s *Service) ensureLocalUser(ctx context.Context, actor *auth.User, username string) error {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return fmt.Errorf("用户名为空")
+	}
+	var exists bool
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM local_users WHERE username=$1)`, username).Scan(&exists); err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	tenant := int64(1)
+	if actor != nil && actor.TenantID > 0 {
+		tenant = actor.TenantID
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO local_users (username, password_hash, display_name, is_admin, tenant_id, roles)
+		VALUES ($1,'','',FALSE,$2,$3)
+		ON CONFLICT (username) DO NOTHING`, username, tenant, store.Array([]string{"user"})); err != nil {
+		return fmt.Errorf("创建本地授权记录失败: %w", err)
+	}
+	return nil
+}
+
+// SetTenantRoles 调整用户的租户与角色（记录不存在时隐式创建）。
 func (s *Service) SetTenantRoles(ctx context.Context, actor *auth.User, username string, tenantID int64, roles []string) error {
 	norm, err := normalizeRoles(roles)
 	if err != nil {
+		return err
+	}
+	if err := s.ensureLocalUser(ctx, actor, username); err != nil {
 		return err
 	}
 	targetTenant, targetRoles, err := s.targetAccount(ctx, username)
@@ -212,7 +294,7 @@ func (s *Service) targetAccount(ctx context.Context, username string) (int64, []
 		store.SQL(`SELECT COALESCE(tenant_id,1), COALESCE(roles, ARRAY['user']::text[])
 		   FROM local_users WHERE username=$1`), username).Scan(&tenantID, &roles)
 	if err == sql.ErrNoRows {
-		return 0, nil, fmt.Errorf("用户不存在")
+		return 0, nil, errUserNotFound
 	}
 	if err != nil {
 		return 0, nil, err
@@ -229,6 +311,9 @@ func hasAdminRole(roles []string) bool {
 func (s *Service) SetDisabled(ctx context.Context, actor *auth.User, username string, disabled bool) error {
 	if actor != nil && actor.Username == username && disabled {
 		return fmt.Errorf("不能禁用当前登录账号")
+	}
+	if err := s.ensureLocalUser(ctx, actor, username); err != nil {
+		return err
 	}
 	q := store.SQL(`UPDATE local_users SET disabled=$2, updated_at=NOW() WHERE username=$1`)
 	args := []any{username, disabled}

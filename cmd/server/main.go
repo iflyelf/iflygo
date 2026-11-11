@@ -97,6 +97,8 @@ func main() {
 	sc.StartRelaySettingsWatcher(ctx, 5*time.Second)
 	// 配置文件热加载：TCP 中继即时生效，其余变更提示需重启。
 	go watchConfigFile(ctx, *configFile, sc)
+	sc.StartUserFieldSync(ctx)
+	sc.StartHostMerge(ctx)
 
 	mux := http.NewServeMux()
 	limiters := registerRoutes(mux, sc)
@@ -256,10 +258,12 @@ func registerRoutes(mux *http.ServeMux, sc *svc.ServiceContext) []middleware.Sto
 	mux.HandleFunc("POST /api/hosts/sync", middleware.RequireAuth(auth, middleware.RequireSuperAdmin(handler.SyncHosts(sc))))
 	// 从 consul_mgr 同步（覆盖多个服务组/多套 Consul）；与直连 Consul 同步并存。
 	mux.HandleFunc("GET /api/consul-mgr/groups", middleware.RequireAuth(auth, middleware.RequireSuperAdmin(handler.ListConsulMgrGroups(sc))))
+	mux.HandleFunc("GET /api/consul-mgr/services", middleware.RequireAuth(auth, middleware.RequireSuperAdmin(handler.ListConsulMgrServices(sc))))
 	mux.HandleFunc("POST /api/hosts/sync-consul-mgr", middleware.RequireAuth(auth, middleware.RequireSuperAdmin(handler.SyncHostsFromConsulMgr(sc))))
 	mux.HandleFunc("POST /api/consul-mgr/test", middleware.RequireAuth(auth, middleware.RequireSuperAdmin(handler.TestConsulMgr(sc))))
 	mux.HandleFunc("PUT /api/hosts/{id}", middleware.RequireAuth(auth, middleware.RequireAdmin(handler.HostUpdate(sc))))
 	mux.HandleFunc("DELETE /api/hosts/{id}", middleware.RequireAuth(auth, middleware.RequireAdmin(handler.HostDelete(sc))))
+	mux.HandleFunc("POST /api/hosts", middleware.RequireAuth(auth, middleware.RequireAdmin(handler.HostCreate(sc))))
 	mux.HandleFunc("POST /api/hosts/batch-delete", middleware.RequireAuth(auth, middleware.RequireAdmin(handler.HostBatchDelete(sc))))
 	mux.HandleFunc("POST /api/hosts/batch-update", middleware.RequireAuth(auth, middleware.RequireAdmin(handler.HostBatchUpdate(sc))))
 	mux.HandleFunc("GET /api/hosts/export", middleware.RequireAuth(auth, middleware.RequireAdmin(handler.HostExportCSV(sc))))
@@ -385,6 +389,12 @@ func registerRoutes(mux *http.ServeMux, sc *svc.ServiceContext) []middleware.Sto
 	mux.HandleFunc("POST /api/cache/test", middleware.RequireAuth(auth, middleware.RequireSuperAdmin(handler.CacheTest(sc))))
 	mux.HandleFunc("POST /api/cache/flush", middleware.RequireAuth(auth, middleware.RequireSuperAdmin(handler.CacheFlush(sc))))
 	mux.HandleFunc("GET /api/users", middleware.RequireAuth(auth, middleware.RequireAdmin(handler.UserList(sc))))
+	mux.HandleFunc("GET /api/users/directory", middleware.RequireAuth(auth, middleware.RequireAdmin(handler.UserDirectory(sc))))
+	// Casdoor 用户写操作（主数据在 Casdoor；扩展字段只读，不回写 properties）
+	mux.HandleFunc("POST /api/casdoor/users", middleware.RequireAuth(auth, middleware.RequireAdmin(handler.UserCasdoorCreate(sc))))
+	mux.HandleFunc("PUT /api/casdoor/users/{username}", middleware.RequireAuth(auth, middleware.RequireAdmin(handler.UserCasdoorUpdate(sc))))
+	mux.HandleFunc("POST /api/casdoor/users/{username}/reset-password", middleware.RequireAuth(auth, middleware.RequireAdmin(handler.UserCasdoorResetPassword(sc))))
+	mux.HandleFunc("POST /api/casdoor/users/{username}/admin", middleware.RequireAuth(auth, middleware.RequireAdmin(handler.UserCasdoorSetAdmin(sc))))
 	mux.HandleFunc("POST /api/users", middleware.RequireAuth(auth, middleware.RequireAdmin(handler.UserCreate(sc))))
 	mux.HandleFunc("PUT /api/users/{username}/tenant-roles", middleware.RequireAuth(auth, middleware.RequireAdmin(handler.UserSetTenantRoles(sc))))
 	mux.HandleFunc("PUT /api/users/{username}/disabled", middleware.RequireAuth(auth, middleware.RequireAdmin(handler.UserSetDisabled(sc))))
@@ -412,6 +422,11 @@ func registerRoutes(mux *http.ServeMux, sc *svc.ServiceContext) []middleware.Sto
 	// FlyIAM 集成：连通性测试 + 用户字段定义同步
 	mux.HandleFunc("POST /api/flyiam/test", middleware.RequireAuth(auth, middleware.RequireAdmin(handler.TestFlyIAM(sc))))
 	mux.HandleFunc("POST /api/flyiam/sync-user-fields", middleware.RequireAuth(auth, middleware.RequireSuperAdmin(handler.SyncUserFieldsFromFlyIAM(sc))))
+	mux.HandleFunc("GET /api/flyiam/sync-user-fields/config", middleware.RequireAuth(auth, middleware.RequireAdmin(handler.GetUserFieldSyncConfig(sc))))
+	mux.HandleFunc("PUT /api/flyiam/sync-user-fields/config", middleware.RequireAuth(auth, middleware.RequireSuperAdmin(handler.UpdateUserFieldSyncConfig(sc))))
+	mux.HandleFunc("GET /api/flyiam/sync-user-fields/progress", middleware.RequireAuth(auth, middleware.RequireAdmin(handler.UserFieldSyncProgress(sc))))
+	mux.HandleFunc("GET /api/flyiam/sync-user-fields/logs", middleware.RequireAuth(auth, middleware.RequireAdmin(handler.UserFieldSyncLogs(sc))))
+	mux.HandleFunc("DELETE /api/flyiam/sync-user-fields/logs", middleware.RequireAuth(auth, middleware.RequireSuperAdmin(handler.DeleteUserFieldSyncLogs(sc))))
 	mux.HandleFunc("POST /api/flyiam/sync-departments", middleware.RequireAuth(auth, middleware.RequireAdmin(handler.SyncDepartmentsFromFlyIAM(sc))))
 	mux.HandleFunc("GET /api/flyiam/users", middleware.RequireAuth(auth, middleware.RequireAdmin(handler.FlyIAMUsers(sc))))
 	mux.HandleFunc("POST /api/flyiam/users/{username}/provision", middleware.RequireAuth(auth, middleware.RequireAdmin(handler.FlyIAMProvisionLocalUser(sc))))

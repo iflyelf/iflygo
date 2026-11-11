@@ -27,9 +27,11 @@ import (
 	"github.com/iflyelf/iflygo/internal/logic/aitoken"
 	"github.com/iflyelf/iflygo/internal/logic/artifact"
 	"github.com/iflyelf/iflygo/internal/logic/component"
+	"github.com/iflyelf/iflygo/internal/logic/hostmerge"
 	"github.com/iflyelf/iflygo/internal/logic/org"
 	synclogic "github.com/iflyelf/iflygo/internal/logic/sync"
 	"github.com/iflyelf/iflygo/internal/logic/task"
+	"github.com/iflyelf/iflygo/internal/logic/userfieldsync"
 	"github.com/iflyelf/iflygo/internal/maintenance"
 	"github.com/iflyelf/iflygo/internal/metrics"
 	"github.com/iflyelf/iflygo/internal/migrate"
@@ -67,6 +69,8 @@ type ServiceContext struct {
 	Liaison    *liaison.Service // 远程管理套件（Web SSH/文件/DB/LLM/Casbin）
 	// Relay TCP 中继运行时（可随页面/配置文件热重建，端口/模式随心跳下发）。
 	Relay *RelayRuntime
+	// UserFieldSync 用户字段定义自动同步（从 FlyIAM 拉取定义；不写回）。
+	UserFieldSync *userfieldsync.Service
 	// cacheRef 可选 Redis 缓存（单点/集群/哨兵）；未启用时所有读写自动降级。
 	// 用原子指针保存，设置页保存后热替换不会与请求读取产生数据竞争。
 	cacheRef atomic.Pointer[cache.Cache]
@@ -183,22 +187,26 @@ func New(c *config.Config) *ServiceContext {
 	taskSvc.SetOwnerShareChecker(orgSvc.CanShareTasks)
 	taskSvc.SetTeamMateChecker(orgSvc.SharesTeam)
 	svc := &ServiceContext{
-		Config:        c,
-		DB:            db,
-		Store:         st,
-		IPAM:          ipam.New(st),
-		Settings:      settings,
-		Syncer:        synclogic.NewSyncer(db),
-		Component:     compRepo,
-		Artifact:      artRepo,
-		Task:          taskSvc,
-		AgentGW:       gw,
-		Metrics:       metrics.NewCollector(db),
-		Maintainer:    newMaintainer(c, db, settings),
-		RBAC:          rbac.NewService(db),
-		Audit:         audit.NewLogger(db), // 审计日志
-		AIToken:       aitoken.NewRepo(db),
-		Relay:         NewRelayRuntime(),
+		Config:     c,
+		DB:         db,
+		Store:      st,
+		IPAM:       ipam.New(st),
+		Settings:   settings,
+		Syncer:     synclogic.NewSyncer(db),
+		Component:  compRepo,
+		Artifact:   artRepo,
+		Task:       taskSvc,
+		AgentGW:    gw,
+		Metrics:    metrics.NewCollector(db),
+		Maintainer: newMaintainer(c, db, settings),
+		RBAC:       rbac.NewService(db),
+		Audit:      audit.NewLogger(db), // 审计日志
+		AIToken:    aitoken.NewRepo(db),
+		Relay:      NewRelayRuntime(),
+		UserFieldSync: userfieldsync.New(db, func() *config.Config {
+			snap := settings.Snapshot()
+			return &snap
+		}),
 		dbMaxOpenBase: c.Database.MaxOpenConns,
 		dbMaxIdleBase: c.Database.MaxIdleConns,
 	}
@@ -708,6 +716,21 @@ func buildAuth(c *config.Config, db *sql.DB) auth.Provider {
 		log.Println("⚠️ SESSION_SECRET 未设置或过短（<16 字节）：多副本会话/Casdoor 登录不互通，重启后需重新登录；生产请设置所有副本一致的 32+ 字节密钥")
 	}
 	if c.Auth.Provider == "casdoor" {
+		// 缺任何一项都会让 SSO 无法完成：登录页能跳出去，但回调换 token 必然失败。
+		// 这里显式告警，避免只剩「SSO 登录失败」一句难以定位。
+		missing := make([]string, 0, 3)
+		if strings.TrimSpace(c.Casdoor.Endpoint) == "" {
+			missing = append(missing, "casdoor.endpoint")
+		}
+		if strings.TrimSpace(c.Casdoor.ClientId) == "" {
+			missing = append(missing, "casdoor.client_id")
+		}
+		if strings.TrimSpace(c.Casdoor.ClientSecret) == "" {
+			missing = append(missing, "casdoor.client_secret")
+		}
+		if len(missing) > 0 {
+			log.Printf("❌ casdoor 配置不完整（缺少 %s）：SSO 登录将无法完成，请到「设置 → Casdoor」补齐后重启", strings.Join(missing, ", "))
+		}
 		redirect := c.Casdoor.RedirectURI
 		if redirect == "" && c.Server.ExternalURL != "" {
 			// 未显式配置时按对外地址推导，减少误配导致「无人能登录」。
@@ -727,6 +750,9 @@ func buildAuth(c *config.Config, db *sql.DB) auth.Provider {
 			RedirectURI:    redirect,
 			SessionSecret:  c.Server.SessionSecret,
 			CookieSecure:   cookieSecure(c),
+			// SSO 用户与本地账号合并：租户/角色/禁用状态以 local_users 为准，
+			// 首次登录自动建档（否则用户管理页只有内置 admin，且 superadmin 菜单丢失）。
+			LocalUsers: auth.NewLocalDirectory(db).Resolve,
 		})
 	}
 	// 默认 builtin
@@ -802,4 +828,30 @@ func initArtifactRepo(db *sql.DB, cfg *config.ArtifactConfig) *artifact.Repo {
 		log.Printf("⚠️ 未知 storage_type=%q，使用 local", stype)
 		return artifact.NewRepo(db, cfg.Dir)
 	}
+}
+
+// StartUserFieldSync 启动用户字段定义的自动同步调度（对齐 consul_mgr）。
+func (s *ServiceContext) StartUserFieldSync(ctx context.Context) {
+	if s.UserFieldSync != nil {
+		s.UserFieldSync.Start(ctx)
+	}
+}
+
+// StartHostMerge 启动后自动合并一次重复主机（按隧道 IP / 出口 IP+主机名）。
+// 后续 Agent 注册、Consul/consul_mgr 同步也会触发自动合并。
+func (s *ServiceContext) StartHostMerge(ctx context.Context) {
+	if s == nil || s.DB == nil {
+		return
+	}
+	go func() {
+		time.Sleep(10 * time.Second)
+		n, err := hostmerge.AutoMergeAll(ctx, s.DB)
+		if err != nil {
+			log.Printf("⚠️ 自动合并重复主机失败: %v", err)
+			return
+		}
+		if n > 0 {
+			log.Printf("🧹 启动时自动合并重复主机：%d 台", n)
+		}
+	}()
 }

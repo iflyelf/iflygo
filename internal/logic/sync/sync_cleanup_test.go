@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 
 	"github.com/iflyelf/iflygo/internal/migrate"
 )
@@ -30,6 +30,15 @@ func TestCleanupMissingHosts(t *testing.T) {
 	}
 	ctx := context.Background()
 	syncer := NewSyncer(db)
+	// 破坏性测试保护：生产库若已有 source=consul 主机，直接跳过，
+	// 避免 cleanupMissingHosts 清理到真实数据。
+	var existingConsul int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM hosts WHERE source='consul'`).Scan(&existingConsul); err != nil {
+		t.Fatalf("检查现有主机失败: %v", err)
+	}
+	if existingConsul > 0 {
+		t.Skip("数据库中已有 source=consul 主机，跳过破坏性清理测试")
+	}
 	prefix := fmt.Sprintf("cleanup-test-%d", time.Now().UnixNano())
 	now := time.Now()
 	old := now.Add(-time.Hour)
@@ -58,6 +67,10 @@ func TestCleanupMissingHosts(t *testing.T) {
 	manualID := insertHost("manual", "manual", "", &old)
 	taskHostID := insertHost("task", "consul", "", &old)
 	commandHostID := insertHost("command", "consul", "", &old)
+	onlineID := insertHost("online", "consul", "", &old)
+	if _, err := db.Exec(`UPDATE hosts SET agent_status='online' WHERE id=$1`, onlineID); err != nil {
+		t.Fatalf("标记在线主机失败: %v", err)
+	}
 
 	// 有 agents 记录（即使 hosts.agent_id 为空）也应保留。
 	if _, err := db.Exec(`
@@ -128,6 +141,7 @@ func TestCleanupMissingHosts(t *testing.T) {
 	check(manualID, 1, "手工主机")
 	check(taskHostID, 1, "有未完成任务的主机")
 	check(commandHostID, 1, "有未完成指令的主机")
+	check(onlineID, 1, "在线主机")
 }
 
 // TestCleanupMissingMgrHosts 验证 consul_mgr 清理只影响当前服务组。
@@ -147,6 +161,16 @@ func TestCleanupMissingMgrHosts(t *testing.T) {
 	ctx := context.Background()
 	syncer := NewSyncer(db)
 	prefix := fmt.Sprintf("mgr-cleanup-%d", time.Now().UnixNano())
+	// 使用随机高位 group_id，避免与生产服务组（1、2...）冲突。
+	groupID := int64(900000000 + time.Now().UnixNano()%100000000)
+	groupStr := fmt.Sprintf("%d", groupID)
+	var existing int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM hosts WHERE source='consul_mgr' AND source_group=$1`, groupStr).Scan(&existing); err != nil {
+		t.Fatalf("检查现有主机失败: %v", err)
+	}
+	if existing > 0 {
+		t.Skip("测试服务组已有主机，跳过破坏性清理测试")
+	}
 	now := time.Now()
 	old := now.Add(-time.Hour)
 	insert := func(tag, source, group string, synced time.Time) int64 {
@@ -160,13 +184,17 @@ func TestCleanupMissingMgrHosts(t *testing.T) {
 		}
 		return id
 	}
-	g1Stale := insert("g1-stale", "consul_mgr", "1", old)
-	g1Fresh := insert("g1-fresh", "consul_mgr", "1", now)
-	g2Stale := insert("g2-stale", "consul_mgr", "2", old)
+	g1Stale := insert("g1-stale", "consul_mgr", groupStr, old)
+	g1Fresh := insert("g1-fresh", "consul_mgr", groupStr, now)
+	g2Stale := insert("g2-stale", "consul_mgr", groupStr+"-other", old)
 	manual := insert("manual", "manual", "", old)
+	g1Online := insert("g1-online", "consul_mgr", groupStr, old)
+	if _, err := db.Exec(`UPDATE hosts SET agent_status='online' WHERE id=$1`, g1Online); err != nil {
+		t.Fatalf("标记在线主机失败: %v", err)
+	}
 	t.Cleanup(func() { db.Exec(`DELETE FROM hosts WHERE ip LIKE $1`, prefix+"%") })
 
-	deleted, err := syncer.cleanupMissingMgrHosts(ctx, 1, now)
+	deleted, err := syncer.cleanupMissingMgrHosts(ctx, groupID, now)
 	if err != nil {
 		t.Fatalf("清理失败: %v", err)
 	}
@@ -181,7 +209,82 @@ func TestCleanupMissingMgrHosts(t *testing.T) {
 	if exists(g1Stale) {
 		t.Fatal("当前服务组过期主机应被删除")
 	}
-	for name, id := range map[string]int64{"fresh": g1Fresh, "other-group": g2Stale, "manual": manual} {
+	for name, id := range map[string]int64{"fresh": g1Fresh, "other-group": g2Stale, "manual": manual, "online": g1Online} {
+		if !exists(id) {
+			t.Fatalf("%s 主机不应被清理", name)
+		}
+	}
+}
+
+// TestCleanupMissingMgrServiceHosts 验证按服务名称清理只影响该服务范围。
+func TestCleanupMissingMgrServiceHosts(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		t.Skip("未设置 DATABASE_URL，跳过 consul_mgr 按服务清理集成测试")
+	}
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		t.Fatalf("连接数据库失败: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := migrate.AutoMigrate(db, migrate.DialectPostgres); err != nil {
+		t.Fatalf("迁移失败: %v", err)
+	}
+	ctx := context.Background()
+	syncer := NewSyncer(db)
+	prefix := fmt.Sprintf("mgr-svc-cleanup-%d", time.Now().UnixNano())
+	groupID := int64(900000000 + time.Now().UnixNano()%100000000)
+	groupStr := fmt.Sprintf("%d", groupID)
+	var existing int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM hosts WHERE source='consul_mgr' AND source_group=$1`, groupStr).Scan(&existing); err != nil {
+		t.Fatalf("检查现有主机失败: %v", err)
+	}
+	if existing > 0 {
+		t.Skip("测试服务组已有主机，跳过破坏性清理测试")
+	}
+	now := time.Now()
+	old := now.Add(-time.Hour)
+	insert := func(tag, group string, services []string, synced time.Time) int64 {
+		t.Helper()
+		var id int64
+		if err := db.QueryRow(`
+			INSERT INTO hosts (ip, hostname, tenant_id, source, source_group, source_services, last_synced_at)
+			VALUES ($1, $2, 1, 'consul_mgr', $3, $4, $5) RETURNING id`,
+			prefix+"-"+tag, tag, group, pq.Array(services), synced).Scan(&id); err != nil {
+			t.Fatalf("插入主机 %s 失败: %v", tag, err)
+		}
+		return id
+	}
+	t.Cleanup(func() { db.Exec(`DELETE FROM hosts WHERE ip LIKE $1`, prefix+"%") })
+	svcStale := insert("svc-stale", groupStr, []string{"selfnode_exporter"}, old)
+	svcFresh := insert("svc-fresh", groupStr, []string{"selfnode_exporter"}, now)
+	otherSvc := insert("other-svc", groupStr, []string{"snmp_exporter"}, old)
+	otherGroup := insert("other-group", groupStr+"-other", []string{"selfnode_exporter"}, old)
+	legacy := insert("legacy", groupStr, []string{}, old)
+	svcOnline := insert("svc-online", groupStr, []string{"selfnode_exporter"}, old)
+	if _, err := db.Exec(`UPDATE hosts SET agent_status='online' WHERE id=$1`, svcOnline); err != nil {
+		t.Fatalf("标记在线主机失败: %v", err)
+	}
+
+	deleted, err := syncer.cleanupMissingMgrServiceHosts(ctx, groupID, "selfnode_exporter", now)
+	if err != nil {
+		t.Fatalf("清理失败: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("应只清理该服务范围内 1 台，实际 %d", deleted)
+	}
+	exists := func(id int64) bool {
+		var n int
+		db.QueryRow(`SELECT COUNT(1) FROM hosts WHERE id=$1`, id).Scan(&n)
+		return n > 0
+	}
+	if exists(svcStale) {
+		t.Fatal("该服务范围内过期主机应被删除")
+	}
+	for name, id := range map[string]int64{
+		"fresh": svcFresh, "other-service": otherSvc,
+		"other-group": otherGroup, "legacy-no-services": legacy, "online": svcOnline,
+	} {
 		if !exists(id) {
 			t.Fatalf("%s 主机不应被清理", name)
 		}

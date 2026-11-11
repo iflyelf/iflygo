@@ -20,6 +20,7 @@ import (
 
 	"github.com/iflyelf/iflygo/internal/auth"
 	"github.com/iflyelf/iflygo/internal/logic/agentgw"
+	"github.com/iflyelf/iflygo/internal/logic/hostmerge"
 	"github.com/iflyelf/iflygo/internal/middleware"
 	"github.com/iflyelf/iflygo/internal/pkg/audit"
 	"github.com/iflyelf/iflygo/internal/pkg/hostnet"
@@ -49,6 +50,8 @@ func AgentRegister(s *svc.ServiceContext) http.HandlerFunc {
 		// 安全：绝不信任请求体中的 req.IP。
 		// 否则攻击者可传入他人 IP，借 hosts 表 ON CONFLICT(ip) DO UPDATE
 		// 改写该主机的 agent_id，从而劫持并接收本应发往该主机的升级指令。
+		// 出口 IP（req.ExitIP）仅用于匹配存量主机（多网卡身份），
+		// 且需通过来源 IP / 主机名交叉校验；真正的认证仍是一次性 enroll token。
 		ip := clientIP(s, r)
 
 		snap := s.ConfigSnapshot()
@@ -92,6 +95,11 @@ func AgentRegister(s *svc.ServiceContext) http.HandlerFunc {
 		}
 		defer tx.Rollback()
 
+		// 出口 IP 由 Agent 按路由探测上报。多网卡主机以出口 IP 作为匹配存量
+		// 主机的优先身份，避免不同网卡/路由导致来源 IP 变化时重复建档；
+		// 来源 IP 与主机名仅作为兜底与防误合并校验。
+		exitIP := hostnet.NormalizeExitIP(req.ExitIP)
+
 		tenantID := int64(1)
 		// 同一 IP 的注册串行化：避免并发重复注册为同一主机写入多个 Agent。
 		// 事务级 advisory lock 在 commit/rollback 时自动释放。
@@ -99,6 +107,14 @@ func AgentRegister(s *svc.ServiceContext) http.HandlerFunc {
 			auditAnon(s, r, audit.ActionAgentRegister, hostname, "agent", ip, err)
 			httpx.Fail(w, http.StatusInternalServerError, "注册失败")
 			return
+		}
+		// 出口 IP 也可能被用来匹配存量主机，同样串行化，避免并发重复建档。
+		if exitIP != "" && exitIP != ip {
+			if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, exitIP); err != nil {
+				auditAnon(s, r, audit.ActionAgentRegister, hostname, "agent", ip, err)
+				httpx.Fail(w, http.StatusInternalServerError, "注册失败")
+				return
+			}
 		}
 		// 校验并消费一次性/自动化注册令牌（默认要求；内网可信可关闭）。
 		if snap.Agent.RequireEnrollToken {
@@ -112,38 +128,244 @@ func AgentRegister(s *svc.ServiceContext) http.HandlerFunc {
 			tenantID = tid
 		}
 
-		// 出口 IP 由 Agent 按路由探测上报；多网卡主机据此展示真实出口地址。
-		// 只做格式校验，不参与主机身份（身份仍是服务端观察到的来源 IP）。
-		exitIP := hostnet.NormalizeExitIP(req.ExitIP)
+		// 查找现有主机：手工隧道 IP 优先（管理员显式身份），其次出口 IP
+		// （多网卡场景下的稳定地址），再其次来源 IP，最后主机名
+		// （仅未绑定 Agent 的唯一主机）。命中后更新原主机（保留原 ip），
+		// 而不是新建重复行。
+		var hostID, hostTenant int64
 
-		// upsert 主机拿到 host_id；冲突且租户不同则不返回行。
-		var hostID int64
-		err = tx.QueryRowContext(ctx, store.SQL(`INSERT INTO hosts (ip, hostname, os_family, os_version, arch, kernel, agent_id, agent_version,
-				agent_build_version, agent_build_hash, agent_build_variant, exit_ip, agent_status, supervisor, source, last_seen, tenant_id)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'online',$13,'agent',NOW(),$14)
-			ON CONFLICT (ip) DO UPDATE SET hostname=EXCLUDED.hostname, os_family=COALESCE(NULLIF(EXCLUDED.os_family,''),hosts.os_family),
-				arch=COALESCE(NULLIF(EXCLUDED.arch,''),hosts.arch), agent_id=EXCLUDED.agent_id,
-				agent_version=EXCLUDED.agent_version,
-				agent_build_version=EXCLUDED.agent_build_version,
-				agent_build_hash=EXCLUDED.agent_build_hash,
-				agent_build_variant=EXCLUDED.agent_build_variant,
-				exit_ip=CASE WHEN EXCLUDED.exit_ip<>'' THEN EXCLUDED.exit_ip ELSE hosts.exit_ip END,
-				agent_status='online', supervisor=EXCLUDED.supervisor,
-				source='agent', last_seen=NOW()
-			WHERE hosts.tenant_id = EXCLUDED.tenant_id
-			RETURNING id`),
-			ip, hostname, osName, osVersion, arch, kernel, agentID, agentVersion,
-			buildVersion, buildHash, buildVariant, exitIP, supervisor, tenantID).Scan(&hostID)
-		if err == sql.ErrNoRows {
-			auditAnon(s, r, audit.ActionAgentRegister, hostname, "agent", ip,
-				fmt.Errorf("IP 已属于其他租户"))
-			httpx.Fail(w, http.StatusConflict, "该 IP 已属于其他租户，拒绝注册")
-			return
+		// 0) 手工隧道 IP 优先：管理员显式填写的 tunnel_ip 是强身份，
+		//    来源 IP 或出口 IP 命中它时直接绑定该主机（保留手工值）。
+		if ip != "" || exitIP != "" {
+			rows, qerr := tx.QueryContext(ctx, store.SQL(`
+				SELECT id, tenant_id, COALESCE(hostname,''), (tunnel_ip=$1) AS exact
+				FROM hosts
+				WHERE tunnel_ip <> ''
+				  AND (tunnel_ip=$1 OR ($2 <> '' AND tunnel_ip=$2))
+				ORDER BY exact DESC, id
+				FOR UPDATE`), ip, exitIP)
+			if qerr != nil {
+				auditAnon(s, r, audit.ActionAgentRegister, hostname, "agent", ip, qerr)
+				httpx.Fail(w, http.StatusInternalServerError, "注册失败")
+				return
+			}
+			var ids, tenants []int64
+			var candHostnames []string
+			for rows.Next() {
+				var id, tenant int64
+				var hn string
+				var isExact bool
+				if scanErr := rows.Scan(&id, &tenant, &hn, &isExact); scanErr != nil {
+					rows.Close()
+					auditAnon(s, r, audit.ActionAgentRegister, hostname, "agent", ip, scanErr)
+					httpx.Fail(w, http.StatusInternalServerError, "注册失败")
+					return
+				}
+				ids = append(ids, id)
+				tenants = append(tenants, tenant)
+				candHostnames = append(candHostnames, hn)
+				if isExact {
+					hostID, hostTenant = id, tenant
+				}
+			}
+			rows.Close()
+			if rowsErr := rows.Err(); rowsErr != nil {
+				auditAnon(s, r, audit.ActionAgentRegister, hostname, "agent", ip, rowsErr)
+				httpx.Fail(w, http.StatusInternalServerError, "注册失败")
+				return
+			}
+			if hostID == 0 && len(ids) == 1 {
+				hostID, hostTenant = ids[0], tenants[0]
+			}
+			if hostID == 0 && len(ids) > 1 {
+				// 隧道 IP 是唯一地址：自动合并重复记录后继续注册。
+				target, tenant, mergeErr := mergeRegisterCandidates(ctx, tx, ids, exitIP)
+				if mergeErr != nil {
+					auditAnon(s, r, audit.ActionAgentRegister, hostname, "agent", ip, mergeErr)
+					httpx.Fail(w, http.StatusInternalServerError, "合并重复主机失败")
+					return
+				}
+				hostID, hostTenant = target, tenant
+			}
+			_ = candHostnames
 		}
-		if err != nil {
-			auditAnon(s, r, audit.ActionAgentRegister, hostname, "agent", ip, err)
-			httpx.Fail(w, http.StatusInternalServerError, "注册失败")
-			return
+
+		// 1) 出口 IP 优先。
+		if hostID == 0 && exitIP != "" {
+			rows, qerr := tx.QueryContext(ctx, store.SQL(`
+				SELECT id, tenant_id, COALESCE(hostname,''), (ip=$1) AS exact
+				FROM hosts
+				WHERE (ip=$1 OR exit_ip=$1)
+				  AND (ip=$1 OR COALESCE(agent_id,'')='' OR hostname=$2)
+				ORDER BY exact DESC, id
+				FOR UPDATE`), exitIP, hostname)
+			if qerr != nil {
+				auditAnon(s, r, audit.ActionAgentRegister, hostname, "agent", ip, qerr)
+				httpx.Fail(w, http.StatusInternalServerError, "注册失败")
+				return
+			}
+			var ids, tenants []int64
+			var candHostnames []string
+			for rows.Next() {
+				var id, tenant int64
+				var hn string
+				var isExact bool
+				if scanErr := rows.Scan(&id, &tenant, &hn, &isExact); scanErr != nil {
+					rows.Close()
+					auditAnon(s, r, audit.ActionAgentRegister, hostname, "agent", ip, scanErr)
+					httpx.Fail(w, http.StatusInternalServerError, "注册失败")
+					return
+				}
+				ids = append(ids, id)
+				tenants = append(tenants, tenant)
+				candHostnames = append(candHostnames, hn)
+				if isExact {
+					hostID, hostTenant = id, tenant
+				}
+			}
+			rows.Close()
+			if rowsErr := rows.Err(); rowsErr != nil {
+				auditAnon(s, r, audit.ActionAgentRegister, hostname, "agent", ip, rowsErr)
+				httpx.Fail(w, http.StatusInternalServerError, "注册失败")
+				return
+			}
+			if hostID == 0 && len(ids) == 1 {
+				hostID, hostTenant = ids[0], tenants[0]
+			}
+			if hostID == 0 && len(ids) > 1 {
+				// 出口 IP 可能被 NAT 后的多台机器共享：只有所有候选主机名
+				// 都与本次注册一致时才自动合并，避免把不同机器合并。
+				sameHost := hostname != ""
+				for _, hn := range candHostnames {
+					if !strings.EqualFold(strings.TrimSpace(hn), hostname) {
+						sameHost = false
+						break
+					}
+				}
+				if !sameHost {
+					auditAnon(s, r, audit.ActionAgentRegister, hostname, "agent", ip,
+						fmt.Errorf("出口 IP %s 匹配到 %d 台主机且主机名不一致", exitIP, len(ids)))
+					httpx.Fail(w, http.StatusConflict,
+						"存在多台主机使用同一出口 IP 且主机名不一致，请先清理重复记录后再接入")
+					return
+				}
+				target, tenant, mergeErr := mergeRegisterCandidates(ctx, tx, ids, exitIP)
+				if mergeErr != nil {
+					auditAnon(s, r, audit.ActionAgentRegister, hostname, "agent", ip, mergeErr)
+					httpx.Fail(w, http.StatusInternalServerError, "合并重复主机失败")
+					return
+				}
+				hostID, hostTenant = target, tenant
+			}
+		}
+
+		// 2) 来源 IP 兜底（旧 Agent 未上报出口 IP，或清单里还没有出口地址）。
+		if hostID == 0 {
+			err := tx.QueryRowContext(ctx,
+				store.SQL(`SELECT id, tenant_id FROM hosts WHERE ip=$1 FOR UPDATE`), ip).
+				Scan(&hostID, &hostTenant)
+			if err != nil && err != sql.ErrNoRows {
+				auditAnon(s, r, audit.ActionAgentRegister, hostname, "agent", ip, err)
+				httpx.Fail(w, http.StatusInternalServerError, "注册失败")
+				return
+			}
+		}
+
+		// 3) 主机名兜底：仅匹配「尚未绑定 Agent」的唯一主机，避免把不同机器合并。
+		if hostID == 0 && hostname != "" {
+			rows, qerr := tx.QueryContext(ctx, store.SQL(`
+				SELECT id, tenant_id FROM hosts
+				WHERE hostname=$1 AND COALESCE(agent_id,'')=''
+				ORDER BY id LIMIT 2
+				FOR UPDATE`), hostname)
+			if qerr != nil {
+				auditAnon(s, r, audit.ActionAgentRegister, hostname, "agent", ip, qerr)
+				httpx.Fail(w, http.StatusInternalServerError, "注册失败")
+				return
+			}
+			var ids, tenants []int64
+			for rows.Next() {
+				var id, tenant int64
+				if scanErr := rows.Scan(&id, &tenant); scanErr != nil {
+					rows.Close()
+					auditAnon(s, r, audit.ActionAgentRegister, hostname, "agent", ip, scanErr)
+					httpx.Fail(w, http.StatusInternalServerError, "注册失败")
+					return
+				}
+				ids = append(ids, id)
+				tenants = append(tenants, tenant)
+			}
+			rows.Close()
+			if rowsErr := rows.Err(); rowsErr != nil {
+				auditAnon(s, r, audit.ActionAgentRegister, hostname, "agent", ip, rowsErr)
+				httpx.Fail(w, http.StatusInternalServerError, "注册失败")
+				return
+			}
+			if len(ids) == 1 {
+				hostID, hostTenant = ids[0], tenants[0]
+			}
+		}
+
+		if hostID > 0 {
+			if hostTenant != tenantID {
+				auditAnon(s, r, audit.ActionAgentRegister, hostname, "agent", ip,
+					fmt.Errorf("主机属于其他租户"))
+				httpx.Fail(w, http.StatusConflict, "该 IP 已属于其他租户，拒绝注册")
+				return
+			}
+			// 更新现有主机：保留原 ip（清单地址），只绑定 Agent 与运行信息。
+			if _, err = tx.ExecContext(ctx, store.SQL(`UPDATE hosts SET
+					hostname=$2,
+					os_family=COALESCE(NULLIF($3,''),os_family),
+					os_version=COALESCE(NULLIF($4,''),os_version),
+					arch=COALESCE(NULLIF($5,''),arch),
+					kernel=COALESCE(NULLIF($6,''),kernel),
+					agent_id=$7,
+					agent_version=$8,
+					agent_build_version=$9,
+					agent_build_hash=$10,
+					agent_build_variant=$11,
+					exit_ip=CASE WHEN $12<>'' THEN $12 ELSE exit_ip END,
+					agent_status='online',
+					supervisor=$13,
+					source='agent',
+					last_seen=NOW()
+				WHERE id=$1`),
+				hostID, hostname, osName, osVersion, arch, kernel, agentID, agentVersion,
+				buildVersion, buildHash, buildVariant, exitIP, supervisor); err != nil {
+				auditAnon(s, r, audit.ActionAgentRegister, hostname, "agent", ip, err)
+				httpx.Fail(w, http.StatusInternalServerError, "注册失败")
+				return
+			}
+		} else {
+			// 未找到现有主机：按来源 IP 新建（并发时 ON CONFLICT 兜底）。
+			err = tx.QueryRowContext(ctx, store.SQL(`INSERT INTO hosts (ip, hostname, os_family, os_version, arch, kernel, agent_id, agent_version,
+					agent_build_version, agent_build_hash, agent_build_variant, exit_ip, agent_status, supervisor, source, last_seen, tenant_id)
+				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'online',$13,'agent',NOW(),$14)
+				ON CONFLICT (ip) DO UPDATE SET hostname=EXCLUDED.hostname, os_family=COALESCE(NULLIF(EXCLUDED.os_family,''),hosts.os_family),
+					arch=COALESCE(NULLIF(EXCLUDED.arch,''),hosts.arch), agent_id=EXCLUDED.agent_id,
+					agent_version=EXCLUDED.agent_version,
+					agent_build_version=EXCLUDED.agent_build_version,
+					agent_build_hash=EXCLUDED.agent_build_hash,
+					agent_build_variant=EXCLUDED.agent_build_variant,
+					exit_ip=CASE WHEN EXCLUDED.exit_ip<>'' THEN EXCLUDED.exit_ip ELSE hosts.exit_ip END,
+					agent_status='online', supervisor=EXCLUDED.supervisor,
+					source='agent', last_seen=NOW()
+				WHERE hosts.tenant_id = EXCLUDED.tenant_id
+				RETURNING id`),
+				ip, hostname, osName, osVersion, arch, kernel, agentID, agentVersion,
+				buildVersion, buildHash, buildVariant, exitIP, supervisor, tenantID).Scan(&hostID)
+			if err == sql.ErrNoRows {
+				auditAnon(s, r, audit.ActionAgentRegister, hostname, "agent", ip,
+					fmt.Errorf("IP 已属于其他租户"))
+				httpx.Fail(w, http.StatusConflict, "该 IP 已属于其他租户，拒绝注册")
+				return
+			}
+			if err != nil {
+				auditAnon(s, r, audit.ActionAgentRegister, hostname, "agent", ip, err)
+				httpx.Fail(w, http.StatusInternalServerError, "注册失败")
+				return
+			}
 		}
 
 		// 注册即视为重新接入：撤销同 IP / 同主机上的旧 Agent 凭据，避免重装/换机后
@@ -887,4 +1109,20 @@ func AgentBinaryDownload(s *svc.ServiceContext) http.HandlerFunc {
 		w.Header().Set("Content-Disposition", "attachment; filename="+filename)
 		http.ServeContent(w, r, filename, info.ModTime(), f)
 	}
+}
+
+// mergeRegisterCandidates 在注册事务内合并重复主机，返回主记录 ID 与租户。
+func mergeRegisterCandidates(ctx context.Context, tx *sql.Tx, ids []int64, key string) (int64, int64, error) {
+	target, err := hostmerge.PickTarget(ctx, tx, ids, key)
+	if err != nil {
+		return 0, 0, err
+	}
+	if _, err := hostmerge.MergeCandidates(ctx, tx, target, ids); err != nil {
+		return 0, 0, err
+	}
+	var tenant int64
+	if err := tx.QueryRowContext(ctx, `SELECT tenant_id FROM hosts WHERE id=$1`, target).Scan(&tenant); err != nil {
+		return 0, 0, err
+	}
+	return target, tenant, nil
 }

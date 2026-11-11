@@ -11,19 +11,44 @@ import (
 	"database/sql/driver"
 	"encoding/binary"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
 
 // Lock 已持有的 advisory lock。
 type Lock struct {
-	conn *sql.Conn
-	key  int64
-	once sync.Once
+	conn  *sql.Conn
+	key   int64
+	local *sync.Mutex
+	once  sync.Once
+}
+
+// isSQLite 通过驱动类型判断（SQLite 单写者，无需 PG advisory lock）。
+func isSQLite(db *sql.DB) bool {
+	if db == nil {
+		return false
+	}
+	return strings.Contains(fmt.Sprintf("%T", db.Driver()), "sqlite")
+}
+
+// localLocks 为 SQLite 提供进程内互斥（SQLite 单机单写者，跨进程靠 busy_timeout）。
+var localLocks sync.Map // int64 -> *sync.Mutex
+
+func localLock(key int64) *sync.Mutex {
+	m, _ := localLocks.LoadOrStore(key, &sync.Mutex{})
+	return m.(*sync.Mutex)
 }
 
 // Try 非阻塞获取锁。ok=false 表示锁已被其他实例持有。
 func Try(ctx context.Context, db *sql.DB, key int64) (*Lock, bool, error) {
+	if isSQLite(db) {
+		mu := localLock(key)
+		if !mu.TryLock() {
+			return nil, false, nil
+		}
+		return &Lock{key: key, local: mu}, true, nil
+	}
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		return nil, false, fmt.Errorf("获取锁连接失败: %w", err)
@@ -54,6 +79,7 @@ type LockSpec struct {
 type MultiLock struct {
 	conn  *sql.Conn
 	specs []LockSpec
+	local []*sync.Mutex
 	once  sync.Once
 }
 
@@ -68,6 +94,28 @@ func TryMany(ctx context.Context, db *sql.DB, specs []LockSpec) (*MultiLock, boo
 	}
 	if len(specs) == 0 {
 		return nil, false, fmt.Errorf("锁列表为空")
+	}
+	if isSQLite(db) {
+		acquired := make([]*sync.Mutex, 0, len(specs))
+		for _, spec := range specs {
+			mu := localLock(spec.Key)
+			if !mu.TryLock() {
+				for i := len(acquired) - 1; i >= 0; i-- {
+					acquired[i].Unlock()
+				}
+				return nil, false, nil
+			}
+			acquired = append(acquired, mu)
+		}
+		// 仍占用一条连接，保持 Conn() 契约（制品元数据写入需要）。
+		conn, err := db.Conn(ctx)
+		if err != nil {
+			for i := len(acquired) - 1; i >= 0; i-- {
+				acquired[i].Unlock()
+			}
+			return nil, false, fmt.Errorf("获取锁连接失败: %w", err)
+		}
+		return &MultiLock{conn: conn, local: acquired}, true, nil
 	}
 	conn, err := db.Conn(ctx)
 	if err != nil {
@@ -110,6 +158,15 @@ func (l *MultiLock) Unlock() {
 		return
 	}
 	l.once.Do(func() {
+		if len(l.local) > 0 {
+			for i := len(l.local) - 1; i >= 0; i-- {
+				l.local[i].Unlock()
+			}
+			if l.conn != nil {
+				_ = l.conn.Close()
+			}
+			return
+		}
 		if l.conn == nil {
 			return
 		}
@@ -165,6 +222,10 @@ func (l *Lock) Unlock() {
 		return
 	}
 	l.once.Do(func() {
+		if l.local != nil {
+			l.local.Unlock()
+			return
+		}
 		if l.conn == nil {
 			return
 		}

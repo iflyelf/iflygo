@@ -1,0 +1,1 @@
+ALTER TABLE host_delete_jobs ADD COLUMN force INTEGER NOT NULL DEFAULT 0;

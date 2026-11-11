@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/iflyelf/iflygo/internal/logic/hostmerge"
 	synclogic "github.com/iflyelf/iflygo/internal/logic/sync"
 	"github.com/iflyelf/iflygo/internal/pkg/audit"
 	"github.com/iflyelf/iflygo/internal/pkg/httpx"
@@ -114,7 +116,14 @@ func hostListFilter(s *svc.ServiceContext, r *http.Request) (string, []any, int)
 		i++
 	}
 	add("h.app_code = ", q.Get("app_code"))
-	add("h.os_family = ", q.Get("os_family"))
+	// OS 筛选与列表展示一致：优先发行版族 os_family（rhel/debian 等），
+	// 没有 Agent 信息的清单主机回退到 os_type（linux/windows）。
+	if v := strings.TrimSpace(q.Get("os_family")); v != "" {
+		where = append(where, "(h.os_family=$"+strconv.Itoa(i)+
+			" OR (COALESCE(h.os_family,'')='' AND h.os_type=$"+strconv.Itoa(i)+"))")
+		args = append(args, v)
+		i++
+	}
 	add("h.account = ", q.Get("account"))
 
 	// agent_status 按「页面显示的有效状态」过滤，与 ListHosts 的计算规则一致：
@@ -150,7 +159,7 @@ func ListHosts(s *svc.ServiceContext) http.HandlerFunc {
 
 		var total int
 		if err := s.DB.QueryRowContext(r.Context(),
-			"SELECT COUNT(1) FROM hosts h"+whereSQL, args...).Scan(&total); err != nil {
+			store.SQL("SELECT COUNT(1) FROM hosts h"+whereSQL), args...).Scan(&total); err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -177,8 +186,8 @@ func ListHosts(s *svc.ServiceContext) http.HandlerFunc {
 			        h.agent_version, COALESCE(h.agent_build_version,''), COALESCE(h.agent_build_hash,''),
 			        COALESCE(h.agent_build_variant,''), h.agent_status, h.source, h.last_seen,
 			        h.maintenance_until, COALESCE(h.maintenance_reason,'')
-			   FROM hosts h`)+whereSQL+
-				" ORDER BY h.ip LIMIT $"+strconv.Itoa(i)+" OFFSET $"+strconv.Itoa(i+1), listArgs...)
+			   FROM hosts h`+whereSQL+
+				" ORDER BY h.ip LIMIT $"+strconv.Itoa(i)+" OFFSET $"+strconv.Itoa(i+1)), listArgs...)
 		if err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
@@ -345,6 +354,11 @@ func SyncHosts(s *svc.ServiceContext) http.HandlerFunc {
 			httpx.FailErr(w, http.StatusBadGateway, fmt.Errorf("同步失败: %w", err))
 			return
 		}
+		// 同步完成后自动合并重复主机。
+		merged, mergeErr := hostmerge.AutoMergeAll(r.Context(), s.DB)
+		if mergeErr != nil {
+			log.Printf("⚠️ Consul 同步后自动合并重复主机失败: %v", mergeErr)
+		}
 		auditOpDetails(s, r, audit.ActionHostSync, "host", "", "consul", nil,
 			map[string]any{
 				"services": res.Services, "instances": res.Instances,
@@ -355,7 +369,7 @@ func SyncHosts(s *svc.ServiceContext) http.HandlerFunc {
 			"services": res.Services, "instances": res.Instances,
 			"upserted": res.Upserted, "deleted": res.Deleted,
 			"partial": res.Partial, "cleanup_skipped": res.CleanupSkipped,
-			"duration": res.Duration.String(),
+			"merged_hosts": merged, "duration": res.Duration.String(),
 		})
 	}
 }

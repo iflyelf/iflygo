@@ -22,6 +22,9 @@
 - ✅ Agent 注册 / 心跳 / 指令下发 / 进度上报 / 自升级
 - ✅ 多租户 + RBAC（用户/团队/角色/服务组/组织架构）+ 审计日志
 - ✅ AI 接入（MCP/令牌/助手）+ 外部文件白名单 + 快速上手引导
+- ✅ 主机自动合并（隧道 IP / 出口 IP+主机名）、在线删除保护与强制删除、手工新增主机
+- ✅ Casdoor/FlyIAM 用户目录与用户管理（创建/更新/重置密码/管理员标记/本地授权）
+- ✅ 用户字段定义自动同步（FlyIAM → 本地，配置/进度/日志）与 consul_mgr 按服务名称精确同步
 - ✅ 三主题（🌞暖沙米 / 🌊冷蓝 / 🌙暗黑）+ Mac 圆角 + H5 自适应
 
 ### 远程访问（DDNSTO）
@@ -68,11 +71,13 @@
 - [x] 证书续期 / 吊销（pki.blocklist）
 - [x] Web 管理页面：客户端 / 网络 / 节点 / 路由 / 域名
 - [x] 前端合并：upgrade_mgr 完整控制台（主机/组件/制品/任务/AI/RBAC/审计/设置）+ 隧道管理 + DDNSTO 远程访问 + Liaison 远程管理
-- [x] 双数据库（PostgreSQL + SQLite）全量支持（81 handler + 153 路由 + 39 迁移）
+- [x] 双数据库（PostgreSQL + SQLite）全量支持（81 handler + 180 路由 + 44 迁移）
 - [x] DDNSTO 远程访问：子域名自动分配 + edge 穿透
 - [x] Liaison 远程管理套件：Casbin RBAC / Web SSH / 文件管理 / Web DB / LLM 网关
 - [x] 数据面模式 auto/tcp/udp + TCP Relay（UDP 被封锁时经 TCP 承载 overlay 流量）
 - [x] 服务端/客户端配置文件热加载；服务端中继配置与网络 Nebula 设置可在页面配置
+- [x] 主机自动合并 / 在线删除保护与强制删除 / 手工新增主机
+- [x] Casdoor 用户目录/用户管理、用户字段自动同步、consul_mgr 按服务名称同步
 - [x] 部署文档与模板：systemd / Windows SCM / Docker Compose / Nginx
 
 ## 🔌 控制面 API（已实现）
@@ -118,6 +123,22 @@
 | POST | `/api/liaison/db/query` | 执行 SQL 查询 |
 | GET/POST | `/api/liaison/llm/*` | LLM 网关（模型/对话） |
 | GET/POST/DELETE | `/api/liaison/policies` | Casbin 策略管理（superadmin） |
+
+### 主机 / 用户目录（upgrade_mgr 同步新增）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/hosts` | 手工新增主机（租户隔离，IP 冲突 409） |
+| GET | `/api/hosts/deletable-ids` | 按当前筛选返回可删除主机 ID（`force=1` 可包含在线主机） |
+| GET | `/api/consul-mgr/services` | 列出 consul_mgr 服务组内服务名称（按服务同步） |
+| GET | `/api/users/directory` | Casdoor 用户目录（分页/搜索，合并本地租户/角色） |
+| POST | `/api/casdoor/users` | 创建 Casdoor 用户并开通本地授权 |
+| PUT | `/api/casdoor/users/{username}` | 更新 Casdoor 用户资料 |
+| POST | `/api/casdoor/users/{username}/reset-password` | 重置密码 |
+| POST | `/api/casdoor/users/{username}/admin` | 设置/取消 Casdoor 管理员 |
+| GET/PUT | `/api/flyiam/sync-user-fields/config` | 用户字段自动同步配置 |
+| GET | `/api/flyiam/sync-user-fields/progress` | 当前同步进度 |
+| GET/DELETE | `/api/flyiam/sync-user-fields/logs` | 同步历史/清理日志 |
 
 ## 🔧 本地构建
 
