@@ -32,6 +32,9 @@ var activeDialect = Postgres
 // CurrentDialect 返回进程级当前方言。
 func CurrentDialect() Dialect { return activeDialect }
 
+// SetDialect 设置进程级方言（仅用于测试/嵌入式初始化；生产由 Open 设置）。
+func SetDialect(d Dialect) { activeDialect = d }
+
 // SQL 将 SQL 适配为当前进程方言（PostgreSQL 原样，SQLite 转换语法）。
 // 供未持有 *Store 引用、但需要跨库运行 SQL 的包使用。
 func SQL(q string) string { return AdaptSQL(activeDialect, q) }

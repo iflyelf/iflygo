@@ -21,6 +21,7 @@ func TestAutoMergeSQLite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
+	store.SetDialect(store.SQLite)
 	t.Cleanup(func() { _ = s.Close() })
 	if err := migrate.AutoMigrate(s.DB, migrate.DialectSQLite); err != nil {
 		t.Fatalf("migrate: %v", err)

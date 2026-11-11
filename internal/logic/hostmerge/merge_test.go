@@ -11,6 +11,7 @@ import (
 	_ "github.com/lib/pq"
 
 	"github.com/iflyelf/iflygo/internal/migrate"
+	"github.com/iflyelf/iflygo/internal/store"
 )
 
 // TestMergeCandidates 验证字段合并、Agent 迁移与重复行删除。
@@ -23,6 +24,7 @@ func TestMergeCandidates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("连接数据库失败: %v", err)
 	}
+	store.SetDialect(store.Postgres)
 	t.Cleanup(func() { db.Close() })
 	if err := migrate.AutoMigrate(db, migrate.DialectPostgres); err != nil {
 		t.Fatalf("迁移失败: %v", err)
