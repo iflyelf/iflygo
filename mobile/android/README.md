@@ -26,6 +26,13 @@ gradle -p mobile/android assembleDebug
 
 APK 输出：`mobile/android/app/build/outputs/apk/debug/app-debug.apk`
 
+发布资产：`iflygo-android.apk`（由 CI 重命名并附加 `.sha256`），可从 latest Release 下载：
+```bash
+wget -O iflygo-android.apk \
+  https://github.com/iflyelf/iflygo/releases/latest/download/iflygo-android.apk
+```
+当前为 debug 签名（可直接安装）；正式分发建议使用自有 release keystore 重新签名。
+
 CI：`.github/workflows/android.yml` 自动构建并上传；tag / 手动触发时附加到 Release。
 
 ## 使用

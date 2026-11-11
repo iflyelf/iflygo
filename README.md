@@ -570,8 +570,14 @@ iflygo-server -role gateway -overlay-config /etc/iflygo/node/config.yml
 - **兼容性**：APK 可安装在 **HarmonyOS 4 / 4.2 及以下**（Android 兼容）；
   HarmonyOS NEXT（5.x）不兼容 Android APK，需要原生 ArkTS HAP（本仓库暂未构建）
 - **构建**：`.github/workflows/android.yml` 自动执行
-  `gomobile bind` + `gradle assembleDebug`，产物为
-  `app-debug.apk`；手动触发/tag 时会附加到 Release
+  `gomobile bind` + `gradle assembleDebug`；构建产物为 `app-debug.apk`，
+  发布资产命名为 `iflygo-android.apk`（附 `.sha256`），手动触发/tag 时附加到 Release
+- **下载**：
+  ```bash
+  wget -O iflygo-android.apk \
+    https://github.com/iflyelf/iflygo/releases/latest/download/iflygo-android.apk
+  ```
+  当前为 debug 签名（可直接安装）；正式分发建议配置自有 release keystore 后重新签名。
 - **本地构建**：见 `mobile/android/README.md`（需要 JDK 17、Android SDK 34、
   NDK 26.1、Gradle 8.7、gomobile）
 - **使用**：
@@ -722,7 +728,7 @@ iflygo-client run --tcp-relay off   # 等价 --data-plane udp
 
 - 推 tag `v*` 触发：Docker 多架构发布（Docker Hub + 华为云 SWR）+ 全平台二进制 Release
 - Windows 发布包（zip）内置 `wintun.dll`，解压即用
-- Android APK 由 `android.yml` 构建；手动触发/tag 时附加到 Release
+- Android APK（`iflygo-android.apk`）由 `android.yml` 构建；手动触发/tag 时附加到 Release
 - `workflow_dispatch` 手动触发构建
 - `update-version.yml` 每天检测上游 Nebula 最新版本并自动开 PR
 
