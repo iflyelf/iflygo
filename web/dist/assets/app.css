@@ -696,3 +696,29 @@ select { max-width: 100%; }
 .ssh-xterm .xterm { padding: 8px; border-radius: 8px; }
 .file-content { background: #f5f2ec; padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 12px; max-height: 360px; }
 .vnc-wrap { margin-top: 8px; }
+
+/* 隧道管理弹窗：表单随屏幕自适应，长文本/长地址自动换行，避免溢出 */
+.tunnel-modal { max-width: 760px; width: 100%; }
+.tunnel-modal .field { margin: 10px 0; }
+.tunnel-modal .field label,
+.tunnel-modal .modal-head h3 { overflow-wrap: anywhere; word-break: break-word; }
+.tunnel-modal input, .tunnel-modal select {
+  width: 100%; box-sizing: border-box; min-width: 0;
+}
+.tunnel-table { width: 100%; }
+.tunnel-table th, .tunnel-table td {
+  overflow-wrap: anywhere; word-break: break-word; vertical-align: top;
+}
+.tunnel-table .tunnel-name { min-width: 96px; }
+.tunnel-table .tunnel-wrap { min-width: 110px; }
+.tunnel-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+@media (max-width: 720px) {
+  .tunnel-modal { max-width: 100%; padding: 12px; }
+  .tunnel-table { font-size: 12px; }
+  .tunnel-table .tunnel-name { min-width: 72px; }
+  .tunnel-table .tunnel-wrap { min-width: 84px; }
+}
+@media (max-width: 520px) {
+  .tunnel-actions { flex-direction: column; align-items: stretch; }
+  .tunnel-actions .btn { width: 100%; }
+}

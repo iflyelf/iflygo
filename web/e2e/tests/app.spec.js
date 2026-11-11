@@ -66,20 +66,68 @@ test('隧道管理：创建网络与客户端', async ({ page }) => {
   autoAccept(page);
   const suffix = Date.now();
 
-  // 创建网络
+  // 创建网络（弹窗）
   await openTunnel(page, '网络');
   await expect(page.getByRole('heading', { name: '网络', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '新建网络', exact: true }).click();
   await page.getByPlaceholder('名称').fill('e2e-net-' + suffix);
   await page.getByPlaceholder('IPv4 CIDR，如 10.77.0.0/16').fill('10.77.0.0/16');
   await page.getByRole('button', { name: '创建网络', exact: true }).click();
   await expect(page.locator('table')).toContainText('e2e-net-' + suffix);
 
-  // 创建客户端
+  // 创建客户端（弹窗）
   await openTunnel(page, '客户端');
   await expect(page.getByRole('heading', { name: '客户端', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '新建客户端', exact: true }).click();
   await page.getByPlaceholder('名称').fill('e2e-client-' + suffix);
   await page.getByRole('button', { name: '创建客户端', exact: true }).click();
   await expect(page.locator('table')).toContainText('e2e-client-' + suffix);
+});
+
+test('隧道管理：编辑客户端参数与 IP 自动下发', async ({ page }) => {
+  autoAccept(page);
+  const suffix = Date.now();
+
+  await login(page);
+
+  // 前置：API 创建网络 + 客户端
+  const pre = await page.evaluate(async (suffix) => {
+    const post = (url, body) => fetch(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(r => r.json());
+    const net = await post('/api/networks', { name: 'edit-net-' + suffix, cidr4: '10.55.0.0/16', dns: '10.55.0.1' });
+    const netId = net && net.data && net.data.id;
+    const cli = await post('/api/clients', { network_id: netId, name: 'edit-client-' + suffix });
+    return { netId, clientId: cli && cli.data && cli.data.client && cli.data.client.id };
+  }, suffix);
+  expect(pre.clientId).toBeTruthy();
+
+  await openTunnel(page, '客户端');
+  const row = page.locator('tr', { hasText: 'edit-client-' + suffix });
+  await row.getByRole('button', { name: '编辑', exact: true }).click();
+  await expect(page.getByRole('heading', { name: /编辑客户端/ })).toBeVisible();
+  await page.getByPlaceholder('留空则自动分配新地址').fill('10.55.0.50');
+  await page.getByLabel('服务端 DNS').selectOption('off');
+  await page.getByLabel('客户端 MTU（0=跟随默认）').fill('1360');
+  await page.getByLabel('心跳间隔（如 30s）').fill('45s');
+  await page.getByLabel('数据面模式').selectOption('udp');
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+
+  await expect(page.locator('table')).toContainText('10.55.0.50');
+  await expect(page.locator('table')).toContainText('DNS:关闭');
+
+  // 服务端已持久化主机级参数，且 config_rev 已递增（客户端下次心跳自动拉取）
+  const saved = await page.evaluate(async (id) => {
+    const r = await fetch('/api/clients/' + id).then(x => x.json());
+    return r.data;
+  }, pre.clientId);
+  expect(saved.ipv4).toBe('10.55.0.50');
+  expect(saved.config_rev).toBeGreaterThan(0);
+  expect(saved.client_settings.use_server_dns).toBe(false);
+  expect(saved.client_settings.mtu).toBe(1360);
+  expect(saved.client_settings.interval).toBe('45s');
+  expect(saved.client_settings.data_plane_mode).toBe('udp');
 });
 
 test('隧道管理：五个子页可切换', async ({ page }) => {

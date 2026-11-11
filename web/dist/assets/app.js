@@ -222,243 +222,504 @@
     ]);
   }
 
+  // ---------- 通用弹窗表单（所有编辑/创建操作均在弹窗内完成）----------
+  function tunnelCloseModal(mask) {
+    if (mask && mask.parentNode) { mask.parentNode.removeChild(mask); }
+  }
+  function tunnelInput(attrs) { return h('input', attrs || {}, []); }
+  function tunnelSelect(options, value) {
+    var sel = h('select', {}, options.map(function (o) { return h('option', { value: o[0] }, [o[1]]); }));
+    if (value != null) { sel.value = String(value); }
+    return sel;
+  }
+  function tunnelFormModal(opts) {
+    var errBox = h('div', { class: 'err field', style: 'display:none' }, []);
+    var submit = h('button', { class: 'btn primary', type: 'button' }, [opts.submitText || '保存']);
+    var cancel = h('button', { class: 'btn ghost', type: 'button' }, ['取消']);
+    var children = [h('div', { class: 'modal-head' }, [h('h3', {}, [opts.title || '编辑']), cancel])];
+    (opts.fields || []).forEach(function (f) {
+      if (!f) return;
+      children.push(field(f.label, f.input, f.hint));
+    });
+    if (opts.extra) { children.push(opts.extra); }
+    children.push(errBox);
+    children.push(h('div', { class: 'toolbar' }, [submit]));
+    var mask = h('div', {
+      class: 'modal-mask',
+      onclick: function (e) { if (e.target === mask) { tunnelCloseModal(mask); } }
+    }, [h('div', { class: 'modal tunnel-modal', role: 'dialog', 'aria-modal': 'true' }, children)]);
+    cancel.onclick = function () { tunnelCloseModal(mask); };
+    submit.onclick = function () {
+      errBox.style.display = 'none';
+      submit.disabled = true;
+      var old = submit.textContent;
+      submit.textContent = '保存中…';
+      Promise.resolve().then(function () { return opts.onSubmit(); }).then(function () {
+        tunnelCloseModal(mask);
+        if (opts.after) { opts.after(); } else { render(); }
+      }).catch(function (e) {
+        submit.disabled = false;
+        submit.textContent = old;
+        errBox.textContent = (e && e.message) || String(e);
+        errBox.style.display = '';
+      });
+    };
+    document.body.appendChild(mask);
+    if (opts.focus && opts.focus.focus) { opts.focus.focus(); }
+    return mask;
+  }
+  function tunnelClientSettingsFields(cs) {
+    cs = cs || {};
+    var dnsMode = tunnelSelect([
+      ['inherit', '跟随网络/全局默认'],
+      ['on', '启用服务端 DNS'],
+      ['off', '关闭服务端 DNS']
+    ], cs.use_server_dns === true ? 'on' : (cs.use_server_dns === false ? 'off' : 'inherit'));
+    var dns = tunnelInput({ placeholder: '如 10.77.0.1（留空跟随默认）', value: cs.dns || '' });
+    var mtu = tunnelInput({ type: 'number', min: 576, max: 9000, placeholder: '0 = 跟随默认', value: cs.mtu || '' });
+    var interval = tunnelInput({ placeholder: '如 30s（留空跟随默认）', value: cs.interval || '' });
+    var mode = tunnelSelect([
+      ['inherit', '跟随默认'], ['auto', 'auto'], ['tcp', 'tcp'], ['udp', 'udp']
+    ], cs.data_plane_mode || 'inherit');
+    return {
+      fields: [
+        { label: '服务端 DNS', input: dnsMode, hint: '可单独关闭该主机的服务端 DNS；关闭后不下发 DNS。' },
+        { label: 'DNS（覆盖网络/全局）', input: dns },
+        { label: '客户端 MTU（0=跟随默认）', input: mtu },
+        { label: '心跳间隔（如 30s）', input: interval },
+        { label: '数据面模式', input: mode }
+      ],
+      read: function () {
+        var out = {};
+        var dm = dnsMode.value;
+        if (dm === 'on') { out.use_server_dns = true; }
+        else if (dm === 'off') { out.use_server_dns = false; }
+        out.dns = dns.value.trim();
+        var m = Number(mtu.value || 0);
+        if (m > 0) { out.mtu = m; }
+        out.interval = interval.value.trim();
+        if (mode.value !== 'inherit') { out.data_plane_mode = mode.value; }
+        return out;
+      }
+    };
+  }
+  function tunnelClientSummary(c) {
+    var cs = c.client_settings || {};
+    var parts = [];
+    if (cs.use_server_dns === false) { parts.push('DNS:关闭'); }
+    else if (cs.use_server_dns === true) { parts.push('DNS:启用'); }
+    if (cs.dns) { parts.push('DNS=' + cs.dns); }
+    if (cs.mtu) { parts.push('MTU=' + cs.mtu); }
+    if (cs.interval) { parts.push('心跳=' + cs.interval); }
+    if (cs.data_plane_mode) { parts.push('数据面=' + cs.data_plane_mode); }
+    return parts.length ? parts.join(' ') : '跟随网络/全局';
+  }
+  function tunnelNetName(id) {
+    for (var i = 0; i < state.tunnelNetworks.length; i++) {
+      if (state.tunnelNetworks[i].id === id) { return state.tunnelNetworks[i].name; }
+    }
+    return '#' + id;
+  }
+
   function tunnelClientsView() {
     var rows = state.tunnelClients.map(function (c) {
       return h('tr', {}, [
-        h('td', {}, [c.name || '']),
+        h('td', { class: 'tunnel-name' }, [c.name || '']),
         h('td', {}, [c.ipv4 || '—']),
         h('td', {}, [c.ipv6 || '—']),
+        h('td', { class: 'tunnel-wrap' }, [tunnelNetName(c.network_id)]),
+        h('td', { class: 'tunnel-wrap' }, [tunnelClientSummary(c)]),
         h('td', {}, [c.status || '—']),
-        h('td', {}, [
+        h('td', {}, [h('div', { class: 'tunnel-actions' }, [
+          h('button', { class: 'btn sm primary', onclick: function () { tunnelOpenClientEdit(c); } }, ['编辑']),
           h('button', { class: 'btn sm', onclick: function () { tunnelGetToken(c.id, c.name); } }, ['安装命令']),
-          ' ',
           h('button', { class: 'btn sm', onclick: function () { tunnelRenewCert(c.id); } }, ['续期']),
-          ' ',
           h('button', { class: 'btn sm', onclick: function () { tunnelRevokeCert(c.id); } }, ['吊销']),
-          ' ',
           h('button', { class: 'btn sm danger', onclick: function () { tunnelDelClient(c.id); } }, ['删除'])
-        ])
+        ])])
       ]);
     });
-    var name = h('input', { placeholder: '名称' }, []);
-    var net = tunnelNetSelect(state.tunnelNetworks[0] ? state.tunnelNetworks[0].id : 0);
-    var ipv4 = h('input', { placeholder: 'IPv4（留空自动分配）' }, []);
-    var ipv6 = h('input', { placeholder: 'IPv6（留空自动分配）' }, []);
-    var create = h('button', { class: 'btn primary', onclick: function () {
-      api('/api/clients', { method: 'POST', body: JSON.stringify({ network_id: Number(net.value), name: name.value, ipv4: ipv4.value, ipv6: ipv6.value }) })
-        .then(function (d) {
-          tunnelSetMsg(true, '已创建，安装命令：' + (d.install_command || ''));
-          if (d.install_command && navigator.clipboard) { navigator.clipboard.writeText(d.install_command).catch(function () {}); }
-          return tunnelReload();
-        })
-        .catch(function (e) { tunnelSetMsg(false, e.message); render(); });
-    } }, ['创建客户端']);
     return h('div', { class: 'card' }, [
-      h('div', { class: 'card-head' }, [h('h3', {}, ['客户端'])]),
-      h('div', { class: 'table-wrap' }, [
-        h('table', {}, [
-          h('thead', {}, [h('tr', {}, [h('th', {}, ['名称']), h('th', {}, ['IPv4']), h('th', {}, ['IPv6']), h('th', {}, ['状态']), h('th', {}, ['操作'])])]),
-          h('tbody', {}, rows)
-        ])
+      h('div', { class: 'card-head' }, [
+        h('h3', {}, ['客户端']),
+        h('button', { class: 'btn primary', onclick: tunnelOpenClientCreate }, ['新建客户端'])
       ]),
-      field('名称', name),
-      field('所属网络', net),
-      field('IPv4', ipv4),
-      field('IPv6', ipv6),
-      create
+      h('div', { class: 'muted' }, ['每台主机可单独配置 DNS/MTU/心跳/数据面；修改 IP 后自动重签证书并下发，客户端无需手工改文件。']),
+      h('div', { class: 'table-wrap' }, [
+        h('table', { class: 'tunnel-table' }, [
+          h('thead', {}, [h('tr', {}, [h('th', {}, ['名称']), h('th', {}, ['IPv4']), h('th', {}, ['IPv6']), h('th', {}, ['网络']), h('th', {}, ['客户端参数']), h('th', {}, ['状态']), h('th', {}, ['操作'])])]),
+          h('tbody', {}, rows.length ? rows : [h('tr', {}, [h('td', { colspan: 7, class: 'muted' }, ['暂无客户端'])])])
+        ])
+      ])
     ]);
   }
 
-  state.tunnelNebulaNet = 0;
-  state.tunnelNebulaData = null;
-  state.tunnelNebulaFor = -1;
-
-  function tunnelNebulaList(v) {
-    return String(v || '').split(',').map(function (x) { return x.trim(); }).filter(function (x) { return x; });
+  function tunnelOpenClientCreate() {
+    if (!state.tunnelNetworks.length) {
+      tunnelSetMsg(false, '请先创建网络');
+      render();
+      return;
+    }
+    var net = tunnelNetSelect(state.tunnelNetworks[0].id);
+    var name = tunnelInput({ placeholder: '名称' });
+    var ipv4 = tunnelInput({ placeholder: 'IPv4（留空自动分配）' });
+    var ipv6 = tunnelInput({ placeholder: 'IPv6（留空自动分配）' });
+    var groups = tunnelInput({ placeholder: 'Nebula 分组（逗号分隔，可选）' });
+    var subnets = tunnelInput({ placeholder: '额外 unsafe 子网（逗号分隔，可选）' });
+    var cs = tunnelClientSettingsFields({});
+    tunnelFormModal({
+      title: '新建客户端',
+      fields: [
+        { label: '所属网络', input: net },
+        { label: '名称', input: name },
+        { label: 'IPv4', input: ipv4, hint: '留空自动从网络网段分配。' },
+        { label: 'IPv6', input: ipv6 },
+        { label: '分组', input: groups },
+        { label: '子网', input: subnets }
+      ].concat(cs.fields),
+      submitText: '创建客户端',
+      focus: name,
+      onSubmit: function () {
+        return api('/api/clients', {
+          method: 'POST',
+          body: JSON.stringify({
+            network_id: Number(net.value), name: name.value.trim(),
+            ipv4: ipv4.value.trim(), ipv6: ipv6.value.trim(),
+            groups: groups.value.trim(), subnets: subnets.value.trim(),
+            client_settings: cs.read()
+          })
+        }).then(function (d) {
+          var cmd = (d && d.install_command) || '';
+          tunnelSetMsg(true, '客户端已创建' + (cmd ? '，安装命令已复制' : ''));
+          if (cmd && navigator.clipboard) { navigator.clipboard.writeText(cmd).catch(function () {}); }
+        });
+      },
+      after: function () { tunnelLoadAll().then(render); }
+    });
   }
-  function tunnelNebulaLoad(nid) {
-    if (!nid) { state.tunnelNebulaData = null; state.tunnelNebulaFor = 0; return Promise.resolve(); }
-    state.tunnelNebulaFor = nid;
-    state.tunnelNebulaNet = nid;
-    return api('/api/networks/' + nid).then(function (d) {
-      state.tunnelNebulaData = (d && d.nebula) || {};
-    }).catch(function () { state.tunnelNebulaData = {}; });
+
+  function tunnelOpenClientEdit(c) {
+    var name = tunnelInput({ value: c.name || '' });
+    var ipv4 = tunnelInput({ value: c.ipv4 || '', placeholder: '留空则自动分配新地址' });
+    var ipv6 = tunnelInput({ value: c.ipv6 || '' });
+    var groups = tunnelInput({ value: c.groups || '' });
+    var subnets = tunnelInput({ value: c.subnets || '' });
+    var cs = tunnelClientSettingsFields(c.client_settings || {});
+    tunnelFormModal({
+      title: '编辑客户端 · ' + (c.name || ('#' + c.id)),
+      fields: [
+        { label: '名称', input: name },
+        { label: 'IPv4', input: ipv4, hint: '修改后会重新签发证书并自动下发，无需手工操作客户端。' },
+        { label: 'IPv6', input: ipv6 },
+        { label: '分组', input: groups },
+        { label: '子网', input: subnets }
+      ].concat(cs.fields),
+      submitText: '保存',
+      focus: name,
+      onSubmit: function () {
+        return api('/api/clients/' + c.id, {
+          method: 'PUT',
+          body: JSON.stringify({
+            name: name.value.trim(), ipv4: ipv4.value.trim(), ipv6: ipv6.value.trim(),
+            groups: groups.value.trim(), subnets: subnets.value.trim(),
+            client_settings: cs.read()
+          })
+        }).then(function () {
+          tunnelSetMsg(true, '已保存，客户端下次心跳/刷新自动应用新配置');
+        });
+      },
+      after: function () { tunnelLoadAll().then(render); }
+    });
+  }
+
+  function tunnelOpenNetworkCreate() {
+    var name = tunnelInput({ placeholder: '名称' });
+    var cidr4 = tunnelInput({ placeholder: 'IPv4 CIDR，如 10.77.0.0/16' });
+    var cidr6 = tunnelInput({ placeholder: 'IPv6 CIDR（可选）' });
+    var gw4 = tunnelInput({ placeholder: 'IPv4 网关（可选）' });
+    var gw6 = tunnelInput({ placeholder: 'IPv6 网关（可选）' });
+    tunnelFormModal({
+      title: '新建网络',
+      fields: [
+        { label: '名称', input: name },
+        { label: 'IPv4 CIDR', input: cidr4 },
+        { label: 'IPv6 CIDR', input: cidr6 },
+        { label: 'IPv4 网关', input: gw4 },
+        { label: 'IPv6 网关', input: gw6 }
+      ],
+      submitText: '创建网络',
+      focus: name,
+      onSubmit: function () {
+        return api('/api/networks', {
+          method: 'POST',
+          body: JSON.stringify({ name: name.value.trim(), cidr4: cidr4.value.trim(), cidr6: cidr6.value.trim(), gateway4: gw4.value.trim(), gateway6: gw6.value.trim() })
+        }).then(function () { tunnelSetMsg(true, '网络已创建'); });
+      },
+      after: function () { tunnelLoadAll().then(render); }
+    });
+  }
+
+  function tunnelOpenNetworkEdit(n) {
+    api('/api/networks/' + n.id).then(function (d) {
+      var nb = (d && d.nebula) || {};
+      var cur = d || n;
+      function numOpt(v) { return h('option', { value: String(v) }, [String(v)]); }
+      var cipher = tunnelSelect([['', '默认 aes-256-gcm'], ['aes-256-gcm', 'aes-256-gcm'], ['chacha20-poly1305', 'chacha20-poly1305']], nb.cipher || '');
+      var listenPort = tunnelInput({ type: 'number', value: nb.listen_port || '' });
+      var lhInterval = tunnelInput({ type: 'number', value: nb.lighthouse_interval || '' });
+      var punch = h('input', { type: 'checkbox', checked: !!nb.punch }, []);
+      var punchRespond = h('input', { type: 'checkbox', checked: !!nb.punch_respond }, []);
+      var punchDelay = tunnelInput({ value: nb.punch_delay || '' });
+      var useRelays = h('input', { type: 'checkbox', checked: !!nb.use_relays }, []);
+      var relays = tunnelInput({ value: (nb.relays || []).join(', ') });
+      var tunDevice = tunnelInput({ value: nb.tun_device || '' });
+      var tunDisabled = h('input', { type: 'checkbox', checked: !!nb.tun_disabled }, []);
+      var prefRanges = tunnelInput({ value: (nb.preferred_ranges || []).join(', ') });
+      var hsInterval = tunnelInput({ value: nb.handshake_try_interval || '' });
+      var hsRetries = tunnelInput({ type: 'number', value: nb.handshake_retries || '' });
+      var logLevel = tunnelSelect([['', '默认 info'], ['error', 'error'], ['warn', 'warn'], ['info', 'info'], ['debug', 'debug']], nb.log_level || '');
+      var logFormat = tunnelSelect([['', '默认 text'], ['text', 'text'], ['json', 'json']], nb.log_format || '');
+      var statsType = tunnelSelect([['', '关闭'], ['prometheus', 'prometheus'], ['graphite', 'graphite']], nb.stats_type || '');
+      var statsListen = tunnelInput({ value: nb.stats_listen || '' });
+      var dns = tunnelInput({ value: cur ? (cur.dns || '') : '', placeholder: '如 1.1.1.1,8.8.8.8；留空跟随全局' });
+      var mtu = tunnelInput({ type: 'number', value: cur ? (cur.mtu || 1300) : 1300 });
+      tunnelFormModal({
+        title: '网络设置 · ' + (n.name || ('#' + n.id)),
+        fields: [
+          { label: 'DNS（网络级，客户端下发）', input: dns },
+          { label: 'MTU（网络级）', input: mtu },
+          { label: '加密算法', input: cipher },
+          { label: '监听端口', input: listenPort },
+          { label: 'Lighthouse 间隔(s)', input: lhInterval },
+          { label: 'NAT 打洞 punch', input: punch },
+          { label: '响应打洞 punch_respond', input: punchRespond },
+          { label: '打洞延迟 punch_delay', input: punchDelay },
+          { label: '使用中继 use_relays', input: useRelays },
+          { label: '中继地址 relays（逗号分隔）', input: relays },
+          { label: 'TUN 设备', input: tunDevice },
+          { label: '禁用 TUN（仅测试）', input: tunDisabled },
+          { label: '优先网段 preferred_ranges', input: prefRanges },
+          { label: '握手间隔', input: hsInterval },
+          { label: '握手重试次数', input: hsRetries },
+          { label: '日志级别', input: logLevel },
+          { label: '日志格式', input: logFormat },
+          { label: '统计类型', input: statsType },
+          { label: '统计监听地址', input: statsListen }
+        ],
+        submitText: '保存网络设置',
+        onSubmit: function () {
+          return api('/api/networks/' + n.id, {
+            method: 'PUT',
+            body: JSON.stringify({
+              dns: dns.value.trim(),
+              mtu: Number(mtu.value || 0),
+              nebula: {
+                cipher: cipher.value,
+                listen_port: Number(listenPort.value || 0),
+                lighthouse_interval: Number(lhInterval.value || 0),
+                punch: punch.checked,
+                punch_respond: punchRespond.checked,
+                punch_delay: punchDelay.value,
+                am_relay: !!nb.am_relay,
+                use_relays: useRelays.checked,
+                relays: tunnelNebulaList(relays.value),
+                tun_device: tunDevice.value,
+                tun_disabled: tunDisabled.checked,
+                preferred_ranges: tunnelNebulaList(prefRanges.value),
+                handshake_try_interval: hsInterval.value,
+                handshake_retries: Number(hsRetries.value || 0),
+                log_level: logLevel.value,
+                log_format: logFormat.value,
+                stats_type: statsType.value,
+                stats_listen: statsListen.value
+              }
+            })
+          }).then(function () { tunnelSetMsg(true, '网络/Nebula 设置已保存，客户端下次心跳自动拉取'); });
+        },
+        after: function () { tunnelLoadAll().then(render); }
+      });
+    }).catch(function (e) { tunnelSetMsg(false, e.message); render(); });
   }
 
   function tunnelNetworksView() {
     var rows = state.tunnelNetworks.map(function (n) {
       return h('tr', {}, [
-        h('td', {}, [n.name || '']),
+        h('td', { class: 'tunnel-name' }, [n.name || '']),
         h('td', {}, [n.cidr4 || '']),
         h('td', {}, [n.cidr6 || '—']),
         h('td', {}, [String(n.mtu || '')]),
-        h('td', {}, [h('button', { class: 'btn sm danger', onclick: function () { tunnelDelNetwork(n.id); } }, ['删除'])])
+        h('td', {}, [h('div', { class: 'tunnel-actions' }, [
+          h('button', { class: 'btn sm primary', onclick: function () { tunnelOpenNetworkEdit(n); } }, ['编辑']),
+          h('button', { class: 'btn sm danger', onclick: function () { tunnelDelNetwork(n.id); } }, ['删除'])
+        ])])
       ]);
     });
-    var name = h('input', { placeholder: '名称' }, []);
-    var cidr4 = h('input', { placeholder: 'IPv4 CIDR，如 10.77.0.0/16' }, []);
-    var cidr6 = h('input', { placeholder: 'IPv6 CIDR（可选）' }, []);
-    var gw4 = h('input', { placeholder: 'IPv4 网关（可选）' }, []);
-    var gw6 = h('input', { placeholder: 'IPv6 网关（可选）' }, []);
-    var create = h('button', { class: 'btn primary', onclick: function () {
-      api('/api/networks', { method: 'POST', body: JSON.stringify({ name: name.value, cidr4: cidr4.value, cidr6: cidr6.value, gateway4: gw4.value, gateway6: gw6.value }) })
-        .then(function () { tunnelSetMsg(true, '网络已创建'); return tunnelReload(); })
-        .catch(function (e) { tunnelSetMsg(false, e.message); render(); });
-    } }, ['创建网络']);
-
-    // ---- 网络级 Nebula 设置（页面可编辑，保存后客户端下次心跳生效）----
-    var nid = state.tunnelNebulaNet || (state.tunnelNetworks[0] && state.tunnelNetworks[0].id) || 0;
-    if (nid && state.tunnelNebulaFor !== nid) { tunnelNebulaLoad(nid).then(render); }
-    var nb = state.tunnelNebulaData || {};
-    var cur = null;
-    for (var i = 0; i < state.tunnelNetworks.length; i++) {
-      if (state.tunnelNetworks[i].id === nid) { cur = state.tunnelNetworks[i]; break; }
-    }
-    var nebNet = tunnelNetSelect(nid, function () {
-      state.tunnelNebulaFor = -1;
-      tunnelNebulaLoad(Number(nebNet.value)).then(render);
-    });
-    function numOpt(v) { return h('option', { value: String(v) }, [String(v)]); }
-    var cipher = h('select', { value: nb.cipher || '' }, [
-      h('option', { value: '' }, ['默认 aes-256-gcm']),
-      h('option', { value: 'aes-256-gcm' }, ['aes-256-gcm']),
-      h('option', { value: 'chacha20-poly1305' }, ['chacha20-poly1305'])
-    ]);
-    var listenPort = h('input', { type: 'number', value: nb.listen_port || '' }, []);
-    var lhInterval = h('input', { type: 'number', value: nb.lighthouse_interval || '' }, []);
-    var punch = h('input', { type: 'checkbox', checked: !!nb.punch }, []);
-    var punchRespond = h('input', { type: 'checkbox', checked: !!nb.punch_respond }, []);
-    var punchDelay = h('input', { value: nb.punch_delay || '' }, []);
-    var useRelays = h('input', { type: 'checkbox', checked: !!nb.use_relays }, []);
-    var relays = h('input', { value: (nb.relays || []).join(', ') }, []);
-    var tunDevice = h('input', { value: nb.tun_device || '' }, []);
-    var tunDisabled = h('input', { type: 'checkbox', checked: !!nb.tun_disabled }, []);
-    var prefRanges = h('input', { value: (nb.preferred_ranges || []).join(', ') }, []);
-    var hsInterval = h('input', { value: nb.handshake_try_interval || '' }, []);
-    var hsRetries = h('input', { type: 'number', value: nb.handshake_retries || '' }, []);
-    var logLevel = h('select', { value: nb.log_level || '' }, [
-      h('option', { value: '' }, ['默认 info']),
-      h('option', { value: 'error' }, ['error']),
-      h('option', { value: 'warn' }, ['warn']),
-      h('option', { value: 'info' }, ['info']),
-      h('option', { value: 'debug' }, ['debug'])
-    ]);
-    var logFormat = h('select', { value: nb.log_format || '' }, [
-      h('option', { value: '' }, ['默认 text']),
-      h('option', { value: 'text' }, ['text']),
-      h('option', { value: 'json' }, ['json'])
-    ]);
-    var statsType = h('select', { value: nb.stats_type || '' }, [
-      h('option', { value: '' }, ['关闭']),
-      h('option', { value: 'prometheus' }, ['prometheus']),
-      h('option', { value: 'graphite' }, ['graphite'])
-    ]);
-    var statsListen = h('input', { value: nb.stats_listen || '' }, []);
-    var dns = h('input', { value: cur ? (cur.dns || '') : '', placeholder: '如 1.1.1.1,8.8.8.8' }, []);
-    var mtu = h('input', { type: 'number', value: cur ? (cur.mtu || 1300) : 1300 }, []);
-    var save = h('button', { class: 'btn primary', onclick: function () {
-      var id = Number(nebNet.value);
-      if (!id) { tunnelSetMsg(false, '请先选择网络'); render(); return; }
-      var body = {
-        dns: dns.value,
-        mtu: Number(mtu.value || 0),
-        nebula: {
-          cipher: cipher.value,
-          listen_port: Number(listenPort.value || 0),
-          lighthouse_interval: Number(lhInterval.value || 0),
-          punch: punch.checked,
-          punch_respond: punchRespond.checked,
-          punch_delay: punchDelay.value,
-          am_relay: !!nb.am_relay,
-          use_relays: useRelays.checked,
-          relays: tunnelNebulaList(relays.value),
-          tun_device: tunDevice.value,
-          tun_disabled: tunDisabled.checked,
-          preferred_ranges: tunnelNebulaList(prefRanges.value),
-          handshake_try_interval: hsInterval.value,
-          handshake_retries: Number(hsRetries.value || 0),
-          log_level: logLevel.value,
-          log_format: logFormat.value,
-          stats_type: statsType.value,
-          stats_listen: statsListen.value
-        }
-      };
-      api('/api/networks/' + id, { method: 'PUT', body: JSON.stringify(body) })
-        .then(function () {
-          tunnelSetMsg(true, '网络/Nebula 设置已保存，客户端下次心跳自动拉取');
-          state.tunnelNebulaFor = -1;
-          return tunnelNebulaLoad(id);
-        })
-        .then(function () { return tunnelReload(); })
-        .then(render)
-        .catch(function (e) { tunnelSetMsg(false, e.message); render(); });
-    } }, ['保存网络设置']);
-
-    return h('div', {}, [
-      h('div', { class: 'card' }, [
-        h('div', { class: 'card-head' }, [h('h3', {}, ['网络'])]),
-        h('div', { class: 'table-wrap' }, [
-          h('table', {}, [
-            h('thead', {}, [h('tr', {}, [h('th', {}, ['名称']), h('th', {}, ['IPv4']), h('th', {}, ['IPv6']), h('th', {}, ['MTU']), h('th', {}, ['操作'])])]),
-            h('tbody', {}, rows)
-          ])
-        ]),
-        field('名称', name), field('IPv4 CIDR', cidr4), field('IPv6 CIDR', cidr6),
-        field('IPv4 网关', gw4), field('IPv6 网关', gw6),
-        create
+    return h('div', { class: 'card' }, [
+      h('div', { class: 'card-head' }, [
+        h('h3', {}, ['网络']),
+        h('button', { class: 'btn primary', onclick: tunnelOpenNetworkCreate }, ['新建网络'])
       ]),
-      h('div', { class: 'card' }, [
-        h('div', { class: 'card-head' }, [h('h3', {}, ['Nebula 设置（网络级）'])]),
-        h('div', { class: 'muted' }, ['保存后该网络下所有客户端在下一次心跳自动拉取新配置；无需逐台修改。']),
-        field('所属网络', nebNet),
-        h('div', { class: 'form-row2' }, [field('加密算法', cipher), field('监听端口', listenPort), field('Lighthouse 间隔(s)', lhInterval)]),
-        h('div', { class: 'form-row2' }, [field('NAT 打洞 punch', punch), field('响应打洞 punch_respond', punchRespond), field('打洞延迟 punch_delay', punchDelay)]),
-        h('div', { class: 'form-row2' }, [field('使用中继 use_relays', useRelays), field('TUN 设备', tunDevice), field('禁用 TUN（仅测试）', tunDisabled)]),
-        field('中继地址 relays（逗号分隔，host:port 或 overlay IP）', relays),
-        h('div', { class: 'form-row2' }, [field('握手间隔', hsInterval), field('握手重试次数', hsRetries)]),
-        field('优先网段 preferred_ranges（逗号分隔）', prefRanges),
-        h('div', { class: 'form-row2' }, [field('日志级别', logLevel), field('日志格式', logFormat), field('统计类型', statsType)]),
-        h('div', { class: 'form-row2' }, [field('统计监听地址', statsListen), field('DNS（客户端下发，覆盖全局默认）', dns), field('MTU（客户端）', mtu)]),
-        save
+      h('div', { class: 'muted' }, ['网络级 Nebula 参数在每行「编辑」弹窗中配置；保存后该网络下客户端自动拉取。']),
+      h('div', { class: 'table-wrap' }, [
+        h('table', { class: 'tunnel-table' }, [
+          h('thead', {}, [h('tr', {}, [h('th', {}, ['名称']), h('th', {}, ['IPv4']), h('th', {}, ['IPv6']), h('th', {}, ['MTU']), h('th', {}, ['操作'])])]),
+          h('tbody', {}, rows.length ? rows : [h('tr', {}, [h('td', { colspan: 5, class: 'muted' }, ['暂无网络'])])])
+        ])
       ])
     ]);
+  }
+
+  function tunnelOpenServerNodeCreate() {
+    if (!state.tunnelNetworks.length) {
+      tunnelSetMsg(false, '请先创建网络');
+      render();
+      return;
+    }
+    var net = tunnelNetSelect(state.tunnelNetworks[0].id);
+    var name = tunnelInput({ placeholder: '名称' });
+    var roles = tunnelInput({ placeholder: '角色，如 lighthouse,relay' });
+    var region = tunnelInput({ placeholder: '区域（可选）' });
+    var ip4 = tunnelInput({ placeholder: 'overlay IPv4（留空自动）' });
+    var ip6 = tunnelInput({ placeholder: 'overlay IPv6（留空自动）' });
+    var host = tunnelInput({ placeholder: '公网 host' });
+    var port = tunnelInput({ placeholder: '公网端口', type: 'number' });
+    tunnelFormModal({
+      title: '新建服务端节点',
+      fields: [
+        { label: '所属网络', input: net },
+        { label: '名称', input: name },
+        { label: '角色', input: roles },
+        { label: '区域', input: region },
+        { label: 'overlay IPv4', input: ip4 },
+        { label: 'overlay IPv6', input: ip6 },
+        { label: '公网 host', input: host },
+        { label: '公网端口', input: port }
+      ],
+      submitText: '创建节点',
+      focus: name,
+      onSubmit: function () {
+        return api('/api/server-nodes', {
+          method: 'POST',
+          body: JSON.stringify({ network_id: Number(net.value), name: name.value.trim(), roles: roles.value.trim(), region: region.value.trim(), overlay_ip4: ip4.value.trim(), overlay_ip6: ip6.value.trim(), public_host: host.value.trim(), public_port: Number(port.value || 0) })
+        }).then(function () { tunnelSetMsg(true, '节点已创建'); });
+      },
+      after: function () { tunnelLoadAll().then(render); }
+    });
+  }
+
+  function tunnelOpenServerNodeEdit(n) {
+    var name = tunnelInput({ value: n.name || '' });
+    var roles = tunnelInput({ value: n.roles || '' });
+    var region = tunnelInput({ value: n.region || '' });
+    var ip4 = tunnelInput({ value: n.overlay_ip4 || '' });
+    var ip6 = tunnelInput({ value: n.overlay_ip6 || '' });
+    var host = tunnelInput({ value: n.public_host || '' });
+    var port = tunnelInput({ type: 'number', value: n.public_port || '' });
+    tunnelFormModal({
+      title: '编辑服务端节点 · ' + (n.name || ('#' + n.id)),
+      fields: [
+        { label: '名称', input: name },
+        { label: '角色', input: roles },
+        { label: '区域', input: region },
+        { label: 'overlay IPv4', input: ip4 },
+        { label: 'overlay IPv6', input: ip6 },
+        { label: '公网 host', input: host },
+        { label: '公网端口', input: port }
+      ],
+      submitText: '保存',
+      focus: name,
+      onSubmit: function () {
+        return api('/api/server-nodes/' + n.id, {
+          method: 'PUT',
+          body: JSON.stringify({ name: name.value.trim(), roles: roles.value.trim(), region: region.value.trim(), overlay_ip4: ip4.value.trim(), overlay_ip6: ip6.value.trim(), public_host: host.value.trim(), public_port: Number(port.value || 0) })
+        }).then(function () { tunnelSetMsg(true, '节点已保存'); });
+      },
+      after: function () { tunnelLoadAll().then(render); }
+    });
   }
 
   function tunnelServerNodesView() {
     var rows = state.tunnelServerNodes.map(function (n) {
       return h('tr', {}, [
-        h('td', {}, [n.name || '']),
-        h('td', {}, [n.roles || '']),
+        h('td', { class: 'tunnel-name' }, [n.name || '']),
+        h('td', { class: 'tunnel-wrap' }, [n.roles || '']),
         h('td', {}, [n.overlay_ip4 || '—']),
-        h('td', {}, [(n.public_host || '') + (n.public_port ? ':' + n.public_port : '')]),
-        h('td', {}, [h('button', { class: 'btn sm danger', onclick: function () { tunnelDelServerNode(n.id); } }, ['删除'])])
+        h('td', { class: 'tunnel-wrap' }, [(n.public_host || '') + (n.public_port ? ':' + n.public_port : '')]),
+        h('td', {}, [h('div', { class: 'tunnel-actions' }, [
+          h('button', { class: 'btn sm primary', onclick: function () { tunnelOpenServerNodeEdit(n); } }, ['编辑']),
+          h('button', { class: 'btn sm danger', onclick: function () { tunnelDelServerNode(n.id); } }, ['删除'])
+        ])])
       ]);
     });
-    var name = h('input', { placeholder: '名称' }, []);
-    var net = tunnelNetSelect(state.tunnelNetworks[0] ? state.tunnelNetworks[0].id : 0);
-    var roles = h('input', { placeholder: '角色，如 lighthouse,relay' }, []);
-    var ip4 = h('input', { placeholder: 'overlay IPv4（留空自动）' }, []);
-    var ip6 = h('input', { placeholder: 'overlay IPv6（留空自动）' }, []);
-    var host = h('input', { placeholder: '公网 host' }, []);
-    var port = h('input', { placeholder: '公网端口', type: 'number' }, []);
-    var create = h('button', { class: 'btn primary', onclick: function () {
-      api('/api/server-nodes', { method: 'POST', body: JSON.stringify({ network_id: Number(net.value), name: name.value, roles: roles.value, overlay_ip4: ip4.value, overlay_ip6: ip6.value, public_host: host.value, public_port: Number(port.value || 0) }) })
-        .then(function () { tunnelSetMsg(true, '节点已创建'); return tunnelReload(); })
-        .catch(function (e) { tunnelSetMsg(false, e.message); render(); });
-    } }, ['创建节点']);
     return h('div', { class: 'card' }, [
-      h('div', { class: 'card-head' }, [h('h3', {}, ['服务端节点（lighthouse/relay/edge/gateway）'])]),
-      h('div', { class: 'table-wrap' }, [
-        h('table', {}, [
-          h('thead', {}, [h('tr', {}, [h('th', {}, ['名称']), h('th', {}, ['角色']), h('th', {}, ['overlay IP']), h('th', {}, ['公网入口']), h('th', {}, ['操作'])])]),
-          h('tbody', {}, rows)
-        ])
+      h('div', { class: 'card-head' }, [
+        h('h3', {}, ['服务端节点（lighthouse/relay/edge/gateway）']),
+        h('button', { class: 'btn primary', onclick: tunnelOpenServerNodeCreate }, ['新建节点'])
       ]),
-      field('名称', name), field('所属网络', net), field('角色', roles),
-      field('overlay IPv4', ip4), field('overlay IPv6', ip6),
-      field('公网 host', host), field('公网端口', port),
-      create
+      h('div', { class: 'table-wrap' }, [
+        h('table', { class: 'tunnel-table' }, [
+          h('thead', {}, [h('tr', {}, [h('th', {}, ['名称']), h('th', {}, ['角色']), h('th', {}, ['overlay IP']), h('th', {}, ['公网入口']), h('th', {}, ['操作'])])]),
+          h('tbody', {}, rows.length ? rows : [h('tr', {}, [h('td', { colspan: 5, class: 'muted' }, ['暂无节点'])])])
+        ])
+      ])
     ]);
+  }
+
+  function tunnelGatewaysText(route) {
+    return (route.gateways || []).map(function (g) { return g.overlay_ip + ':' + (g.weight || 1); }).join(', ');
+  }
+  function tunnelParseGateways(text) {
+    return String(text || '').split(',').map(function (s) {
+      var parts = s.trim().split(':');
+      if (!parts[0]) { return null; }
+      return { overlay_ip: parts[0].trim(), weight: Number(parts[1] || 1), priority: 0 };
+    }).filter(function (g) { return g && g.overlay_ip; });
+  }
+  function tunnelRouteFields(route) {
+    var cidr = tunnelInput({ placeholder: 'CIDR，如 10.8.1.0/24', value: route ? (route.cidr || '') : '' });
+    var gws = tunnelInput({ placeholder: '网关 ip:weight,ip:weight', value: route ? tunnelGatewaysText(route) : '' });
+    var mode = tunnelSelect([['active_active', 'active_active'], ['active_passive', 'active_passive']], route ? (route.mode || 'active_active') : 'active_active');
+    var mtu = tunnelInput({ type: 'number', value: route ? (route.mtu || 1300) : 1300 });
+    return {
+      fields: [
+        { label: 'CIDR', input: cidr },
+        { label: '网关', input: gws, hint: '格式 ip:weight，多个用逗号分隔。' },
+        { label: '模式', input: mode },
+        { label: 'MTU', input: mtu }
+      ],
+      read: function () { return { cidr: cidr.value.trim(), mtu: Number(mtu.value || 1300), mode: mode.value, gateways: tunnelParseGateways(gws.value) }; }
+    };
+  }
+  function tunnelOpenRouteCreate() {
+    if (!state.tunnelRouteNetwork) {
+      tunnelSetMsg(false, '请先选择网络');
+      render();
+      return;
+    }
+    var f = tunnelRouteFields(null);
+    tunnelFormModal({
+      title: '新建不安全路由',
+      fields: f.fields,
+      submitText: '创建路由',
+      onSubmit: function () {
+        return api('/api/networks/' + state.tunnelRouteNetwork + '/routes', { method: 'POST', body: JSON.stringify(f.read()) })
+          .then(function () { tunnelSetMsg(true, '路由已创建'); });
+      },
+      after: function () { tunnelLoadRoutes().then(render); }
+    });
+  }
+  function tunnelOpenRouteEdit(rt) {
+    var f = tunnelRouteFields(rt);
+    tunnelFormModal({
+      title: '编辑路由 · ' + (rt.cidr || ('#' + rt.id)),
+      fields: f.fields,
+      submitText: '保存',
+      onSubmit: function () {
+        return api('/api/routes/' + rt.id, { method: 'PUT', body: JSON.stringify(f.read()) })
+          .then(function () { tunnelSetMsg(true, '路由已保存'); });
+      },
+      after: function () { tunnelLoadRoutes().then(render); }
+    });
   }
 
   function tunnelRoutesView() {
@@ -466,76 +727,106 @@
       state.tunnelRouteNetwork = Number(netSel.value);
       tunnelLoadRoutes().then(render);
     });
-    var rows = state.tunnelRoutes.map(function (r) {
-      var gws = (r.gateways || []).map(function (g) { return g.overlay_ip + '(w' + g.weight + ')'; }).join(', ');
+    var rows = state.tunnelRoutes.map(function (rt) {
+      var gws = tunnelGatewaysText(rt);
       return h('tr', {}, [
-        h('td', {}, [r.cidr || '']),
-        h('td', {}, [r.mode || '']),
-        h('td', {}, [gws]),
-        h('td', {}, [h('button', { class: 'btn sm danger', onclick: function () { tunnelDelRoute(r.id); } }, ['删除'])])
+        h('td', { class: 'tunnel-name' }, [rt.cidr || '']),
+        h('td', {}, [rt.mode || '']),
+        h('td', { class: 'tunnel-wrap' }, [gws || '—']),
+        h('td', {}, [h('div', { class: 'tunnel-actions' }, [
+          h('button', { class: 'btn sm primary', onclick: function () { tunnelOpenRouteEdit(rt); } }, ['编辑']),
+          h('button', { class: 'btn sm danger', onclick: function () { tunnelDelRoute(rt.id); } }, ['删除'])
+        ])])
       ]);
     });
-    var cidr = h('input', { placeholder: 'CIDR，如 10.8.1.0/24' }, []);
-    var gws = h('input', { placeholder: '网关 ip:weight,ip:weight，如 10.77.0.5:10,10.77.0.6:5' }, []);
-    var mode = h('select', {}, [
-      h('option', { value: 'active_active' }, ['active_active']),
-      h('option', { value: 'active_passive' }, ['active_passive'])
-    ]);
-    var create = h('button', { class: 'btn primary', onclick: function () {
-      var gateways = gws.value.split(',').map(function (s) {
-        var parts = s.trim().split(':');
-        return { overlay_ip: parts[0], weight: Number(parts[1] || 1), priority: 0 };
-      }).filter(function (g) { return g.overlay_ip; });
-      api('/api/networks/' + state.tunnelRouteNetwork + '/routes', { method: 'POST', body: JSON.stringify({ cidr: cidr.value, mtu: 1300, mode: mode.value, gateways: gateways }) })
-        .then(function () { tunnelSetMsg(true, '路由已创建'); return tunnelLoadRoutes().then(render); })
-        .catch(function (e) { tunnelSetMsg(false, e.message); render(); });
-    } }, ['创建路由']);
     return h('div', { class: 'card' }, [
-      h('div', { class: 'card-head' }, [h('h3', {}, ['不安全路由'])]),
+      h('div', { class: 'card-head' }, [
+        h('h3', {}, ['不安全路由']),
+        h('button', { class: 'btn primary', onclick: tunnelOpenRouteCreate }, ['新建路由'])
+      ]),
       field('所属网络', netSel),
       h('div', { class: 'table-wrap' }, [
-        h('table', {}, [
+        h('table', { class: 'tunnel-table' }, [
           h('thead', {}, [h('tr', {}, [h('th', {}, ['CIDR']), h('th', {}, ['模式']), h('th', {}, ['网关(权重)']), h('th', {}, ['操作'])])]),
-          h('tbody', {}, rows)
+          h('tbody', {}, rows.length ? rows : [h('tr', {}, [h('td', { colspan: 4, class: 'muted' }, ['暂无路由'])])])
         ])
-      ]),
-      field('CIDR', cidr), field('网关', gws), field('模式', mode),
-      create
+      ])
     ]);
+  }
+
+  function tunnelEdgeFields(s) {
+    var net = tunnelNetSelect(s ? s.network_id : (state.tunnelNetworks[0] ? state.tunnelNetworks[0].id : 0));
+    var name = tunnelInput({ placeholder: '名称', value: s ? (s.name || '') : '' });
+    var proto = tunnelSelect([['http', 'http'], ['tcp', 'tcp']], s ? (s.protocol || 'http') : 'http');
+    var host = tunnelInput({ placeholder: '域名（http），如 nas.example.com', value: s ? (s.host || '') : '' });
+    var pubPort = tunnelInput({ placeholder: '公网端口（tcp）', type: 'number', value: s ? (s.public_port || '') : '' });
+    var target = tunnelInput({ placeholder: '目标，如 10.77.0.2:5000', value: s ? (s.target || '') : '' });
+    return {
+      fields: [
+        { label: '所属网络', input: net }, { label: '名称', input: name }, { label: '协议', input: proto },
+        { label: '域名', input: host }, { label: '公网端口', input: pubPort }, { label: '目标', input: target }
+      ],
+      read: function () {
+        return { network_id: Number(net.value), name: name.value.trim(), host: host.value.trim(), target: target.value.trim(), protocol: proto.value, public_port: Number(pubPort.value || 0) };
+      }
+    };
+  }
+  function tunnelOpenEdgeCreate() {
+    if (!state.tunnelNetworks.length) {
+      tunnelSetMsg(false, '请先创建网络');
+      render();
+      return;
+    }
+    var f = tunnelEdgeFields(null);
+    tunnelFormModal({
+      title: '新建边缘服务',
+      fields: f.fields,
+      submitText: '创建服务',
+      onSubmit: function () {
+        return api('/api/edge-services', { method: 'POST', body: JSON.stringify(f.read()) })
+          .then(function () { tunnelSetMsg(true, '服务已创建'); });
+      },
+      after: function () { tunnelLoadAll().then(render); }
+    });
+  }
+  function tunnelOpenEdgeEdit(s) {
+    var f = tunnelEdgeFields(s);
+    tunnelFormModal({
+      title: '编辑边缘服务 · ' + (s.name || ('#' + s.id)),
+      fields: f.fields,
+      submitText: '保存',
+      onSubmit: function () {
+        return api('/api/edge-services/' + s.id, { method: 'PUT', body: JSON.stringify(f.read()) })
+          .then(function () { tunnelSetMsg(true, '服务已保存'); });
+      },
+      after: function () { tunnelLoadAll().then(render); }
+    });
   }
 
   function tunnelEdgeServicesView() {
     var rows = state.tunnelEdgeServices.map(function (s) {
       return h('tr', {}, [
-        h('td', {}, [s.name || '']),
-        h('td', {}, [s.protocol === 'tcp' ? ':' + (s.public_port || '') : (s.host || '')]),
-        h('td', {}, [s.target || '']),
+        h('td', { class: 'tunnel-name' }, [s.name || '']),
+        h('td', { class: 'tunnel-wrap' }, [s.protocol === 'tcp' ? ':' + (s.public_port || '') : (s.host || '')]),
+        h('td', { class: 'tunnel-wrap' }, [s.target || '']),
         h('td', {}, [s.protocol || '']),
-        h('td', {}, [h('button', { class: 'btn sm danger', onclick: function () { tunnelDelEdgeService(s.id); } }, ['删除'])])
+        h('td', {}, [h('div', { class: 'tunnel-actions' }, [
+          h('button', { class: 'btn sm primary', onclick: function () { tunnelOpenEdgeEdit(s); } }, ['编辑']),
+          h('button', { class: 'btn sm danger', onclick: function () { tunnelDelEdgeService(s.id); } }, ['删除'])
+        ])])
       ]);
     });
-    var net = tunnelNetSelect(state.tunnelNetworks[0] ? state.tunnelNetworks[0].id : 0);
-    var name = h('input', { placeholder: '名称' }, []);
-    var proto = h('select', {}, [h('option', { value: 'http' }, ['http']), h('option', { value: 'tcp' }, ['tcp'])]);
-    var host = h('input', { placeholder: '域名（http），如 nas.example.com' }, []);
-    var pubPort = h('input', { placeholder: '公网端口（tcp）', type: 'number' }, []);
-    var target = h('input', { placeholder: '目标，如 10.77.0.2:5000' }, []);
-    var create = h('button', { class: 'btn primary', onclick: function () {
-      api('/api/edge-services', { method: 'POST', body: JSON.stringify({ network_id: Number(net.value), name: name.value, host: host.value, target: target.value, protocol: proto.value, public_port: Number(pubPort.value || 0) }) })
-        .then(function () { tunnelSetMsg(true, '服务已创建'); return tunnelReload(); })
-        .catch(function (e) { tunnelSetMsg(false, e.message); render(); });
-    } }, ['创建服务']);
     return h('div', { class: 'card' }, [
-      h('div', { class: 'card-head' }, [h('h3', {}, ['边缘服务（自定义域名 / TCP 端口）'])]),
-      h('div', { class: 'table-wrap' }, [
-        h('table', {}, [
-          h('thead', {}, [h('tr', {}, [h('th', {}, ['名称']), h('th', {}, ['入口']), h('th', {}, ['目标']), h('th', {}, ['协议']), h('th', {}, ['操作'])])]),
-          h('tbody', {}, rows)
-        ])
+      h('div', { class: 'card-head' }, [
+        h('h3', {}, ['边缘服务（自定义域名 / TCP 端口）']),
+        h('button', { class: 'btn primary', onclick: tunnelOpenEdgeCreate }, ['新建服务'])
       ]),
-      field('所属网络', net), field('名称', name), field('协议', proto),
-      field('域名', host), field('公网端口', pubPort), field('目标', target),
-      create
+      h('div', { class: 'table-wrap' }, [
+        h('table', { class: 'tunnel-table' }, [
+          h('thead', {}, [h('tr', {}, [h('th', {}, ['名称']), h('th', {}, ['入口']), h('th', {}, ['目标']), h('th', {}, ['协议']), h('th', {}, ['操作'])])]),
+          h('tbody', {}, rows.length ? rows : [h('tr', {}, [h('td', { colspan: 5, class: 'muted' }, ['暂无服务'])])])
+        ])
+      ])
     ]);
   }
 

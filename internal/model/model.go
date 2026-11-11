@@ -1,6 +1,12 @@
 // Package model 定义控制面领域模型（与数据库表对应）。
 package model
 
+import (
+	"database/sql/driver"
+	"encoding/json"
+	"fmt"
+)
+
 // Network overlay 网络。
 type Network struct {
 	ID        int64  `json:"id"`
@@ -24,6 +30,53 @@ type CA struct {
 	CreatedAt   string `json:"created_at"`
 }
 
+// ClientOverride 每台主机的客户端参数覆盖（服务端页面配置）。
+//
+// 零值表示「跟随网络/全局默认」；UseServerDNS 为三态：
+//   - nil：跟随默认（有 DNS 就下发）
+//   - true：启用服务端 DNS
+//   - false：关闭服务端 DNS（Bundle 不下发 DNS）
+type ClientOverride struct {
+	UseServerDNS  *bool  `json:"use_server_dns,omitempty"`
+	DNS           string `json:"dns,omitempty"`
+	MTU           int    `json:"mtu,omitempty"`
+	Interval      string `json:"interval,omitempty"`
+	DataPlaneMode string `json:"data_plane_mode,omitempty"`
+}
+
+// Scan 实现 sql.Scanner（DB 中存 JSON 文本）。
+func (c *ClientOverride) Scan(src any) error {
+	var raw string
+	switch v := src.(type) {
+	case nil:
+		*c = ClientOverride{}
+		return nil
+	case string:
+		raw = v
+	case []byte:
+		raw = string(v)
+	default:
+		return fmt.Errorf("client_settings 类型不支持: %T", src)
+	}
+	if raw == "" {
+		*c = ClientOverride{}
+		return nil
+	}
+	return json.Unmarshal([]byte(raw), c)
+}
+
+// Value 实现 driver.Valuer（写入 JSON 文本）。
+func (c ClientOverride) Value() (driver.Value, error) {
+	if c == (ClientOverride{}) {
+		return "", nil
+	}
+	b, err := json.Marshal(c)
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
+}
+
 // ClientNode 客户端节点。
 type ClientNode struct {
 	ID        int64  `json:"id"`
@@ -42,6 +95,8 @@ type ClientNode struct {
 	ConfigRev int64  `json:"config_rev"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
+	// ClientSettings 每主机客户端参数覆盖（JSON）。
+	ClientSettings ClientOverride `json:"client_settings"`
 }
 
 // Bundle 客户端配置包（证书 + 配置）。

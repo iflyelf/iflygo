@@ -151,6 +151,35 @@ func (c *Client) Refresh() error {
 	return nil
 }
 
+// AutoRefresh 心跳检查服务端配置版本；有更新则自动拉取并写入本地。
+//
+// 返回 true 表示配置已更新（IP/证书/路由等），调用方应重启隧道以应用新配置。
+// 整个过程无需用户手工修改任何客户端文件。
+func (c *Client) AutoRefresh() (bool, error) {
+	c.mu.Lock()
+	stateDir := c.stateDir
+	c.mu.Unlock()
+	st, err := client.LoadState(stateDir)
+	if err != nil {
+		return false, err
+	}
+	api := client.New(st.Server, st.ClientID, st.Secret)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	hb, err := api.Heartbeat(ctx)
+	cancel()
+	if err != nil {
+		return false, err
+	}
+	if hb.ConfigRev == st.ConfigRev {
+		return false, nil
+	}
+	if err := c.Refresh(); err != nil {
+		return false, err
+	}
+	log.Printf("🔄 服务端配置已更新（rev %d → %d），已自动应用", st.ConfigRev, hb.ConfigRev)
+	return true, nil
+}
+
 // Start 用 Android VpnService 传入的 TUN fd 启动 overlay。
 func (c *Client) Start(fd int) error {
 	c.mu.Lock()

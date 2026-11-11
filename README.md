@@ -601,8 +601,9 @@ iflygo-server -role gateway -overlay-config /etc/iflygo/node/config.yml
   3. 点「启动」，允许 Android VPN 授权；
   4. 状态显示「运行中」，日志可查看 Nebula 输出。
 - **参数下发**：服务端「设置 → 客户端下发」（DNS/MTU/interval）与「数据面 / TCP 中继」、
-  「网络 → Nebula 设置」、路由页的参数会随 enroll/config 自动下发；点「刷新」后
-  App 会自动重启 VpnService 应用新的 DNS/MTU/路由。
+  「网络 → 编辑」、客户端「编辑」弹窗与路由页的参数会随 enroll/config 自动下发；
+  VpnService 每 30 秒检查配置版本，IP/证书/DNS/MTU/路由变化会自动重启隧道，
+  也可点「刷新」立即应用。
 - **网络范围**：VpnService 只添加 overlay CIDR 与服务端下发的不安全路由；
   Nebula 自身 UDP 通过 `addDisallowedApplication` 排除，避免回环。
   当前版本不提供全局 0/0 代理；需要全局时须配合 socket protect/全隧道策略。
@@ -707,22 +708,36 @@ tcp_relay:
 
 | 页面位置 | 配置项 | 下发方式 |
 |---|---|---|
-| 设置 → 客户端下发 | `client.dns`、`client.mtu`、`client.interval` | Bundle → `client.yaml` / 客户端 State |
+| 设置 → 客户端下发 | `client.dns`、`client.mtu`、`client.interval`（全局默认） | Bundle → `client.yaml` / 客户端 State |
 | 设置 → 数据面 / TCP 中继 | `tcp_relay.mode`（客户端默认 auto/tcp/udp）、中继令牌 | Bundle `client.data_plane_mode` + 心跳 |
-| 隧道 → 网络 → Nebula 设置 | cipher、punch、relays、TUN、握手、日志、统计、网络 DNS/MTU | Nebula `config.yml` / Bundle DNS/MTU |
-| 隧道 → 路由 | 不安全路由 CIDR | `routes.json` / Nebula `unsafe_routes` |
-| 隧道 → 客户端 | 名称、IPv4/IPv6、enroll token | Bundle / State |
+| 隧道 → 网络 → 编辑 | cipher、punch、relays、TUN、握手、日志、统计、网络 DNS/MTU | Nebula `config.yml` / Bundle DNS/MTU |
+| 隧道 → 客户端 → 编辑 | 名称、IPv4/IPv6、分组、子网、**每主机 DNS/MTU/心跳/数据面/DNS 开关** | Bundle / State |
+| 隧道 → 路由 → 编辑 | 不安全路由 CIDR、网关、权重 | `routes.json` / Nebula `unsafe_routes` |
+| 隧道 → 客户端 | enroll token / 安装命令 | Bundle / State |
+
+每台主机都可以在「隧道 → 客户端 → 编辑」弹窗中单独覆盖参数：
+
+- **服务端 DNS**：跟随网络/全局、启用、关闭三态；关闭后 Bundle 不下发 DNS；
+- **DNS**：覆盖网络级与全局 DNS；
+- **MTU**：0 表示跟随网络/全局；
+- **心跳间隔**：如 `30s`，留空跟随默认；
+- **数据面模式**：auto / tcp / udp，留空跟随默认。
 
 优先级：
 
-1. **网络级 DNS/MTU** 优先于全局「客户端下发」默认值；
+1. **主机级覆盖** > **网络级** > 全局「客户端下发」默认值；
 2. **命令行参数** 优先于 `client.yaml`；
 3. `client.yaml` 由服务端自动写入，优先级高于心跳自动发现；
-4. 修改页面后，客户端 `config`/心跳拉取会更新 `client.yaml`；Android 客户端点「刷新」会自动重启 VpnService 使 DNS/MTU/路由立即生效。
+4. 页面所有创建/编辑操作均在弹窗中完成，不再在列表页展开表单；
+5. 修改主机 IP 后服务端会自动重新签发证书、更新 IPAM 绑定并递增 `config_rev`；
+6. 修改页面后，客户端心跳/`config` 拉取会自动更新 `client.yaml`、证书与 Nebula 配置：
+   - CLI/服务端安装的客户端：检测到 IP/证书变化会自动重启 overlay；
+   - Android 客户端：VpnService 每 30 秒检查一次配置版本，有更新会自动重启隧道，
+     也可以点「刷新」立即应用；无需手工修改任何客户端文件。
 
 > **DNS 建议填 overlay 内可达的解析器**（如 `10.77.0.1`）。Android VpnService 会把该 DNS
 > 下发给系统；由于 VPN 只接管 overlay CIDR 与不安全路由，公网 DNS 能否访问取决于
-> 网关是否提供转发/NAT。
+> 网关是否提供转发/NAT。若不需要服务端 DNS，可在主机编辑弹窗中选择「关闭服务端 DNS」。
 
 ### 客户端配置文件（支持热加载）
 

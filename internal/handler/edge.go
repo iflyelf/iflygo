@@ -91,6 +91,63 @@ func CreateEdgeService(sc *svc.ServiceContext) http.HandlerFunc {
 	}
 }
 
+// UpdateEdgeService 更新边缘服务。
+func UpdateEdgeService(sc *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := tunnelID(r)
+		if err != nil {
+			httpx.Fail(w, http.StatusBadRequest, "id 非法")
+			return
+		}
+		var existing model.EdgeService
+		q := sc.Store.Rebind(`SELECT id,network_id,name,host,target,protocol,tls_mode,public_port,enabled,created_at FROM edge_services WHERE id = $1`)
+		var enabled int64
+		if err := sc.Store.DB.QueryRow(q, id).Scan(&existing.ID, &existing.NetworkID, &existing.Name,
+			&existing.Host, &existing.Target, &existing.Protocol, &existing.TLSMode, &existing.PublicPort, &enabled, &existing.CreatedAt); err != nil {
+			httpx.Fail(w, http.StatusNotFound, "边缘服务不存在")
+			return
+		}
+		var req edgeServiceReq
+		if err := httpx.DecodeJSON(r, &req); err != nil {
+			httpx.Fail(w, http.StatusBadRequest, "请求体非法")
+			return
+		}
+		if req.NetworkID == 0 {
+			req.NetworkID = existing.NetworkID
+		}
+		if req.Target == "" {
+			httpx.Fail(w, http.StatusBadRequest, "target 必填")
+			return
+		}
+		if req.Protocol == "" {
+			req.Protocol = existing.Protocol
+		}
+		if req.TLSMode == "" {
+			req.TLSMode = existing.TLSMode
+		}
+		if req.Name == "" {
+			req.Name = existing.Name
+		}
+		if req.Protocol == "tcp" {
+			if req.PublicPort == 0 {
+				httpx.Fail(w, http.StatusBadRequest, "tcp 协议需要 public_port")
+				return
+			}
+		} else if req.Host == "" {
+			httpx.Fail(w, http.StatusBadRequest, "http/https 协议需要 host")
+			return
+		}
+		if _, err := sc.Store.DB.Exec(sc.Store.Rebind(`UPDATE edge_services SET network_id=$1,name=$2,host=$3,target=$4,protocol=$5,tls_mode=$6,public_port=$7 WHERE id=$8`),
+			req.NetworkID, req.Name, req.Host, req.Target, req.Protocol, req.TLSMode, req.PublicPort, id); err != nil {
+			httpx.FailErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		httpx.OK(w, model.EdgeService{ID: id, NetworkID: req.NetworkID, Name: req.Name, Host: req.Host,
+			Target: req.Target, Protocol: req.Protocol, TLSMode: req.TLSMode, PublicPort: req.PublicPort,
+			Enabled: true, CreatedAt: existing.CreatedAt})
+	}
+}
+
 // DeleteEdgeService 删除边缘服务。
 func DeleteEdgeService(sc *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

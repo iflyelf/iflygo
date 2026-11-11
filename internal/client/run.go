@@ -148,10 +148,22 @@ func Run(opts RunOptions) error {
 			}
 			hbInfo = hb
 			configChanged := hb.ConfigRev != st.ConfigRev
+			oldIPv4, oldIPv6 := st.IPv4, st.IPv6
 			if configChanged {
 				if err := fetchAndApply(c, st, dir); err != nil {
 					log.Printf("⚠️ 更新配置失败: %v", err)
 					continue
+				}
+				// ApplyBundle 会重写 client.yaml；立即重新加载，避免继续使用旧参数。
+				if fc, lerr := LoadFileConfig(cfgPath); lerr == nil {
+					fileCfg = fc
+					if opts.Interval <= 0 {
+						if d := fc.IntervalDuration(0); d > 0 && d != interval {
+							interval = d
+							hbTicker.Reset(interval)
+							log.Printf("🔄 客户端心跳间隔已更新为 %s", interval)
+						}
+					}
 				}
 			}
 			next := ResolveRelay(opts.Mode, opts.TCPRelay, opts.TCPRelayToken, fileCfg, hb)
@@ -162,9 +174,17 @@ func Run(opts RunOptions) error {
 			if configChanged {
 				// 用新配置重建 TCP 桥；成功后再回收旧桥，失败则保留旧桥运行。
 				scope := newBridgeScope()
-				if err := reloadOverlay(ov, dir, relay, scope.ctx); err != nil {
+				// 地址/证书变化时重启 overlay，确保 Nebula 使用新的 IP 与证书；
+				// 其余参数变化用热加载即可。
+				var rerr error
+				if st.IPv4 != oldIPv4 || st.IPv6 != oldIPv6 {
+					rerr = restartOverlay(ov, dir, relay, scope.ctx)
+				} else {
+					rerr = reloadOverlay(ov, dir, relay, scope.ctx)
+				}
+				if rerr != nil {
 					scope.Close()
-					log.Printf("⚠️ 热加载失败: %v", err)
+					log.Printf("⚠️ 热加载失败: %v", rerr)
 				} else {
 					bridges.Close()
 					bridges = scope

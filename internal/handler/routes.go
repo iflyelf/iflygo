@@ -93,8 +93,73 @@ func CreateRoute(sc *svc.ServiceContext) http.HandlerFunc {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
 		}
+		bumpConfigRev(sc, nid)
 		for _, rt := range routes {
 			if rt.ID == rid {
+				httpx.OK(w, rt)
+				return
+			}
+		}
+		httpx.OK(w, nil)
+	}
+}
+
+// UpdateRoute 更新不安全路由及其网关。
+func UpdateRoute(sc *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := tunnelID(r)
+		if err != nil {
+			httpx.Fail(w, http.StatusBadRequest, "id 非法")
+			return
+		}
+		var nid int64
+		if err := sc.Store.DB.QueryRow(sc.Store.Rebind(`SELECT network_id FROM subnet_routes WHERE id = $1`), id).Scan(&nid); err != nil {
+			httpx.Fail(w, http.StatusNotFound, "路由不存在")
+			return
+		}
+		var req createRouteReq
+		if err := httpx.DecodeJSON(r, &req); err != nil {
+			httpx.Fail(w, http.StatusBadRequest, "请求体非法")
+			return
+		}
+		if req.CIDR == "" || len(req.Gateways) == 0 {
+			httpx.Fail(w, http.StatusBadRequest, "cidr 与 gateways 必填")
+			return
+		}
+		if req.Mode == "" {
+			req.Mode = "active_active"
+		}
+		if req.AllDownPolicy == "" {
+			req.AllDownPolicy = "fail_closed"
+		}
+		if _, err := sc.Store.DB.Exec(sc.Store.Rebind(`UPDATE subnet_routes SET cidr=$1,mtu=$2,metric=$3,mode=$4,all_down_policy=$5,description=$6 WHERE id=$7`),
+			req.CIDR, req.MTU, req.Metric, req.Mode, req.AllDownPolicy, req.Description, id); err != nil {
+			httpx.FailErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		if _, err := sc.Store.DB.Exec(sc.Store.Rebind(`DELETE FROM route_gateways WHERE route_id = $1`), id); err != nil {
+			httpx.FailErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		now := nowStr()
+		for _, g := range req.Gateways {
+			if g.Weight == 0 {
+				g.Weight = 1
+			}
+			if _, err := sc.Store.DB.Exec(sc.Store.Rebind(`INSERT INTO route_gateways (route_id,node_id,overlay_ip,weight,priority,health_target,health_port,enabled,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,1,$8)`),
+				id, g.NodeID, g.OverlayIP, g.Weight, g.Priority, g.HealthTarget, g.HealthPort, now); err != nil {
+				httpx.FailErr(w, http.StatusInternalServerError, err)
+				return
+			}
+		}
+		bumpConfigRev(sc, nid)
+		routes, err := loadRoutes(sc, nid)
+		if err != nil {
+			httpx.FailErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		for _, rt := range routes {
+			if rt.ID == id {
 				httpx.OK(w, rt)
 				return
 			}
@@ -111,9 +176,14 @@ func DeleteRoute(sc *svc.ServiceContext) http.HandlerFunc {
 			httpx.Fail(w, http.StatusBadRequest, "id 非法")
 			return
 		}
+		var nid int64
+		_ = sc.Store.DB.QueryRow(sc.Store.Rebind(`SELECT network_id FROM subnet_routes WHERE id = $1`), id).Scan(&nid)
 		if _, err := sc.Store.DB.Exec(sc.Store.Rebind(`DELETE FROM subnet_routes WHERE id = $1`), id); err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
+		}
+		if nid != 0 {
+			bumpConfigRev(sc, nid)
 		}
 		httpx.OK(w, nil)
 	}

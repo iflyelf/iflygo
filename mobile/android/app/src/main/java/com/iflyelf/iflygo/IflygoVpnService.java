@@ -7,6 +7,8 @@ import android.app.PendingIntent;
 import android.content.Intent;
 import android.net.VpnService;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.util.Log;
 
@@ -19,6 +21,26 @@ public class IflygoVpnService extends VpnService {
     private static final String TAG = "IflygoVpnService";
     private static final String CHANNEL = "iflygo-vpn";
     private volatile boolean running = false;
+    private final Handler poller = new Handler(Looper.getMainLooper());
+    private final Runnable autoCheck = new Runnable() {
+        @Override
+        public void run() {
+            if (!running) {
+                return;
+            }
+            final Client client = ((IflygoApp) getApplication()).client();
+            new Thread(() -> {
+                try {
+                    if (client.autoRefresh()) {
+                        poller.post(IflygoVpnService.this::restartTunnel);
+                    }
+                } catch (Exception e) {
+                    Log.w(TAG, "auto refresh failed", e);
+                }
+            }, "iflygo-autorefresh").start();
+            poller.postDelayed(this, 30000);
+        }
+    };
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -131,7 +153,22 @@ public class IflygoVpnService extends VpnService {
                 stopSelf();
             }
         }, "iflygo-start").start();
+        // 每 30 秒检查服务端配置版本；IP/证书/路由变化时自动重启隧道。
+        poller.removeCallbacks(autoCheck);
+        poller.postDelayed(autoCheck, 30000);
         return START_STICKY;
+    }
+
+    // restartTunnel 应用服务端新配置：停止后用新证书/IP 重新建立 VpnService。
+    private void restartTunnel() {
+        new Thread(() -> {
+            stopTunnel();
+            try {
+                Thread.sleep(300);
+            } catch (InterruptedException ignored) {
+            }
+            poller.post(IflygoVpnService.this::startTunnel);
+        }, "iflygo-autorestart").start();
     }
 
     private void stopTunnel() {
@@ -139,6 +176,7 @@ public class IflygoVpnService extends VpnService {
             return;
         }
         running = false;
+        poller.removeCallbacks(autoCheck);
         try {
             ((IflygoApp) getApplication()).client().stop();
         } catch (Exception e) {
@@ -154,6 +192,7 @@ public class IflygoVpnService extends VpnService {
 
     @Override
     public void onDestroy() {
+        poller.removeCallbacks(autoCheck);
         stopTunnel();
         stopForeground(true);
         super.onDestroy();

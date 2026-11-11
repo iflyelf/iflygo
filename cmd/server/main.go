@@ -486,17 +486,20 @@ func registerTunnelRoutes(mux *http.ServeMux, sc *svc.ServiceContext) {
 	// 服务端节点（lighthouse/relay/edge/gateway）
 	mux.Handle("GET /api/server-nodes", auth(handler.ListServerNodes(sc)))
 	mux.Handle("POST /api/server-nodes", auth(handler.CreateServerNode(sc)))
+	mux.Handle("PUT /api/server-nodes/{id}", auth(handler.UpdateServerNode(sc)))
 	mux.Handle("DELETE /api/server-nodes/{id}", auth(handler.DeleteServerNode(sc)))
 	mux.Handle("GET /api/server-nodes/{id}/bundle", auth(handler.ServerNodeBundle(sc)))
 
 	// 不安全路由（子网路由 + 网关）
 	mux.Handle("GET /api/networks/{id}/routes", auth(handler.ListRoutes(sc)))
 	mux.Handle("POST /api/networks/{id}/routes", auth(handler.CreateRoute(sc)))
+	mux.Handle("PUT /api/routes/{id}", auth(handler.UpdateRoute(sc)))
 	mux.Handle("DELETE /api/routes/{id}", auth(handler.DeleteRoute(sc)))
 
 	// 边缘服务（自定义域名/二级前缀 → overlay 目标）
 	mux.Handle("GET /api/edge-services", auth(handler.ListEdgeServices(sc)))
 	mux.Handle("POST /api/edge-services", auth(handler.CreateEdgeService(sc)))
+	mux.Handle("PUT /api/edge-services/{id}", auth(handler.UpdateEdgeService(sc)))
 	mux.Handle("DELETE /api/edge-services/{id}", auth(handler.DeleteEdgeService(sc)))
 	mux.Handle("GET /api/server-nodes/{id}/edge-routes", auth(handler.EdgeRoutes(sc)))
 
@@ -504,6 +507,7 @@ func registerTunnelRoutes(mux *http.ServeMux, sc *svc.ServiceContext) {
 	mux.Handle("GET /api/clients", auth(handler.ListClients(sc)))
 	mux.Handle("POST /api/clients", auth(handler.CreateClient(sc)))
 	mux.Handle("GET /api/clients/{id}", auth(handler.GetClient(sc)))
+	mux.Handle("PUT /api/clients/{id}", auth(handler.UpdateClient(sc)))
 	mux.Handle("DELETE /api/clients/{id}", auth(handler.DeleteClient(sc)))
 	mux.Handle("POST /api/clients/{id}/enroll-token", auth(handler.ClientEnrollToken(sc)))
 	mux.Handle("GET /api/clients/{id}/bundle", auth(handler.ClientBundle(sc)))
