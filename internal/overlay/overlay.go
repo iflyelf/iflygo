@@ -11,6 +11,7 @@ import (
 
 	"github.com/slackhq/nebula"
 	"github.com/slackhq/nebula/config"
+	nebulaoverlay "github.com/slackhq/nebula/overlay"
 	"gopkg.in/yaml.v3"
 )
 
@@ -40,6 +41,20 @@ func New(logger *slog.Logger) *Overlay {
 
 // Start 用 YAML 配置启动 overlay（非阻塞）。
 func (o *Overlay) Start(yamlBytes []byte) error {
+	return o.start(yamlBytes, nil)
+}
+
+// StartWithFD 用调用方提供的 TUN fd 启动 overlay（Android VpnService 等）。
+//
+// fd 必须是非阻塞的 TUN 设备；Nebula 会接管其生命周期并在 Stop 时关闭。
+func (o *Overlay) StartWithFD(yamlBytes []byte, fd int) error {
+	if fd < 0 {
+		return fmt.Errorf("TUN fd 无效: %d", fd)
+	}
+	return o.start(yamlBytes, nebulaoverlay.NewFdDeviceFromConfig(&fd))
+}
+
+func (o *Overlay) start(yamlBytes []byte, factory nebulaoverlay.DeviceFactory) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.ctl != nil {
@@ -49,7 +64,7 @@ func (o *Overlay) Start(yamlBytes []byte) error {
 	if err := cfg.LoadString(string(yamlBytes)); err != nil {
 		return fmt.Errorf("解析配置: %w", err)
 	}
-	ctl, err := nebula.Main(cfg, false, "iflygo", o.logger, nil)
+	ctl, err := nebula.Main(cfg, false, "iflygo", o.logger, factory)
 	if err != nil {
 		return fmt.Errorf("初始化 Nebula: %w", err)
 	}

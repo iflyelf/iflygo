@@ -46,7 +46,10 @@ type ClientNode struct {
 
 // Bundle 客户端配置包（证书 + 配置）。
 type Bundle struct {
+	Name      string      `json:"name,omitempty"`
 	Network   string      `json:"network"`
+	Cidr4     string      `json:"cidr4,omitempty"`
+	Cidr6     string      `json:"cidr6,omitempty"`
 	IPv4      string      `json:"ipv4"`
 	IPv6      string      `json:"ipv6"`
 	MTU       int         `json:"mtu"`

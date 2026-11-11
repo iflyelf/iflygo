@@ -1,0 +1,32 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.iflyelf.iflygo'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.iflyelf.iflygo"
+        minSdk 24
+        targetSdk 33
+        versionCode 1
+        versionName "0.1.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    // CI 在 gradle 前执行 gomobile bind 生成
+    implementation files('libs/iflygo.aar')
+}

@@ -15,8 +15,12 @@ type State struct {
 	Secret    string `json:"secret"`
 	Name      string `json:"name"`
 	Network   string `json:"network"`
+	Cidr4     string `json:"cidr4,omitempty"`
+	Cidr6     string `json:"cidr6,omitempty"`
 	IPv4      string `json:"ipv4"`
 	IPv6      string `json:"ipv6"`
+	MTU       int    `json:"mtu,omitempty"`
+	DNS       string `json:"dns,omitempty"`
 	ConfigRev int64  `json:"config_rev"`
 }
 

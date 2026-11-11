@@ -264,9 +264,14 @@ func fetchAndApply(c *Client, st *State, dir string) error {
 		return err
 	}
 	st.ConfigRev = bundle.ConfigRev
+	st.Name = bundle.Name
 	st.Network = bundle.Network
+	st.Cidr4 = bundle.Cidr4
+	st.Cidr6 = bundle.Cidr6
 	st.IPv4 = bundle.IPv4
 	st.IPv6 = bundle.IPv6
+	st.MTU = bundle.MTU
+	st.DNS = bundle.DNS
 	return st.Save(dir)
 }
 

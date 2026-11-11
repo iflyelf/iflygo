@@ -16,6 +16,7 @@
 - ✅ **Web 管理**：Token 接入、IPAM、证书签发、配置下发、自定义域名/二级前缀
 - ✅ **跨平台**：`CGO_ENABLED=0` 交叉编译，Linux / Windows / macOS / 树莓派 / NAS
 - ✅ **多种部署**：二进制/systemd、Windows 服务（SCM）、Docker Compose、Nginx 反向代理示例
+- ✅ **移动客户端**：Android APK（完整 VpnService 隧道，兼容 HarmonyOS 4/4.2 及以下）
 
 ### 升级控制平台（完整复刻 upgrade_mgr）
 - ✅ 主机清单 / 组件 / 制品 / 升级任务（灰度编排、批次、重试、取消、回滚）
@@ -78,6 +79,7 @@
 - [x] 服务端/客户端配置文件热加载；服务端中继配置与网络 Nebula 设置可在页面配置
 - [x] 主机自动合并 / 在线删除保护与强制删除 / 手工新增主机
 - [x] Casdoor 用户目录/用户管理、用户字段自动同步、consul_mgr 按服务名称同步
+- [x] Android APK 客户端：gomobile + VpnService 完整隧道（兼容 HarmonyOS 4）
 - [x] 部署文档与模板：systemd / Windows SCM / Docker Compose / Nginx
 
 ## 🔌 控制面 API（已实现）
@@ -559,6 +561,28 @@ iflygo-server -role gateway -overlay-config /etc/iflygo/node/config.yml
 
 ---
 
+### 移动客户端（Android / HarmonyOS 4）
+
+带界面的 Android 客户端位于 `mobile/android/`，Go 核心位于 `mobile/`：
+
+- **形态**：完整 VpnService/TUN 隧道（不是仅管理页面）
+- **功能**：填写控制面地址 + enroll token → 注册 → 启动/停止 VPN → 状态/IP/日志
+- **兼容性**：APK 可安装在 **HarmonyOS 4 / 4.2 及以下**（Android 兼容）；
+  HarmonyOS NEXT（5.x）不兼容 Android APK，需要原生 ArkTS HAP（本仓库暂未构建）
+- **构建**：`.github/workflows/android.yml` 自动执行
+  `gomobile bind` + `gradle assembleDebug`，产物为
+  `app-debug.apk`；手动触发/tag 时会附加到 Release
+- **本地构建**：见 `mobile/android/README.md`（需要 JDK 17、Android SDK 34、
+  NDK 26.1、Gradle 8.7、gomobile）
+- **使用**：
+  1. 控制台「隧道 → 客户端」创建客户端，复制 enroll token；
+  2. 安装 APK，填写控制面地址与 token，点「注册」；
+  3. 点「启动」，允许 Android VPN 授权；
+  4. 状态显示「运行中」，日志可查看 Nebula 输出。
+- **网络范围**：VpnService 只添加 overlay CIDR 与服务端下发的不安全路由；
+  Nebula 自身 UDP 通过 `addDisallowedApplication` 排除，避免回环。
+  当前版本不提供全局 0/0 代理；需要全局时须配合 socket protect/全隧道策略。
+
 ### Nginx / HTTPS 反向代理（可选）
 
 参考 `deploy/nginx/iflygo.conf`，关键点：
@@ -698,6 +722,7 @@ iflygo-client run --tcp-relay off   # 等价 --data-plane udp
 
 - 推 tag `v*` 触发：Docker 多架构发布（Docker Hub + 华为云 SWR）+ 全平台二进制 Release
 - Windows 发布包（zip）内置 `wintun.dll`，解压即用
+- Android APK 由 `android.yml` 构建；手动触发/tag 时附加到 Release
 - `workflow_dispatch` 手动触发构建
 - `update-version.yml` 每天检测上游 Nebula 最新版本并自动开 PR
 

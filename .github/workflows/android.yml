@@ -1,0 +1,72 @@
+name: Android APK
+
+# 构建带界面的 Android 客户端（完整 VpnService 隧道）。
+# 同一 APK 可安装在 HarmonyOS 4/4.2 及以下（Android 兼容）；HarmonyOS NEXT 需原生 HAP。
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'mobile/**'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/android.yml'
+  tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: 构建 APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: 安装 Android SDK / NDK
+        run: |
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125"
+
+      - uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.7'
+
+      - name: 安装 gomobile
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: 生成 Go AAR
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/26.1.10909125"
+          gomobile init
+          mkdir -p mobile/android/app/libs
+          gomobile bind -target=android -androidapi 24 -javapkg=com.iflyelf.iflygo.core \
+            -o mobile/android/app/libs/iflygo.aar ./mobile
+
+      - name: 构建 APK
+        run: gradle -p mobile/android assembleDebug --no-daemon
+
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: iflygo-android-apk
+          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: 附加到 Release
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v3.0.3
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
+          files: mobile/android/app/build/outputs/apk/debug/app-debug.apk
