@@ -17,10 +17,15 @@ artifact:
   lock_wait: 30m
 
 tcp_relay:
-  mode: auto          # auto / tcp / udp
+  mode: auto          # auto / tcp / udp（客户端默认数据面模式）
   listen: ""          # 留空 = 控制面端口 +1（8091）
   advertise: ""       # 对外可达地址，如 iflygo.example.com:8091
   token: ""           # 可选共享令牌，客户端通过心跳自动获取
+
+client:
+  dns: ""             # 客户端默认 DNS（网络级 DNS 优先）
+  mtu: 1280           # 客户端默认 MTU
+  interval: 30s       # 客户端心跳间隔
 
 log:
   level: info

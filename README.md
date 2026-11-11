@@ -273,10 +273,15 @@ artifact:
   lock_wait: 30m
 
 tcp_relay:
-  mode: auto                  # auto / tcp / udp
+  mode: auto                  # auto / tcp / udp（客户端默认数据面模式）
   listen: ""                  # 留空 = 8091（控制面端口 +1）
   advertise: ""               # 反向代理/端口映射时填对外地址，如 iflygo.example.com:8091
   token: ""                   # 可选共享令牌，客户端自动获取
+
+client:
+  dns: "10.77.0.1"            # 客户端默认 DNS（网络级 DNS 优先）
+  mtu: 1280                   # 客户端默认 MTU（网络级 MTU 优先）
+  interval: 30s               # 客户端心跳间隔
 
 log:
   level: info
@@ -291,6 +296,9 @@ DATABASE_URL=postgresql://iflygo:change-me@127.0.0.1:5432/iflygo?sslmode=disable
 SERVER_EXTERNAL_URL=https://iflygo.example.com
 # TCP_RELAY_ADVERTISE=iflygo.example.com:8091
 # TCP_RELAY_TOKEN=change-me
+# CLIENT_DNS=10.77.0.1
+# CLIENT_MTU=1280
+# CLIENT_INTERVAL=30s
 ```
 
 > 优先级：**页面设置 > 环境变量 > 配置文件 > 内置默认值**。

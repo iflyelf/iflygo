@@ -62,6 +62,11 @@ func CreateNetwork(sc *svc.ServiceContext) http.HandlerFunc {
 		}
 		if req.MTU == 0 {
 			req.MTU = 1300
+			if sc.Settings != nil {
+				if m := sc.Settings.Snapshot().Client.MTU; m > 0 {
+					req.MTU = m
+				}
+			}
 		}
 
 		ca, err := pki.CreateCA("iFlyGo CA ("+req.Name+")", 10*365*24*time.Hour)
