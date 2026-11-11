@@ -91,6 +91,10 @@ func UpdateClient(sc *svc.ServiceContext) http.HandlerFunc {
 			httpx.Fail(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		if settings.DNSGateway != "" && !gatewayInNetwork(net, settings.DNSGateway) {
+			httpx.Fail(w, http.StatusBadRequest, "DNS 网关必须在该网络的 overlay 网段内")
+			return
+		}
 
 		// ---- IP 变更：先分配新地址，成功后再释放旧地址 ----
 		newIPv4, newIPv6 := row.IPv4, row.IPv6
@@ -214,6 +218,10 @@ func validateClientOverride(ov *model.ClientOverride) error {
 		return nil
 	}
 	ov.DNS = strings.TrimSpace(ov.DNS)
+	ov.DNSGateway = strings.TrimSpace(ov.DNSGateway)
+	if ov.DNSGateway != "" && stdnet.ParseIP(ov.DNSGateway) == nil {
+		return &clientSettingsError{"DNS 网关不是合法 IP: " + ov.DNSGateway}
+	}
 	for _, d := range strings.Split(ov.DNS, ",") {
 		if d = strings.TrimSpace(d); d != "" && stdnet.ParseIP(d) == nil {
 			return &clientSettingsError{"DNS 含非法 IP: " + d}
@@ -323,6 +331,11 @@ func CreateClient(sc *svc.ServiceContext) http.HandlerFunc {
 		if err := validateClientOverride(req.ClientSettings); err != nil {
 			rollbackIPs(sc, net.ID, ipv4, ipv6)
 			httpx.Fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if req.ClientSettings != nil && req.ClientSettings.DNSGateway != "" && !gatewayInNetwork(net, req.ClientSettings.DNSGateway) {
+			rollbackIPs(sc, net.ID, ipv4, ipv6)
+			httpx.Fail(w, http.StatusBadRequest, "DNS 网关必须在该网络的 overlay 网段内")
 			return
 		}
 		settings := model.ClientOverride{}
@@ -541,7 +554,7 @@ func buildBundle(sc *svc.ServiceContext, c *clientRow) (*model.Bundle, error) {
 		return nil, err
 	}
 	// 公网 DNS 主机路由：/32 或 /128 经 overlay 网关，客户端与 Nebula 同时生效。
-	dnsCfgRoutes, dnsSpecs := dnsHostRoutes(sc, net, dns, dnsRoute)
+	dnsCfgRoutes, dnsSpecs := dnsHostRoutes(sc, net, dns, dnsRoute, ov.DNSGateway)
 	if len(dnsCfgRoutes) > 0 {
 		input.UnsafeRoutes = append(input.UnsafeRoutes, dnsCfgRoutes...)
 	}
@@ -581,7 +594,7 @@ func buildBundle(sc *svc.ServiceContext, c *clientRow) (*model.Bundle, error) {
 
 // dnsHostRoutes 为不在 overlay 网段内的 DNS 生成主机路由（/32 或 /128）。
 // 路由网关按「默认路由 > gateway 角色节点 > 网络网关 > 任意服务端节点」选择。
-func dnsHostRoutes(sc *svc.ServiceContext, net *model.Network, dnsCSV string, enabled bool) ([]configgen.Route, []model.RouteSpec) {
+func dnsHostRoutes(sc *svc.ServiceContext, net *model.Network, dnsCSV string, enabled bool, gatewayOverride string) ([]configgen.Route, []model.RouteSpec) {
 	if !enabled || strings.TrimSpace(dnsCSV) == "" {
 		return nil, nil
 	}
@@ -608,7 +621,7 @@ func dnsHostRoutes(sc *svc.ServiceContext, net *model.Network, dnsCSV string, en
 			continue
 		}
 		if !loaded[addr.Is4()] {
-			gateway[addr.Is4()] = resolveDNSGateway(sc, net, addr.Is4())
+			gateway[addr.Is4()] = gatewayForFamily(sc, net, gatewayOverride, addr.Is4())
 			loaded[addr.Is4()] = true
 		}
 		gw := gateway[addr.Is4()]
@@ -635,6 +648,12 @@ func prefixContains(cidr string, addr netip.Addr) bool {
 
 // resolveDNSGateway 选择公网 DNS 主机路由的 overlay 网关。
 func resolveDNSGateway(sc *svc.ServiceContext, net *model.Network, ipv4 bool) string {
+	// 0. 网络显式配置的 DNS 网关优先（多网关场景）。
+	if v := strings.TrimSpace(net.DNSGateway); v != "" {
+		if a, err := netip.ParseAddr(v); err == nil && a.Is4() == ipv4 {
+			return v
+		}
+	}
 	routes, _ := loadRoutes(sc, net.ID)
 	// 1. 默认路由（0.0.0.0/0 或 ::/0）的网关最符合「上公网」语义。
 	want := "0.0.0.0/0"

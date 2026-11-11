@@ -3,22 +3,27 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	stdnet "net"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"strings"
 
+	"github.com/iflyelf/iflygo/internal/auth"
+	"github.com/iflyelf/iflygo/internal/logic/task"
 	"github.com/iflyelf/iflygo/internal/model"
+	"github.com/iflyelf/iflygo/internal/pkg/audit"
 	"github.com/iflyelf/iflygo/internal/pkg/httpx"
+	"github.com/iflyelf/iflygo/internal/protocol"
 	"github.com/iflyelf/iflygo/internal/svc"
 )
 
-// DNSNATScript 生成 overlay 网关节点上的 NAT 策略脚本。
+// DNSNATScript 预览 NAT 脚本。
 //
-// 使用场景：客户端 DNS 为公网地址（如 8.8.8.8），且开启「DNS 主机路由」后，
-// DNS 报文会经 overlay 发到网关；网关需开启转发并做源地址伪装（MASQUERADE），
-// 否则公网 DNS 的回包无法返回 overlay 客户端。
-//
-// 查询参数 dns 可选；留空时汇总全局/网络/每主机实际使用的 DNS。
+// 查询参数：
+//   - mode=dns|full（默认 dns）
+//   - dns=8.8.8.8,1.1.1.1（dns 模式可选；留空汇总全局/网络/每主机实际 DNS）
+//   - gateway=10.77.0.1（可选，显式指定 overlay 网关，优先于网络配置与自动选择）
 func DNSNATScript(sc *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, err := tunnelID(r)
@@ -31,65 +36,261 @@ func DNSNATScript(sc *svc.ServiceContext) http.HandlerFunc {
 			httpx.Fail(w, http.StatusNotFound, "网络不存在")
 			return
 		}
-
-		raw := strings.TrimSpace(r.URL.Query().Get("dns"))
-		dnsList := splitList(raw)
-		if len(dnsList) == 0 {
-			dnsList = collectNetworkDNS(sc, net)
+		mode := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("mode")))
+		if mode == "" {
+			mode = "dns"
 		}
-
-		var v4, v6 []string
-		seen := map[string]bool{}
-		for _, item := range dnsList {
-			addr, err := netip.ParseAddr(strings.TrimSpace(item))
-			if err != nil {
-				httpx.Fail(w, http.StatusBadRequest, "DNS 含非法 IP: "+item)
-				return
-			}
-			// overlay 内 DNS 直接可达，不需要 NAT。
-			if prefixContains(net.Cidr4, addr) || prefixContains(net.Cidr6, addr) {
-				continue
-			}
-			s := addr.String()
-			if seen[s] {
-				continue
-			}
-			seen[s] = true
-			if addr.Is4() {
-				v4 = append(v4, s)
-			} else {
-				v6 = append(v6, s)
-			}
-		}
-		if len(v4) == 0 && len(v6) == 0 {
-			httpx.Fail(w, http.StatusBadRequest, "未找到需要经网关 NAT 的公网 DNS（overlay 内 DNS 无需 NAT）")
+		gwOverride := strings.TrimSpace(r.URL.Query().Get("gateway"))
+		if gwOverride != "" && !gatewayInNetwork(net, gwOverride) {
+			httpx.Fail(w, http.StatusBadRequest, "网关不在该网络的 overlay 网段内: "+gwOverride)
 			return
 		}
 
-		gw4, gw6 := "", ""
-		if len(v4) > 0 {
-			gw4 = resolveDNSGateway(sc, net, true)
-			if gw4 == "" {
-				httpx.Fail(w, http.StatusBadRequest, "未找到 IPv4 网关：请配置默认路由、gateway 角色节点或网络网关")
+		if mode == "full" {
+			gw4, gw6 := fullGateways(sc, net, gwOverride)
+			if gw4 == "" && gw6 == "" {
+				httpx.Fail(w, http.StatusBadRequest, "未找到可用网关：请选择网关节点或配置默认路由")
 				return
 			}
+			httpx.OK(w, map[string]any{
+				"mode": "full", "gateway4": gw4, "gateway6": gw6,
+				"script": buildFullNATScript(net, gw4, gw6),
+			})
+			return
 		}
-		if len(v6) > 0 {
-			gw6 = resolveDNSGateway(sc, net, false)
-			if gw6 == "" {
-				httpx.Fail(w, http.StatusBadRequest, "未找到 IPv6 网关：请配置默认路由、gateway 角色节点或网络网关")
-				return
-			}
+		if mode != "dns" {
+			httpx.Fail(w, http.StatusBadRequest, "mode 只能是 dns / full")
+			return
 		}
 
-		script := buildDNSNATScript(net, v4, v6, gw4, gw6)
+		v4, v6, gw4, gw6, err := computeDNSNAT(sc, net, r.URL.Query().Get("dns"), gwOverride)
+		if err != nil {
+			httpx.Fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		httpx.OK(w, map[string]any{
-			"gateway4": gw4,
-			"gateway6": gw6,
-			"dns":      append(append([]string{}, v4...), v6...),
-			"script":   script,
+			"mode": "dns", "gateway4": gw4, "gateway6": gw6,
+			"dns":    append(append([]string{}, v4...), v6...),
+			"script": buildDNSNATScript(net, v4, v6, gw4, gw6),
 		})
 	}
+}
+
+type natApplyReq struct {
+	Mode string `json:"mode"` // dns / full
+	DNS  string `json:"dns"`
+	// Gateway 显式 overlay 网关（可选）。
+	Gateway string `json:"gateway"`
+	// ServerNodeID 用于自动匹配网关节点对应的 Agent 主机（可选）。
+	ServerNodeID int64 `json:"server_node_id"`
+	// HostIP 显式指定执行脚本的 Agent 主机 IP/hostname（可选）。
+	HostIP string `json:"host_ip"`
+	// EnsureDefaultRoute full 模式默认创建/更新 0.0.0.0/0（及 ::/0）默认路由。
+	EnsureDefaultRoute *bool `json:"ensure_default_route"`
+	// Start 为 true 时创建并立即启动 Agent 命令任务。
+	Start bool `json:"start"`
+}
+
+// NATApply 生成 NAT 脚本，并可通过 Agent 自动执行。
+//
+// POST /api/networks/{id}/nat/apply
+// 仅在开启 agent.allow_exec_mode 且操作者为管理员时可执行。
+func NATApply(sc *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := tunnelID(r)
+		if err != nil {
+			httpx.Fail(w, http.StatusBadRequest, "id 非法")
+			return
+		}
+		net, err := getNetwork(sc, id)
+		if err != nil {
+			httpx.Fail(w, http.StatusNotFound, "网络不存在")
+			return
+		}
+		var req natApplyReq
+		if err := httpx.DecodeJSON(r, &req); err != nil {
+			httpx.Fail(w, http.StatusBadRequest, "请求体非法")
+			return
+		}
+		mode := strings.ToLower(strings.TrimSpace(req.Mode))
+		if mode == "" {
+			mode = "dns"
+		}
+		req.Gateway = strings.TrimSpace(req.Gateway)
+		if req.Gateway != "" && !gatewayInNetwork(net, req.Gateway) {
+			httpx.Fail(w, http.StatusBadRequest, "网关不在该网络的 overlay 网段内: "+req.Gateway)
+			return
+		}
+
+		var script, label string
+		var gw4, gw6 string
+		switch mode {
+		case "dns":
+			v4, v6, g4, g6, cerr := computeDNSNAT(sc, net, req.DNS, req.Gateway)
+			if cerr != nil {
+				httpx.Fail(w, http.StatusBadRequest, cerr.Error())
+				return
+			}
+			gw4, gw6 = g4, g6
+			script = buildDNSNATScript(net, v4, v6, gw4, gw6)
+			label = "DNS NAT"
+		case "full":
+			gw4, gw6 = fullGateways(sc, net, req.Gateway)
+			if gw4 == "" && gw6 == "" {
+				httpx.Fail(w, http.StatusBadRequest, "未找到可用网关：请选择网关节点或配置默认路由")
+				return
+			}
+			script = buildFullNATScript(net, gw4, gw6)
+			label = "全量出口 NAT"
+		default:
+			httpx.Fail(w, http.StatusBadRequest, "mode 只能是 dns / full")
+			return
+		}
+
+		// full 模式默认创建/更新默认路由；显式传 false 可关闭。
+		ensureRoute := mode == "full"
+		if req.EnsureDefaultRoute != nil {
+			ensureRoute = *req.EnsureDefaultRoute
+		}
+		routeChanged := false
+		if mode == "full" && ensureRoute {
+			changed, rerr := ensureDefaultRoute(sc, net, gw4, gw6)
+			if rerr != nil {
+				httpx.FailErr(w, http.StatusInternalServerError, rerr)
+				return
+			}
+			routeChanged = changed
+		}
+
+		resp := map[string]any{
+			"mode": mode, "gateway4": gw4, "gateway6": gw6,
+			"script": script, "default_route_changed": routeChanged,
+		}
+		if !req.Start {
+			httpx.OK(w, resp)
+			return
+		}
+
+		// 必须显式指定或能从服务端节点 public_host 匹配到带 Agent 的主机。
+		host, herr := resolveNATHost(sc, net, req.HostIP, req.ServerNodeID)
+		if herr != nil {
+			httpx.Fail(w, http.StatusBadRequest, herr.Error())
+			return
+		}
+		u, _ := auth.FromContext(r.Context())
+		createdBy := ""
+		if u != nil {
+			createdBy = u.Username
+		}
+		treq := task.CreateRequest{
+			Kind:      task.KindCommand,
+			Name:      fmt.Sprintf("iflygo %s · %s", label, net.Name),
+			Version:   "command",
+			Command:   protocol.CommandSpec{Script: script, Interpreter: "/bin/sh", Timeout: "5m"},
+			Selector:  task.Selector{IPExpr: host.IP},
+			Strategy:  task.Strategy{Mode: "count", BatchSize: 1, Concurrency: 1, FailureThreshold: "1"},
+			CreatedBy: createdBy,
+		}
+		treq.SetActor(u)
+		taskID, terr := sc.Task.Create(r.Context(), reqScope(r), treq)
+		if terr != nil {
+			httpx.Fail(w, http.StatusBadRequest, "创建 Agent 任务失败: "+terr.Error())
+			return
+		}
+		if err := sc.Task.Start(r.Context(), reqScope(r), taskID); err != nil {
+			httpx.Fail(w, http.StatusBadRequest, fmt.Sprintf("任务 #%d 已创建但启动失败: %v", taskID, err))
+			return
+		}
+		auditOp(sc, r, audit.ActionTaskCreate, "task", strconv.FormatInt(taskID, 10), "nat:"+mode, nil)
+		resp["task_id"] = taskID
+		resp["host_ip"] = host.IP
+		resp["host_name"] = host.Hostname
+		resp["started"] = true
+		httpx.OK(w, resp)
+	}
+}
+
+func gatewayInNetwork(net *model.Network, gw string) bool {
+	a, err := netip.ParseAddr(strings.TrimSpace(gw))
+	if err != nil {
+		return false
+	}
+	return prefixContains(net.Cidr4, a) || prefixContains(net.Cidr6, a)
+}
+
+// fullGateways 返回全量公网出口使用的网关（IPv4/IPv6 可各一个）。
+func fullGateways(sc *svc.ServiceContext, net *model.Network, override string) (string, string) {
+	gw4, gw6 := "", ""
+	if override != "" {
+		if a, err := netip.ParseAddr(override); err == nil {
+			if a.Is4() {
+				gw4 = override
+			} else {
+				gw6 = override
+			}
+		}
+	}
+	if gw4 == "" && (net.Cidr4 != "" || override == "") {
+		gw4 = resolveDNSGateway(sc, net, true)
+	}
+	if gw6 == "" && net.Cidr6 != "" {
+		gw6 = resolveDNSGateway(sc, net, false)
+	}
+	return gw4, gw6
+}
+
+// computeDNSNAT 计算需要 NAT 的公网 DNS 与对应网关。
+func computeDNSNAT(sc *svc.ServiceContext, net *model.Network, rawDNS, gwOverride string) (v4, v6 []string, gw4, gw6 string, err error) {
+	dnsList := splitList(rawDNS)
+	if strings.TrimSpace(rawDNS) == "" {
+		dnsList = collectNetworkDNS(sc, net)
+	}
+	seen := map[string]bool{}
+	for _, item := range dnsList {
+		addr, perr := netip.ParseAddr(strings.TrimSpace(item))
+		if perr != nil {
+			return nil, nil, "", "", fmt.Errorf("DNS 含非法 IP: %s", item)
+		}
+		// overlay 内 DNS 直接可达，不需要 NAT。
+		if prefixContains(net.Cidr4, addr) || prefixContains(net.Cidr6, addr) {
+			continue
+		}
+		s := addr.String()
+		if seen[s] {
+			continue
+		}
+		seen[s] = true
+		if addr.Is4() {
+			v4 = append(v4, s)
+		} else {
+			v6 = append(v6, s)
+		}
+	}
+	if len(v4) == 0 && len(v6) == 0 {
+		return nil, nil, "", "", fmt.Errorf("未找到需要经网关 NAT 的公网 DNS（overlay 内 DNS 无需 NAT）")
+	}
+	if len(v4) > 0 {
+		gw4 = gatewayForFamily(sc, net, gwOverride, true)
+		if gw4 == "" {
+			return nil, nil, "", "", fmt.Errorf("未找到 IPv4 网关：请选择网关节点、配置 DNS 网关或默认路由")
+		}
+	}
+	if len(v6) > 0 {
+		gw6 = gatewayForFamily(sc, net, gwOverride, false)
+		if gw6 == "" {
+			return nil, nil, "", "", fmt.Errorf("未找到 IPv6 网关：请选择网关节点、配置 DNS 网关或默认路由")
+		}
+	}
+	return v4, v6, gw4, gw6, nil
+}
+
+func gatewayForFamily(sc *svc.ServiceContext, net *model.Network, override string, ipv4 bool) string {
+	if override != "" {
+		if a, err := netip.ParseAddr(override); err == nil && a.Is4() == ipv4 {
+			return override
+		}
+	}
+	return resolveDNSGateway(sc, net, ipv4)
 }
 
 // collectNetworkDNS 汇总该网络实际可能用到的 DNS（全局 + 网络级 + 每主机覆盖）。
@@ -128,6 +329,92 @@ func collectNetworkDNS(sc *svc.ServiceContext, net *model.Network) []string {
 		}
 	}
 	return out
+}
+
+// natHost 可执行 NAT 脚本的 Agent 主机。
+type natHost struct {
+	ID       int64
+	IP       string
+	Hostname string
+	AgentID  string
+}
+
+// resolveNATHost 解析目标 Agent 主机：优先显式 host_ip，其次网关节点 public_host。
+func resolveNATHost(sc *svc.ServiceContext, net *model.Network, hostIP string, serverNodeID int64) (*natHost, error) {
+	candidate := strings.TrimSpace(hostIP)
+	if candidate == "" && serverNodeID > 0 {
+		var pub string
+		_ = sc.Store.DB.QueryRow(sc.Store.Rebind(`SELECT public_host FROM server_nodes WHERE id = $1 AND network_id = $2`),
+			serverNodeID, net.ID).Scan(&pub)
+		pub = strings.TrimSpace(pub)
+		if h, _, err := stdnet.SplitHostPort(pub); err == nil {
+			pub = h
+		}
+		candidate = pub
+	}
+	if candidate == "" {
+		return nil, fmt.Errorf("请选择执行脚本的 Agent 主机（或为网关节点填写 public_host）")
+	}
+	var h natHost
+	q := sc.Store.Rebind(`SELECT id, ip, COALESCE(hostname,''), COALESCE(agent_id,'') FROM hosts
+		WHERE (ip = $1 OR hostname = $2 OR exit_ip = $3) AND COALESCE(agent_id,'') <> ''
+		ORDER BY id LIMIT 1`)
+	if err := sc.Store.DB.QueryRow(q, candidate, candidate, candidate).Scan(&h.ID, &h.IP, &h.Hostname, &h.AgentID); err != nil {
+		return nil, fmt.Errorf("未找到与 %s 匹配的 Agent 主机，请在页面选择目标主机", candidate)
+	}
+	return &h, nil
+}
+
+// ensureDefaultRoute 创建/更新全量公网出口默认路由。
+func ensureDefaultRoute(sc *svc.ServiceContext, net *model.Network, gw4, gw6 string) (bool, error) {
+	changed := false
+	if gw4 != "" {
+		c, err := upsertDefaultRoute(sc, net, "0.0.0.0/0", gw4)
+		if err != nil {
+			return changed, err
+		}
+		changed = changed || c
+	}
+	if gw6 != "" {
+		c, err := upsertDefaultRoute(sc, net, "::/0", gw6)
+		if err != nil {
+			return changed, err
+		}
+		changed = changed || c
+	}
+	if changed {
+		bumpConfigRev(sc, net.ID)
+	}
+	return changed, nil
+}
+
+func upsertDefaultRoute(sc *svc.ServiceContext, net *model.Network, cidr, gw string) (bool, error) {
+	now := nowStr()
+	var rid int64
+	err := sc.Store.DB.QueryRow(sc.Store.Rebind(`SELECT id FROM subnet_routes WHERE network_id = $1 AND cidr = $2 ORDER BY id LIMIT 1`),
+		net.ID, cidr).Scan(&rid)
+	if err == nil {
+		if _, err := sc.Store.DB.Exec(sc.Store.Rebind(`UPDATE subnet_routes SET mtu=$1, mode='active_active', all_down_policy='fail_closed', enabled=1, description=$2 WHERE id=$3`),
+			net.MTU, "全量公网出口（自动生成）", rid); err != nil {
+			return false, err
+		}
+		if _, err := sc.Store.DB.Exec(sc.Store.Rebind(`DELETE FROM route_gateways WHERE route_id = $1`), rid); err != nil {
+			return false, err
+		}
+	} else {
+		if err := sc.Store.DB.QueryRow(sc.Store.Rebind(`INSERT INTO subnet_routes
+			(network_id,cidr,mtu,metric,mode,all_down_policy,enabled,description,created_at)
+			VALUES ($1,$2,$3,0,'active_active','fail_closed',1,$4,$5) RETURNING id`),
+			net.ID, cidr, net.MTU, "全量公网出口（自动生成）", now).Scan(&rid); err != nil {
+			return false, err
+		}
+	}
+	if _, err := sc.Store.DB.Exec(sc.Store.Rebind(`INSERT INTO route_gateways
+		(route_id,node_id,overlay_ip,weight,priority,health_target,health_port,enabled,created_at)
+		VALUES ($1,0,$2,1,0,'',0,1,$3)`), rid, gw, now); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func buildDNSNATScript(net *model.Network, v4, v6 []string, gw4, gw6 string) string {
@@ -180,5 +467,37 @@ func buildDNSNATScript(net *model.Network, v4, v6 []string, gw4, gw6 string) str
 	b.WriteString("# Debian/Ubuntu: apt-get install -y iptables-persistent && netfilter-persistent save\n")
 	b.WriteString("# RHEL/CentOS:   yum install -y iptables-services && service iptables save\n")
 	b.WriteString("# nftables:      使用 iptables-nft 兼容层，或把上述规则转换为 nft 规则后 nft list ruleset > /etc/nftables.conf\n")
+	return b.String()
+}
+
+// buildFullNATScript 生成全量公网出口 NAT 脚本（overlay → 任意公网地址）。
+func buildFullNATScript(net *model.Network, gw4, gw6 string) string {
+	var b strings.Builder
+	b.WriteString("#!/bin/sh\n")
+	b.WriteString("# iflygo 全量公网出口 NAT 策略（需 root 执行）\n")
+	b.WriteString("# 网络: " + net.Name + "\n")
+	if gw4 != "" {
+		b.WriteString("# IPv4 网关: " + gw4 + "\n")
+	}
+	if gw6 != "" {
+		b.WriteString("# IPv6 网关: " + gw6 + "\n")
+	}
+	b.WriteString("# 注意：该脚本会把 overlay 网段的所有出公网流量 NAT 到本网关，请确认安全组策略。\n")
+	b.WriteString("set -e\n\n")
+	if net.Cidr4 != "" {
+		b.WriteString("sysctl -w net.ipv4.ip_forward=1\n")
+		b.WriteString("iptables -C FORWARD -s " + net.Cidr4 + " -j ACCEPT 2>/dev/null || iptables -A FORWARD -s " + net.Cidr4 + " -j ACCEPT\n")
+		b.WriteString("iptables -C FORWARD -d " + net.Cidr4 + " -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -A FORWARD -d " + net.Cidr4 + " -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT\n")
+		b.WriteString("iptables -t nat -C POSTROUTING -s " + net.Cidr4 + " -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s " + net.Cidr4 + " -j MASQUERADE\n\n")
+	}
+	if net.Cidr6 != "" {
+		b.WriteString("sysctl -w net.ipv6.conf.all.forwarding=1\n")
+		b.WriteString("ip6tables -C FORWARD -s " + net.Cidr6 + " -j ACCEPT 2>/dev/null || ip6tables -A FORWARD -s " + net.Cidr6 + " -j ACCEPT\n")
+		b.WriteString("ip6tables -C FORWARD -d " + net.Cidr6 + " -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || ip6tables -A FORWARD -d " + net.Cidr6 + " -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT\n")
+		b.WriteString("ip6tables -t nat -C POSTROUTING -s " + net.Cidr6 + " -j MASQUERADE 2>/dev/null || ip6tables -t nat -A POSTROUTING -s " + net.Cidr6 + " -j MASQUERADE\n\n")
+	}
+	b.WriteString("# 持久化（按发行版选择其一）\n")
+	b.WriteString("# Debian/Ubuntu: apt-get install -y iptables-persistent && netfilter-persistent save\n")
+	b.WriteString("# RHEL/CentOS:   yum install -y iptables-services && service iptables save\n")
 	return b.String()
 }

@@ -110,6 +110,7 @@ test('隧道管理：编辑客户端参数与 IP 自动下发', async ({ page })
   await page.getByPlaceholder('留空则自动分配新地址').fill('10.55.0.50');
   await page.getByLabel('服务端 DNS').selectOption('off');
   await page.getByLabel('客户端 MTU（0=跟随默认）').fill('1360');
+  await page.getByLabel('DNS 网关（覆盖网络）').fill('10.55.0.99');
   await page.getByLabel('心跳间隔（如 30s）').fill('45s');
   await page.getByLabel('数据面模式').selectOption('udp');
   await page.getByRole('button', { name: '保存', exact: true }).click();
@@ -128,6 +129,7 @@ test('隧道管理：编辑客户端参数与 IP 自动下发', async ({ page })
   expect(saved.client_settings.mtu).toBe(1360);
   expect(saved.client_settings.interval).toBe('45s');
   expect(saved.client_settings.data_plane_mode).toBe('udp');
+  expect(saved.client_settings.dns_gateway).toBe('10.55.0.99');
 });
 
 test('隧道管理：参数下发聚合页', async ({ page }) => {
@@ -155,10 +157,27 @@ test('隧道管理：参数下发聚合页', async ({ page }) => {
   await page.getByRole('button', { name: '取消', exact: true }).click();
 
   await page.getByLabel('所属网络').selectOption({ label: 'nat-net-' + suffix + ' (10.44.0.0/16)' });
-  await page.getByRole('button', { name: '生成网关 NAT 脚本', exact: true }).click();
-  await expect(page.locator('.tunnel-script')).toContainText('MASQUERADE');
-  await expect(page.locator('.tunnel-script')).toContainText('8.8.8.8/32');
-  await expect(page.locator('.tunnel-script')).toContainText('10.44.0.1');
+  await page.getByRole('button', { name: 'DNS NAT / 全量出口', exact: true }).click();
+  await page.getByLabel('网关', { exact: true }).selectOption('10.44.0.1');
+  await page.getByRole('button', { name: '预览脚本', exact: true }).click();
+  await expect(page.locator('.tunnel-script')).toHaveValue(/MASQUERADE/);
+  await expect(page.locator('.tunnel-script')).toHaveValue(/8\.8\.8\.8\/32/);
+  await expect(page.locator('.tunnel-script')).toHaveValue(/10\.44\.0\.1/);
+
+  // 全量公网出口脚本
+  await page.getByLabel('模式', { exact: true }).selectOption('full');
+  await page.getByRole('button', { name: '预览脚本', exact: true }).click();
+  await expect(page.locator('.tunnel-script')).toHaveValue(/POSTROUTING -s 10\.44\.0\.0\/16 -j MASQUERADE/);
+
+  // 仅生成并创建默认路由（不实际下发 Agent 任务）
+  await page.getByRole('checkbox', { name: /通过 Agent 自动执行/ }).uncheck();
+  await page.getByRole('button', { name: '通过 Agent 生成/执行', exact: true }).click();
+  await expect(page.getByText(/默认路由已更新/)).toBeVisible();
+  const routes = await page.evaluate(async (id) => {
+    const r = await fetch('/api/networks/' + id + '/routes').then(x => x.json());
+    return r.data || [];
+  }, pre.netId);
+  expect(routes.some(r => r.cidr === '0.0.0.0/0')).toBeTruthy();
   await page.getByRole('button', { name: '关闭', exact: true }).click();
 });
 

@@ -289,11 +289,13 @@
     var dnsRoute = tunnelSelect([
       ['inherit', '跟随全局'], ['on', '启用'], ['off', '关闭']
     ], cs.dns_route === true ? 'on' : (cs.dns_route === false ? 'off' : 'inherit'));
+    var dnsGw = tunnelInput({ value: cs.dns_gateway || '', placeholder: '覆盖网络 DNS 网关（overlay IP，可选）' });
     return {
       fields: [
         { label: '服务端 DNS', input: dnsMode, hint: '可单独关闭该主机的服务端 DNS；关闭后不下发 DNS。' },
         { label: 'DNS（覆盖网络/全局）', input: dns },
         { label: '公网 DNS 主机路由', input: dnsRoute, hint: 'DNS 不在 overlay 网段时，下发 /32 或 /128 主机路由经网关；需在网关执行 NAT 脚本。' },
+        { label: 'DNS 网关（覆盖网络）', input: dnsGw, hint: '多网关场景下可单独指定该主机的 DNS 下一跳；留空跟随网络配置。' },
         { label: '客户端 MTU（0=跟随默认）', input: mtu },
         { label: '心跳间隔（如 30s）', input: interval },
         { label: '数据面模式', input: mode }
@@ -307,6 +309,7 @@
         var dr = dnsRoute.value;
         if (dr === 'on') { out.dns_route = true; }
         else if (dr === 'off') { out.dns_route = false; }
+        out.dns_gateway = dnsGw.value.trim();
         var m = Number(mtu.value || 0);
         if (m > 0) { out.mtu = m; }
         out.interval = interval.value.trim();
@@ -326,6 +329,7 @@
     if (cs.data_plane_mode) { parts.push('数据面=' + cs.data_plane_mode); }
     if (cs.dns_route === true) { parts.push('DNS路由=开'); }
     else if (cs.dns_route === false) { parts.push('DNS路由=关'); }
+    if (cs.dns_gateway) { parts.push('DNS网关=' + cs.dns_gateway); }
     return parts.length ? parts.join(' ') : '跟随网络/全局';
   }
   function tunnelNetName(id) {
@@ -375,27 +379,107 @@
       after: function () { state.tunnelSettings = null; tunnelLoadAll().then(render); }
     });
   }
-  function tunnelOpenDNSNAT(n) {
-    api('/api/networks/' + n.id + '/dns-nat').then(function (d) {
-      var ta = h('textarea', { class: 'tunnel-script', rows: 18, readonly: 'readonly', spellcheck: 'false' }, [d.script || '']);
-      var copy = h('button', { class: 'btn primary', type: 'button' }, ['复制脚本']);
-      var close = h('button', { class: 'btn ghost', type: 'button' }, ['关闭']);
-      var mask = h('div', { class: 'modal-mask', onclick: function (e) { if (e.target === mask) { tunnelCloseModal(mask); } } }, [
-        h('div', { class: 'modal tunnel-modal' }, [
-          h('div', { class: 'modal-head' }, [h('h3', {}, ['网关 DNS NAT 脚本 · ' + (n.name || ('#' + n.id))]), close]),
-          hint('在网关节点 ' + (d.gateway4 || d.gateway6 || '') + ' 上以 root 执行；脚本含转发与 MASQUERADE，按发行版自行持久化。'),
-          ta,
-          h('div', { class: 'toolbar' }, [copy])
-        ])
-      ]);
-      close.onclick = function () { tunnelCloseModal(mask); };
-      copy.onclick = function () {
-        if (navigator.clipboard) { navigator.clipboard.writeText(ta.value).catch(function () {}); }
-        tunnelSetMsg(true, 'NAT 脚本已复制');
+  function tunnelOpenNAT(n) {
+    var detail = (state.tunnelParamsDetail && state.tunnelParamsDetail.id === n.id) ? state.tunnelParamsDetail : null;
+    var gwNodes = state.tunnelServerNodes.filter(function (sn) {
+      return String(sn.roles || '').indexOf('gateway') >= 0 && (sn.overlay_ip4 || sn.overlay_ip6);
+    });
+    var gwOpts = [['', '自动选择']];
+    gwNodes.forEach(function (sn) {
+      var ip = sn.overlay_ip4 || sn.overlay_ip6;
+      gwOpts.push([ip, (sn.name || 'gateway') + ' (' + ip + ')']);
+    });
+    var curGw = (detail && detail.dns_gateway) || '';
+    if (curGw && !gwOpts.some(function (o) { return o[0] === curGw; })) {
+      gwOpts.push([curGw, curGw]);
+    }
+    var gwSel = tunnelSelect(gwOpts, curGw);
+    var modeSel = tunnelSelect([
+      ['dns', '仅公网 DNS 主机路由'],
+      ['full', '全量公网出口（0.0.0.0/0 / ::/0）']
+    ], 'dns');
+    var dnsInput = tunnelInput({ value: (detail && detail.dns) || '', placeholder: '如 8.8.8.8,1.1.1.1；留空自动汇总' });
+    var hostSel = h('select', {}, [h('option', { value: '' }, ['自动匹配网关 public_host'])]);
+    var ensureRoute = h('input', { type: 'checkbox', checked: true }, []);
+    var startNow = h('input', { type: 'checkbox', checked: true }, []);
+    var msg = h('div', { class: 'hint' }, ['选择模式与网关后，可先预览脚本，再通过 Agent 自动执行。']);
+    var scriptBox = h('textarea', { class: 'tunnel-script', rows: 12, readonly: 'readonly', spellcheck: 'false' }, ['点击「预览脚本」查看']);
+    api('/api/hosts?size=500').then(function (d) {
+      var list = (d && d.list) || [];
+      list.forEach(function (host) {
+        if (!host.agent_id) { return; }
+        hostSel.appendChild(h('option', { value: host.ip }, [
+          host.ip + (host.hostname ? ' (' + host.hostname + ')' : '') + ' · ' + (host.status || '')
+        ]));
+      });
+    }).catch(function () {});
+    function selectedNode() {
+      var idx = gwSel.selectedIndex - 1;
+      return idx >= 0 ? gwNodes[idx] : null;
+    }
+    function reqBody(start, ensure) {
+      var sn = selectedNode();
+      return {
+        mode: modeSel.value,
+        dns: dnsInput.value.trim(),
+        gateway: gwSel.value,
+        server_node_id: sn ? sn.id : 0,
+        host_ip: hostSel.value,
+        ensure_default_route: ensure,
+        start: start
       };
-      document.body.appendChild(mask);
-    }).catch(function (e) { tunnelSetMsg(false, e.message); render(); });
+    }
+    function preview() {
+      var q = '/api/networks/' + n.id + '/dns-nat?mode=' + encodeURIComponent(modeSel.value) +
+        '&gateway=' + encodeURIComponent(gwSel.value);
+      if (modeSel.value === 'dns') { q += '&dns=' + encodeURIComponent(dnsInput.value.trim()); }
+      api(q).then(function (d) {
+        scriptBox.value = d.script || '';
+        msg.textContent = '脚本预览已生成（未执行）。';
+      }).catch(function (e) { msg.textContent = e.message; });
+    }
+    function apply() {
+      msg.textContent = '正在生成并提交…';
+      api('/api/networks/' + n.id + '/nat/apply', {
+        method: 'POST',
+        body: JSON.stringify(reqBody(startNow.checked, ensureRoute.checked))
+      }).then(function (d) {
+        scriptBox.value = d.script || '';
+        if (d.started) {
+          msg.textContent = '已创建任务 #' + d.task_id + '，目标主机 ' + d.host_ip +
+            '；Agent 下一次心跳自动执行。' +
+            (d.default_route_changed ? ' 默认路由已更新。' : '');
+          tunnelSetMsg(true, msg.textContent);
+        } else {
+          msg.textContent = '脚本已生成，未提交执行。' + (d.default_route_changed ? ' 默认路由已更新。' : '');
+        }
+      }).catch(function (e) { msg.textContent = e.message; });
+    }
+    var close = h('button', { class: 'btn ghost', type: 'button' }, ['关闭']);
+    var previewBtn = h('button', { class: 'btn', type: 'button', onclick: preview }, ['预览脚本']);
+    var applyBtn = h('button', { class: 'btn primary', type: 'button', onclick: apply }, ['通过 Agent 生成/执行']);
+    var mask = h('div', {
+      class: 'modal-mask',
+      onclick: function (e) { if (e.target === mask) { tunnelCloseModal(mask); } }
+    }, [
+      h('div', { class: 'modal tunnel-modal' }, [
+        h('div', { class: 'modal-head' }, [h('h3', {}, ['DNS NAT / 全量公网出口 · ' + (n.name || ('#' + n.id))]), close]),
+        hint('DNS 模式只 NAT 公网 DNS；全量模式会上/下默认路由并 NAT 所有 overlay 出公网流量。执行需要管理员权限且已开启 agent.allow_exec_mode。'),
+        field('模式', modeSel),
+        field('DNS（仅 DNS 模式）', dnsInput, '留空自动汇总全局/网络/每主机 DNS。'),
+        field('网关', gwSel, '多网关场景可显式选择 DNS 网关；留空自动选择。'),
+        field('执行主机（Agent）', hostSel, '留空按网关节点 public_host 自动匹配；也可直接选择已安装 Agent 的主机。'),
+        h('label', { class: 'check' }, [ensureRoute, ' 全量模式：同时创建/更新 0.0.0.0/0（及 ::/0）默认路由']),
+        h('label', { class: 'check' }, [startNow, ' 通过 Agent 自动执行（关闭则只生成脚本）']),
+        msg,
+        scriptBox,
+        h('div', { class: 'toolbar' }, [previewBtn, applyBtn])
+      ])
+    ]);
+    close.onclick = function () { tunnelCloseModal(mask); };
+    document.body.appendChild(mask);
   }
+
   function tunnelClientSettingsView() {
     if (state.tunnelSettings === null) {
       state.tunnelSettings = [];
@@ -489,7 +573,7 @@
         ]),
         h('div', { class: 'toolbar', style: 'margin-top:10px' }, [
           h('button', { class: 'btn primary', onclick: function () { if (nid) { tunnelOpenNetworkEdit({ id: nid, name: nid === (detail && detail.id) ? detail.name : ('#' + nid) }); } } }, ['编辑网络级参数']),
-          h('button', { class: 'btn', onclick: function () { if (nid) { tunnelOpenDNSNAT({ id: nid, name: (detail && detail.name) || ('#' + nid) }); } } }, ['生成网关 NAT 脚本'])
+          h('button', { class: 'btn', onclick: function () { if (nid) { tunnelOpenNAT({ id: nid, name: (detail && detail.name) || ('#' + nid) }); } } }, ['DNS NAT / 全量出口'])
         ])
       ]),
       h('div', { class: 'card' }, [
@@ -622,6 +706,7 @@
     var cidr6 = tunnelInput({ placeholder: 'IPv6 CIDR（可选）' });
     var gw4 = tunnelInput({ placeholder: 'IPv4 网关（可选）' });
     var gw6 = tunnelInput({ placeholder: 'IPv6 网关（可选）' });
+    var dnsGw = tunnelInput({ placeholder: 'DNS 网关 overlay IP（可选，如 10.77.0.1）' });
     tunnelFormModal({
       title: '新建网络',
       fields: [
@@ -629,14 +714,15 @@
         { label: 'IPv4 CIDR', input: cidr4 },
         { label: 'IPv6 CIDR', input: cidr6 },
         { label: 'IPv4 网关', input: gw4 },
-        { label: 'IPv6 网关', input: gw6 }
+        { label: 'IPv6 网关', input: gw6 },
+        { label: 'DNS 网关（可选）', input: dnsGw, hint: '多网关场景下指定公网 DNS 主机路由的下一跳；留空自动选择。' }
       ],
       submitText: '创建网络',
       focus: name,
       onSubmit: function () {
         return api('/api/networks', {
           method: 'POST',
-          body: JSON.stringify({ name: name.value.trim(), cidr4: cidr4.value.trim(), cidr6: cidr6.value.trim(), gateway4: gw4.value.trim(), gateway6: gw6.value.trim() })
+          body: JSON.stringify({ name: name.value.trim(), cidr4: cidr4.value.trim(), cidr6: cidr6.value.trim(), gateway4: gw4.value.trim(), gateway6: gw6.value.trim(), dns_gateway: dnsGw.value.trim() })
         }).then(function () { tunnelSetMsg(true, '网络已创建'); });
       },
       after: function () { tunnelLoadAll().then(render); }
@@ -667,11 +753,24 @@
       var statsListen = tunnelInput({ value: nb.stats_listen || '' });
       var dns = tunnelInput({ value: cur ? (cur.dns || '') : '', placeholder: '如 1.1.1.1,8.8.8.8；留空跟随全局' });
       var mtu = tunnelInput({ type: 'number', value: cur ? (cur.mtu || 1300) : 1300 });
+      var gwOpts = [['', '自动选择（默认路由 > gateway 节点）']];
+      state.tunnelServerNodes.forEach(function (sn) {
+        var ip = sn.overlay_ip4 || sn.overlay_ip6 || '';
+        if (String(sn.roles || '').indexOf('gateway') >= 0 && ip) {
+          gwOpts.push([ip, (sn.name || 'gateway') + ' (' + ip + ')']);
+        }
+      });
+      var curGw = (cur && cur.dns_gateway) || '';
+      if (curGw && !gwOpts.some(function (o) { return o[0] === curGw; })) {
+        gwOpts.push([curGw, curGw]);
+      }
+      var dnsGw = tunnelSelect(gwOpts, curGw);
       tunnelFormModal({
         title: '网络设置 · ' + (n.name || ('#' + n.id)),
         fields: [
           { label: 'DNS（网络级，客户端下发）', input: dns },
           { label: 'MTU（网络级）', input: mtu },
+          { label: 'DNS 网关（overlay IP）', input: dnsGw, hint: '多网关场景下显式指定；留空自动选择。' },
           { label: '加密算法', input: cipher },
           { label: '监听端口', input: listenPort },
           { label: 'Lighthouse 间隔(s)', input: lhInterval },
@@ -697,6 +796,7 @@
             body: JSON.stringify({
               dns: dns.value.trim(),
               mtu: Number(mtu.value || 0),
+              dns_gateway: dnsGw.value,
               nebula: {
                 cipher: cipher.value,
                 listen_port: Number(listenPort.value || 0),

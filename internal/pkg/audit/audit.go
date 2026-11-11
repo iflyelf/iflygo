@@ -141,6 +141,7 @@ const (
 
 	// FlyIAM 集成（字段定义同步）
 	ActionFlyIAMSync      = "flyiam.sync"
+	ActionTaskCreate      = "task.create"
 	ActionTaskStart       = "task.start"
 	ActionTaskPause       = "task.pause"
 	ActionTaskPromote     = "task.promote"

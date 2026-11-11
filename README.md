@@ -711,7 +711,7 @@ tcp_relay:
 | 页面位置 | 配置项 | 下发方式 |
 |---|---|---|
 | 设置 → 客户端下发 | `client.dns`、`client.mtu`、`client.interval`、`client.dns_route`（全局默认） | Bundle → `client.yaml` / 客户端 State |
-| 隧道 → 参数下发 | 聚合全局默认 + 网络级 Nebula + 每主机覆盖；一键生成网关 NAT 脚本 | 同上 |
+| 隧道 → 参数下发 | 聚合全局默认 + 网络级 Nebula + 每主机覆盖；NAT 脚本预览/Agent 自动执行/全量出口默认路由 | 同上 |
 | 设置 → 数据面 / TCP 中继 | `tcp_relay.mode`（客户端默认 auto/tcp/udp）、中继令牌 | Bundle `client.data_plane_mode` + 心跳 |
 | 隧道 → 网络 → 编辑 | cipher、punch、relays、TUN、握手、日志、统计、网络 DNS/MTU | Nebula `config.yml` / Bundle DNS/MTU |
 | 隧道 → 客户端 → 编辑 | 名称、IPv4/IPv6、分组、子网、**每主机 DNS/MTU/心跳/数据面/DNS 开关** | Bundle / State |
@@ -731,6 +731,7 @@ tcp_relay:
 - **服务端 DNS**：跟随网络/全局、启用、关闭三态；关闭后 Bundle 不下发 DNS；
 - **DNS**：覆盖网络级与全局 DNS；
 - **公网 DNS 主机路由**：跟随全局、启用、关闭三态；
+- **DNS 网关**：可单独覆盖网络级 DNS 网关（多网关场景）；
 - **MTU**：0 表示跟随网络/全局；
 - **心跳间隔**：如 `30s`，留空跟随默认；
 - **数据面模式**：auto / tcp / udp，留空跟随默认。
@@ -741,12 +742,26 @@ tcp_relay:
 VPN。开启 **公网 DNS 主机路由** 后：
 
 1. 服务端为每个不在 overlay 网段内的 DNS 生成 `/32`（IPv6 为 `/128`）主机路由；
-2. 路由网关按「默认路由 > `gateway` 角色节点 > 网络网关 > 任意服务端节点」选择；
+2. 路由网关按 **网络 DNS 网关 > 默认路由 > `gateway` 角色节点 > 网络网关 > 任意服务端节点** 选择；
 3. 路由同时写入客户端 `routes.json` 与 Nebula `unsafe_routes`，Android/CLI 均生效；
-4. 在 **隧道 → 参数下发 → 生成网关 NAT 脚本** 中复制脚本，到网关节点以 root 执行：
-   开启转发、放行 overlay → DNS 的 FORWARD、并对回包做 `MASQUERADE`；
-5. 执行后客户端解析公网域名即可正常走 overlay 网关。
+4. 在 **隧道 → 参数下发 → DNS NAT / 全量出口** 中可先预览脚本，再选择：
+   - **手动执行**：复制脚本到网关节点以 root 执行；
+   - **Agent 自动执行**：选择已安装 Agent 的主机（留空则按网关节点 `public_host` 自动匹配），
+     服务端创建并立即启动命令任务，Agent 下一次心跳自动执行；
+5. 执行后客户端解析公网域名即可正常走 overlay 网关；
+6. 脚本会开启转发、放行 overlay → DNS 的 FORWARD，并对回包做 `MASQUERADE`。
 
+**多网关显式选择**：网络编辑弹窗与客户端编辑弹窗均新增「DNS 网关（overlay IP）」，
+可分别指定网络级/每主机公网 DNS 主机路由的下一跳；留空自动选择。该字段只影响
+DNS 主机路由，不影响已有默认路由。
+
+**全量公网出口**：在同一个弹窗把模式切为「全量公网出口」，勾选「同时创建/更新默认路由」，
+服务端会自动写入 `0.0.0.0/0`（及 `::/0`）默认路由，并生成统一的出口 NAT 脚本
+（`POSTROUTING -s <overlay CIDR> -j MASQUERADE`），适合需要所有公网流量经网关的场景。
+
+> Agent 自动执行需要：管理员的命令任务权限、`agent.allow_exec_mode=true`，
+> 且目标主机已安装并在线运行 Agent。手动模式仍可直接复制脚本执行。
+>
 > 网关需具备出公网能力；脚本按 iptables 通用语法生成，Debian/Ubuntu 可用
 > `iptables-persistent`、RHEL/CentOS 可用 `iptables-services` 持久化。
 > 若 DNS 本身在 overlay 网段内（如 `10.77.0.1`），无需主机路由与 NAT。

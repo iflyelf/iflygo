@@ -9,15 +9,17 @@ import (
 
 // Network overlay 网络。
 type Network struct {
-	ID        int64  `json:"id"`
-	Name      string `json:"name"`
-	Cidr4     string `json:"cidr4"`
-	Cidr6     string `json:"cidr6"`
-	Gateway4  string `json:"gateway4"`
-	Gateway6  string `json:"gateway6"`
-	DNS       string `json:"dns"`
-	MTU       int    `json:"mtu"`
-	CreatedAt string `json:"created_at"`
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Cidr4    string `json:"cidr4"`
+	Cidr6    string `json:"cidr6"`
+	Gateway4 string `json:"gateway4"`
+	Gateway6 string `json:"gateway6"`
+	DNS      string `json:"dns"`
+	MTU      int    `json:"mtu"`
+	// DNSGateway 显式 DNS 网关（overlay IP）；空表示自动选择。
+	DNSGateway string `json:"dns_gateway"`
+	CreatedAt  string `json:"created_at"`
 }
 
 // CA 证书颁发机构（每个网络一个）。
@@ -44,6 +46,8 @@ type ClientOverride struct {
 	DataPlaneMode string `json:"data_plane_mode,omitempty"`
 	// DNSRoute 为公网 DNS 添加主机路由（三态：nil 跟随全局，true 启用，false 关闭）。
 	DNSRoute *bool `json:"dns_route,omitempty"`
+	// DNSGateway 每主机 DNS 网关覆盖（overlay IP）；空则跟随网络配置/自动选择。
+	DNSGateway string `json:"dns_gateway,omitempty"`
 }
 
 // Scan 实现 sql.Scanner（DB 中存 JSON 文本）。

@@ -16,20 +16,22 @@ import (
 )
 
 type networkReq struct {
-	Name     string               `json:"name"`
-	Cidr4    string               `json:"cidr4"`
-	Cidr6    string               `json:"cidr6"`
-	Gateway4 string               `json:"gateway4"`
-	Gateway6 string               `json:"gateway6"`
-	DNS      string               `json:"dns"`
-	MTU      int                  `json:"mtu"`
-	Nebula   model.NebulaSettings `json:"nebula"`
+	Name     string `json:"name"`
+	Cidr4    string `json:"cidr4"`
+	Cidr6    string `json:"cidr6"`
+	Gateway4 string `json:"gateway4"`
+	Gateway6 string `json:"gateway6"`
+	DNS      string `json:"dns"`
+	MTU      int    `json:"mtu"`
+	// DNSGateway 显式 DNS 网关（overlay IP，可选）。
+	DNSGateway string               `json:"dns_gateway"`
+	Nebula     model.NebulaSettings `json:"nebula"`
 }
 
 // ListNetworks 列出网络。
 func ListNetworks(sc *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := sc.Store.DB.Query(sc.Store.Rebind(`SELECT id,name,cidr4,cidr6,gateway4,gateway6,dns,mtu,created_at FROM networks ORDER BY id`))
+		rows, err := sc.Store.DB.Query(sc.Store.Rebind(`SELECT id,name,cidr4,cidr6,gateway4,gateway6,dns,mtu,dns_gateway,created_at FROM networks ORDER BY id`))
 		if err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
@@ -38,7 +40,7 @@ func ListNetworks(sc *svc.ServiceContext) http.HandlerFunc {
 		list := []model.Network{}
 		for rows.Next() {
 			var n model.Network
-			if err := rows.Scan(&n.ID, &n.Name, &n.Cidr4, &n.Cidr6, &n.Gateway4, &n.Gateway6, &n.DNS, &n.MTU, &n.CreatedAt); err != nil {
+			if err := rows.Scan(&n.ID, &n.Name, &n.Cidr4, &n.Cidr6, &n.Gateway4, &n.Gateway6, &n.DNS, &n.MTU, &n.DNSGateway, &n.CreatedAt); err != nil {
 				httpx.FailErr(w, http.StatusInternalServerError, err)
 				return
 			}
@@ -82,8 +84,8 @@ func CreateNetwork(sc *svc.ServiceContext) http.HandlerFunc {
 			return
 		}
 		var nid int64
-		err = sc.Store.DB.QueryRow(sc.Store.Rebind(`INSERT INTO networks (name,cidr4,cidr6,gateway4,gateway6,dns,mtu,nebula,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`),
-			req.Name, req.Cidr4, req.Cidr6, req.Gateway4, req.Gateway6, req.DNS, req.MTU, string(nebulaJSON), now).Scan(&nid)
+		err = sc.Store.DB.QueryRow(sc.Store.Rebind(`INSERT INTO networks (name,cidr4,cidr6,gateway4,gateway6,dns,mtu,dns_gateway,nebula,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`),
+			req.Name, req.Cidr4, req.Cidr6, req.Gateway4, req.Gateway6, req.DNS, req.MTU, req.DNSGateway, string(nebulaJSON), now).Scan(&nid)
 		if err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
@@ -95,7 +97,7 @@ func CreateNetwork(sc *svc.ServiceContext) http.HandlerFunc {
 			return
 		}
 
-		httpx.OK(w, model.Network{ID: nid, Name: req.Name, Cidr4: req.Cidr4, Cidr6: req.Cidr6, Gateway4: req.Gateway4, Gateway6: req.Gateway6, DNS: req.DNS, MTU: req.MTU, CreatedAt: now})
+		httpx.OK(w, model.Network{ID: nid, Name: req.Name, Cidr4: req.Cidr4, Cidr6: req.Cidr6, Gateway4: req.Gateway4, Gateway6: req.Gateway6, DNS: req.DNS, MTU: req.MTU, DNSGateway: req.DNSGateway, CreatedAt: now})
 	}
 }
 
@@ -118,8 +120,8 @@ func DeleteNetwork(sc *svc.ServiceContext) http.HandlerFunc {
 // getNetwork 读取网络。
 func getNetwork(sc *svc.ServiceContext, id int64) (*model.Network, error) {
 	var n model.Network
-	q := sc.Store.Rebind(`SELECT id,name,cidr4,cidr6,gateway4,gateway6,dns,mtu,created_at FROM networks WHERE id = $1`)
-	if err := sc.Store.DB.QueryRow(q, id).Scan(&n.ID, &n.Name, &n.Cidr4, &n.Cidr6, &n.Gateway4, &n.Gateway6, &n.DNS, &n.MTU, &n.CreatedAt); err != nil {
+	q := sc.Store.Rebind(`SELECT id,name,cidr4,cidr6,gateway4,gateway6,dns,mtu,dns_gateway,created_at FROM networks WHERE id = $1`)
+	if err := sc.Store.DB.QueryRow(q, id).Scan(&n.ID, &n.Name, &n.Cidr4, &n.Cidr6, &n.Gateway4, &n.Gateway6, &n.DNS, &n.MTU, &n.DNSGateway, &n.CreatedAt); err != nil {
 		return nil, err
 	}
 	return &n, nil
@@ -181,9 +183,10 @@ func GetNetwork(sc *svc.ServiceContext) http.HandlerFunc {
 }
 
 type networkSettingsReq struct {
-	DNS    string               `json:"dns"`
-	MTU    int                  `json:"mtu"`
-	Nebula model.NebulaSettings `json:"nebula"`
+	DNS        string               `json:"dns"`
+	MTU        int                  `json:"mtu"`
+	DNSGateway string               `json:"dns_gateway"`
+	Nebula     model.NebulaSettings `json:"nebula"`
 }
 
 // UpdateNetwork 更新网络的 DNS/MTU/Nebula 设置，并递增该网络下客户端的配置版本，
@@ -229,6 +232,18 @@ func UpdateNetwork(sc *svc.ServiceContext) http.HandlerFunc {
 		default:
 			httpx.Fail(w, http.StatusBadRequest, "cipher 只能是 aes-256-gcm / chacha20-poly1305（留空用默认）")
 			return
+		}
+		req.DNSGateway = strings.TrimSpace(req.DNSGateway)
+		if req.DNSGateway != "" {
+			addr, aerr := netip.ParseAddr(req.DNSGateway)
+			if aerr != nil {
+				httpx.Fail(w, http.StatusBadRequest, "DNS 网关不是合法 IP: "+req.DNSGateway)
+				return
+			}
+			if !prefixContains(existing.Cidr4, addr) && !prefixContains(existing.Cidr6, addr) {
+				httpx.Fail(w, http.StatusBadRequest, "DNS 网关必须在该网络的 overlay 网段内")
+				return
+			}
 		}
 		switch strings.ToLower(strings.TrimSpace(req.Nebula.LogFormat)) {
 		case "", "text", "json":
@@ -287,8 +302,8 @@ func UpdateNetwork(sc *svc.ServiceContext) http.HandlerFunc {
 			httpx.FailErr(w, http.StatusBadRequest, err)
 			return
 		}
-		q := sc.Store.Rebind(`UPDATE networks SET dns = $1, mtu = $2, nebula = $3 WHERE id = $4`)
-		if _, err := sc.Store.DB.Exec(q, req.DNS, req.MTU, string(nebulaJSON), id); err != nil {
+		q := sc.Store.Rebind(`UPDATE networks SET dns = $1, mtu = $2, nebula = $3, dns_gateway = $4 WHERE id = $5`)
+		if _, err := sc.Store.DB.Exec(q, req.DNS, req.MTU, string(nebulaJSON), req.DNSGateway, id); err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
 		}

@@ -222,7 +222,7 @@ func loadRoutes(sc *svc.ServiceContext, networkID int64) ([]model.SubnetRoute, e
 }
 
 func loadGateways(sc *svc.ServiceContext, routeID int64) ([]model.RouteGateway, error) {
-	q := sc.Store.Rebind(`SELECT id,route_id,node_id,overlay_ip,weight,priority,health_target,health_port,enabled,created_at FROM route_gateways WHERE route_id = $1 AND enabled = 1 ORDER BY priority, id`)
+	q := sc.Store.Rebind(`SELECT id,route_id,COALESCE(node_id,0),overlay_ip,weight,priority,health_target,health_port,enabled,created_at FROM route_gateways WHERE route_id = $1 AND enabled = 1 ORDER BY priority, id`)
 	rows, err := sc.Store.DB.Query(q, routeID)
 	if err != nil {
 		return nil, err
