@@ -40,7 +40,7 @@ func controlPlaneExcludes(sc *svc.ServiceContext) []netip.Addr {
 	if sc.Settings != nil {
 		raw = sc.Settings.Snapshot().Server.ExternalURL
 	} else if sc.Config != nil {
-		raw = sc.Config.Server.ExternalURL
+		raw = sc.ConfigSnapshot().Server.ExternalURL
 	}
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -102,7 +102,7 @@ func egressExcludePrefixes(sc *svc.ServiceContext, net *model.Network) []netip.P
 	if sc.Settings != nil {
 		add(sc.Settings.Snapshot().Client.EgressExclude)
 	} else if sc.Config != nil {
-		add(sc.Config.Client.EgressExclude)
+		add(sc.ConfigSnapshot().Client.EgressExclude)
 	}
 	add(net.EgressExclude)
 	// overlay 自身必须排除，避免全量路由覆盖 overlay 内网。

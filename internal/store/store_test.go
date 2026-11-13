@@ -1,8 +1,10 @@
 package store
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -52,5 +54,35 @@ func TestPostgresIntegration(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("want 1 network, got %d", n)
+	}
+}
+
+func TestSQLiteCompatFunctions(t *testing.T) {
+	registerSQLiteFuncs()
+	db, err := sql.Open("sqlite", sqliteDSN(filepath.Join(t.TempDir(), "compat.db")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, q := range []string{
+		`SELECT pg_advisory_xact_lock(hashtext('agent:1.2.3.4'))`,
+		`SELECT pg_try_advisory_lock(hashtext('gateway'))`,
+		`SELECT now()`,
+	} {
+		var v any
+		if err := db.QueryRow(q).Scan(&v); err != nil {
+			t.Fatalf("%s 失败: %v", q, err)
+		}
+	}
+	var ok bool
+	if err := db.QueryRow(`SELECT inet_in_list('10.1.2.3', '["10.0.0.0/8","192.168.0.0/16"]')`).Scan(&ok); err != nil || !ok {
+		t.Fatalf("inet_in_list 命中失败: ok=%v err=%v", ok, err)
+	}
+	if err := db.QueryRow(`SELECT inet_in_list('8.8.8.8', '["10.0.0.0/8"]')`).Scan(&ok); err != nil || ok {
+		t.Fatalf("inet_in_list 不应命中: ok=%v err=%v", ok, err)
+	}
+	var n int64
+	if err := db.QueryRow(`SELECT cardinality('["a","b"]')`).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("cardinality 失败: n=%d err=%v", n, err)
 	}
 }

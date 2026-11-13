@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/iflyelf/iflygo/internal/logic/task"
@@ -27,7 +28,7 @@ func StartGatewayReconciler(ctx context.Context, sc *svc.ServiceContext) {
 			return
 		case <-time.After(15 * time.Second):
 		}
-		runGatewayReconcile(ctx, sc)
+		runReconcileWithTimeout(ctx, sc)
 		t := time.NewTicker(60 * time.Second)
 		defer t.Stop()
 		for {
@@ -35,10 +36,31 @@ func StartGatewayReconciler(ctx context.Context, sc *svc.ServiceContext) {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				runGatewayReconcile(ctx, sc)
+				runReconcileWithTimeout(ctx, sc)
 			}
 		}
 	}()
+}
+
+// acquireGatewayLease 通过数据库租约保证多副本只有一个实例执行对账。
+// 租约 2 分钟自动过期，避免进程崩溃后永久锁死；不占用数据库连接。
+func acquireGatewayLease(sc *svc.ServiceContext) bool {
+	now := time.Now().UTC()
+	until := now.Add(2 * time.Minute).Format(time.RFC3339)
+	res, err := sc.Store.DB.Exec(sc.Store.Rebind(`INSERT INTO gateway_reconcile_lock (id, locked_until) VALUES (1, $1)
+		ON CONFLICT (id) DO UPDATE SET locked_until = $3
+		WHERE gateway_reconcile_lock.locked_until < $2`), until, now.Format(time.RFC3339), until)
+	if err != nil {
+		log.Printf("⚠️ 网关对账租约获取失败: %v", err)
+		return false
+	}
+	n, _ := res.RowsAffected()
+	return n > 0
+}
+
+func releaseGatewayLease(sc *svc.ServiceContext) {
+	past := time.Now().UTC().Add(-time.Second).Format(time.RFC3339)
+	_, _ = sc.Store.DB.Exec(sc.Store.Rebind(`UPDATE gateway_reconcile_lock SET locked_until = $1 WHERE id = 1`), past)
 }
 
 // triggerGatewayReconcile 异步触发一次对账（用于 Agent 注册、网关节点创建后立即生效）。
@@ -51,10 +73,26 @@ func triggerGatewayReconcile(sc *svc.ServiceContext) {
 	}()
 }
 
+func runReconcileWithTimeout(ctx context.Context, sc *svc.ServiceContext) {
+	rctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	runGatewayReconcile(rctx, sc)
+}
+
+var gatewayReconcileBusy atomic.Bool
+
 func runGatewayReconcile(ctx context.Context, sc *svc.ServiceContext) {
+	if !gatewayReconcileBusy.CompareAndSwap(false, true) {
+		return
+	}
+	defer gatewayReconcileBusy.Store(false)
 	if sc == nil || sc.Settings == nil {
 		return
 	}
+	if !acquireGatewayLease(sc) {
+		return
+	}
+	defer releaseGatewayLease(sc)
 	snap := sc.Settings.Snapshot()
 	if !snap.Client.AutoNAT {
 		return
@@ -193,6 +231,9 @@ func saveNATState(sc *svc.ServiceContext, networkID int64, mode, fingerprint str
 
 // autoApplyNAT 在匹配到 Agent 的健康网关上自动应用 NAT。
 func autoApplyNAT(ctx context.Context, sc *svc.ServiceContext, net *model.Network) error {
+	if sc.Settings == nil || !sc.Settings.Snapshot().Agent.AllowExecMode {
+		return nil
+	}
 	mode := effectiveEgressMode(sc, net)
 	if mode == "" {
 		return nil

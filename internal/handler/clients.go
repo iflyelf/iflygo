@@ -73,7 +73,12 @@ func UpdateClient(sc *svc.ServiceContext) http.HandlerFunc {
 
 		name := row.Name
 		if req.Name != nil && strings.TrimSpace(*req.Name) != "" {
-			name = strings.TrimSpace(*req.Name)
+			n, nerr := normalizeTunnelName(*req.Name)
+			if nerr != nil {
+				httpx.Fail(w, http.StatusBadRequest, nerr.Error())
+				return
+			}
+			name = n
 		}
 		groups := row.Groups
 		if req.Groups != nil {
@@ -93,6 +98,10 @@ func UpdateClient(sc *svc.ServiceContext) http.HandlerFunc {
 		}
 		if settings.DNSGateway != "" && !gatewayInNetwork(net, settings.DNSGateway) {
 			httpx.Fail(w, http.StatusBadRequest, "DNS 网关必须在该网络的 overlay 网段内")
+			return
+		}
+		if err := validateSubnets(subnets); err != nil {
+			httpx.Fail(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
@@ -247,6 +256,16 @@ func validateClientOverride(ov *model.ClientOverride) error {
 	return nil
 }
 
+// validateSubnets 校验客户端额外 unsafe 子网。
+func validateSubnets(csv string) error {
+	for _, s := range splitList(csv) {
+		if _, err := netip.ParsePrefix(s); err != nil {
+			return &clientSettingsError{"subnets 含非法 CIDR: " + s}
+		}
+	}
+	return nil
+}
+
 type clientSettingsError struct{ msg string }
 
 func (e *clientSettingsError) Error() string { return e.msg }
@@ -282,10 +301,16 @@ func CreateClient(sc *svc.ServiceContext) http.HandlerFunc {
 			httpx.Fail(w, http.StatusBadRequest, "请求体非法")
 			return
 		}
-		if req.Name == "" || req.NetworkID == 0 {
-			httpx.Fail(w, http.StatusBadRequest, "name 与 network_id 必填")
+		name, nerr := normalizeTunnelName(req.Name)
+		if nerr != nil {
+			httpx.Fail(w, http.StatusBadRequest, nerr.Error())
 			return
 		}
+		if req.NetworkID == 0 {
+			httpx.Fail(w, http.StatusBadRequest, "network_id 必填")
+			return
+		}
+		req.Name = name
 
 		net, err := getNetwork(sc, req.NetworkID)
 		if err != nil {
@@ -329,6 +354,11 @@ func CreateClient(sc *svc.ServiceContext) http.HandlerFunc {
 		unsafe := parsePrefixes(req.Subnets)
 		groups := splitList(req.Groups)
 		if err := validateClientOverride(req.ClientSettings); err != nil {
+			rollbackIPs(sc, net.ID, ipv4, ipv6)
+			httpx.Fail(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := validateSubnets(req.Subnets); err != nil {
 			rollbackIPs(sc, net.ID, ipv4, ipv6)
 			httpx.Fail(w, http.StatusBadRequest, err.Error())
 			return
@@ -569,6 +599,8 @@ func buildBundle(sc *svc.ServiceContext, c *clientRow) (*model.Bundle, error) {
 	}
 	// 全量公网出口：按排除策略拆分 0/0，避免把内网/控制面流量送入隧道。
 	if net.EgressMode == "full" {
+		// 全量出口以排除策略拆分路由，禁止旧的 0/0 默认路由覆盖排除网段。
+		input.UnsafeRoutes = withoutDefaultRoutes(input.UnsafeRoutes)
 		gw4, gw6 := "", ""
 		if net.Cidr4 != "" {
 			gw4 = gatewayForFamily(sc, net, ov.DNSGateway, true)
@@ -589,6 +621,9 @@ func buildBundle(sc *svc.ServiceContext, c *clientRow) (*model.Bundle, error) {
 	_, routeSpecs, err := loadRouteConfig(sc, c.NetworkID)
 	if err != nil {
 		return nil, err
+	}
+	if net.EgressMode == "full" {
+		routeSpecs = withoutDefaultSpecs(routeSpecs)
 	}
 	routeSpecs = append(routeSpecs, dnsSpecs...)
 
@@ -817,8 +852,36 @@ func publicHostHealth(sc *svc.ServiceContext, publicHost string) string {
 	}
 }
 
+func isDefaultRoute(cidr string) bool {
+	return cidr == "0.0.0.0/0" || cidr == "::/0"
+}
+
+func withoutDefaultRoutes(in []configgen.Route) []configgen.Route {
+	out := in[:0]
+	for _, r := range in {
+		if !isDefaultRoute(r.Route) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func withoutDefaultSpecs(in []model.RouteSpec) []model.RouteSpec {
+	out := in[:0]
+	for _, r := range in {
+		if !isDefaultRoute(r.CIDR) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 func enrollCommand(baseURL, token, name string) string {
-	return "iflygo-client enroll --server " + baseURL + " --token " + token + " --name " + name
+	return "iflygo-client enroll --server " + shellQuote(baseURL) + " --token " + shellQuote(token) + " --name " + shellQuote(name)
 }
 
 // nodePrefixes 用网络前缀长度构造节点的证书 networks。

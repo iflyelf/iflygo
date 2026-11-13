@@ -7,6 +7,8 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
+	"net/netip"
 	"reflect"
 	"regexp"
 	"strings"
@@ -115,6 +117,49 @@ func registerSQLiteFuncs() {
 		// pg_advisory_unlock(x)：恒返回 true
 		sqlite.MustRegisterScalarFunction("pg_advisory_unlock", 1, func(_ *sqlite.FunctionContext, _ []driver.Value) (driver.Value, error) {
 			return true, nil
+		})
+		// pg_advisory_xact_lock(x)：SQLite 单写者事务天然串行，no-op。
+		sqlite.MustRegisterScalarFunction("pg_advisory_xact_lock", 1, func(_ *sqlite.FunctionContext, _ []driver.Value) (driver.Value, error) {
+			return nil, nil
+		})
+		// hashtext(text)：PostgreSQL 的稳定文本哈希；SQLite 用 FNV-1a 兼容。
+		sqlite.MustRegisterScalarFunction("hashtext", 1, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+			h := fnv.New64a()
+			if len(args) > 0 && args[0] != nil {
+				_, _ = h.Write([]byte(fmt.Sprint(args[0])))
+			}
+			return int64(h.Sum64()), nil
+		})
+		// cardinality(json_array)：兼容 PostgreSQL 数组长度。
+		sqlite.MustRegisterScalarFunction("cardinality", 1, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+			if len(args) == 0 || args[0] == nil {
+				return int64(0), nil
+			}
+			var arr []any
+			if json.Unmarshal([]byte(fmt.Sprint(args[0])), &arr) != nil {
+				return int64(0), nil
+			}
+			return int64(len(arr)), nil
+		})
+		// inet_in_list(ip, json_array)：判断 IP 是否命中任一 CIDR。
+		sqlite.MustRegisterScalarFunction("inet_in_list", 2, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+			if len(args) < 2 || args[0] == nil || args[1] == nil {
+				return false, nil
+			}
+			addr, err := netip.ParseAddr(strings.TrimSpace(fmt.Sprint(args[0])))
+			if err != nil {
+				return false, nil
+			}
+			var list []string
+			if json.Unmarshal([]byte(fmt.Sprint(args[1])), &list) != nil {
+				return false, nil
+			}
+			for _, c := range list {
+				if p, err := netip.ParsePrefix(strings.TrimSpace(c)); err == nil && p.Contains(addr) {
+					return true, nil
+				}
+			}
+			return false, nil
 		})
 	})
 }

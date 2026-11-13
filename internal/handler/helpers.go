@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/iflyelf/iflygo/internal/svc"
@@ -30,12 +31,27 @@ func randomToken() (string, error) {
 
 // baseURL 计算对外地址（用于安装命令）。
 func baseURL(sc *svc.ServiceContext, r *http.Request) string {
-	if u := sc.Config.Server.ExternalURL; u != "" {
-		return u
+	if snap := sc.ConfigSnapshot(); snap.Server.ExternalURL != "" {
+		return snap.Server.ExternalURL
 	}
 	scheme := "http"
 	if r.TLS != nil {
 		scheme = "https"
 	}
 	return fmt.Sprintf("%s://%s", scheme, r.Host)
+}
+
+// normalizeTunnelName 校验隧道资源名称（客户端/服务端节点）。
+func normalizeTunnelName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("名称必填")
+	}
+	if len([]rune(name)) > 100 {
+		return "", fmt.Errorf("名称最多 100 个字符")
+	}
+	if strings.ContainsAny(name, "\r\n\t") {
+		return "", fmt.Errorf("名称不能包含换行或制表符")
+	}
+	return name, nil
 }

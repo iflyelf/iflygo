@@ -55,10 +55,16 @@ func CreateServerNode(sc *svc.ServiceContext) http.HandlerFunc {
 			httpx.Fail(w, http.StatusBadRequest, "请求体非法")
 			return
 		}
-		if req.Name == "" || req.NetworkID == 0 {
-			httpx.Fail(w, http.StatusBadRequest, "name 与 network_id 必填")
+		name, nerr := normalizeTunnelName(req.Name)
+		if nerr != nil {
+			httpx.Fail(w, http.StatusBadRequest, nerr.Error())
 			return
 		}
+		if req.NetworkID == 0 {
+			httpx.Fail(w, http.StatusBadRequest, "network_id 必填")
+			return
+		}
+		req.Name = name
 		net, err := getNetwork(sc, req.NetworkID)
 		if err != nil {
 			httpx.Fail(w, http.StatusNotFound, "网络不存在")
@@ -168,6 +174,13 @@ func UpdateServerNode(sc *svc.ServiceContext) http.HandlerFunc {
 		name := strings.TrimSpace(req.Name)
 		if name == "" {
 			name = row.Name
+		} else {
+			n, nerr := normalizeTunnelName(name)
+			if nerr != nil {
+				httpx.Fail(w, http.StatusBadRequest, nerr.Error())
+				return
+			}
+			name = n
 		}
 		roles := strings.TrimSpace(req.Roles)
 		if roles == "" {

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/netip"
@@ -30,6 +31,76 @@ type networkReq struct {
 	// EgressExclude 全量出口排除网段（逗号分隔 CIDR）。
 	EgressExclude string               `json:"egress_exclude"`
 	Nebula        model.NebulaSettings `json:"nebula"`
+}
+
+// normalizeNetworkReq 校验并归一化网络创建参数，避免非法 CIDR/名称进入配置或 NAT 脚本。
+func normalizeNetworkReq(req *networkReq) error {
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" || len([]rune(req.Name)) > 100 || strings.ContainsAny(req.Name, "\r\n\t") {
+		return fmt.Errorf("name 必填且不能包含换行/制表符（最多 100 字符）")
+	}
+	p4, err := netip.ParsePrefix(strings.TrimSpace(req.Cidr4))
+	if err != nil || !p4.Addr().Is4() {
+		return fmt.Errorf("cidr4 不是合法 IPv4 网段")
+	}
+	req.Cidr4 = p4.Masked().String()
+	var p6 netip.Prefix
+	if v := strings.TrimSpace(req.Cidr6); v != "" {
+		p6, err = netip.ParsePrefix(v)
+		if err != nil || !p6.Addr().Is6() {
+			return fmt.Errorf("cidr6 不是合法 IPv6 网段")
+		}
+		req.Cidr6 = p6.Masked().String()
+	} else {
+		req.Cidr6 = ""
+	}
+	req.Gateway4 = strings.TrimSpace(req.Gateway4)
+	if req.Gateway4 != "" {
+		a, aerr := netip.ParseAddr(req.Gateway4)
+		if aerr != nil || !a.Is4() || !p4.Contains(a) {
+			return fmt.Errorf("gateway4 必须是 cidr4 内的 IPv4 地址")
+		}
+	}
+	req.Gateway6 = strings.TrimSpace(req.Gateway6)
+	if req.Gateway6 != "" {
+		if p6.IsValid() {
+			a, aerr := netip.ParseAddr(req.Gateway6)
+			if aerr != nil || !a.Is6() || !p6.Contains(a) {
+				return fmt.Errorf("gateway6 必须是 cidr6 内的 IPv6 地址")
+			}
+		} else {
+			return fmt.Errorf("填写 gateway6 时必须同时填写 cidr6")
+		}
+	}
+	req.DNS = strings.TrimSpace(req.DNS)
+	for _, d := range strings.Split(req.DNS, ",") {
+		if d = strings.TrimSpace(d); d != "" && net.ParseIP(d) == nil {
+			return fmt.Errorf("DNS 含非法 IP: %s", d)
+		}
+	}
+	req.DNSGateway = strings.TrimSpace(req.DNSGateway)
+	if req.DNSGateway != "" {
+		a, aerr := netip.ParseAddr(req.DNSGateway)
+		if aerr != nil || !(p4.Contains(a) || (p6.IsValid() && p6.Contains(a))) {
+			return fmt.Errorf("DNS 网关必须是该网络 overlay 网段内的 IP")
+		}
+	}
+	req.EgressMode = strings.ToLower(strings.TrimSpace(req.EgressMode))
+	switch req.EgressMode {
+	case "", "off", "dns", "full":
+	default:
+		return fmt.Errorf("egress_mode 只能是 off / dns / full")
+	}
+	req.EgressExclude = strings.TrimSpace(req.EgressExclude)
+	for _, c := range splitList(req.EgressExclude) {
+		if _, err := netip.ParsePrefix(c); err != nil {
+			return fmt.Errorf("排除网段不是合法 CIDR: %s", c)
+		}
+	}
+	if req.MTU < 576 || req.MTU > 9000 {
+		return fmt.Errorf("MTU 应在 576-9000 之间")
+	}
+	return nil
 }
 
 // ListNetworks 列出网络。
@@ -62,10 +133,6 @@ func CreateNetwork(sc *svc.ServiceContext) http.HandlerFunc {
 			httpx.Fail(w, http.StatusBadRequest, "请求体非法")
 			return
 		}
-		if req.Name == "" || req.Cidr4 == "" {
-			httpx.Fail(w, http.StatusBadRequest, "name 与 cidr4 必填")
-			return
-		}
 		if req.MTU == 0 {
 			req.MTU = 1300
 			if sc.Settings != nil {
@@ -73,6 +140,10 @@ func CreateNetwork(sc *svc.ServiceContext) http.HandlerFunc {
 					req.MTU = m
 				}
 			}
+		}
+		if err := normalizeNetworkReq(&req); err != nil {
+			httpx.Fail(w, http.StatusBadRequest, err.Error())
+			return
 		}
 
 		ca, err := pki.CreateCA("iFlyGo CA ("+req.Name+")", 10*365*24*time.Hour)
@@ -117,6 +188,8 @@ func DeleteNetwork(sc *svc.ServiceContext) http.HandlerFunc {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
 		}
+		_, _ = sc.Store.DB.Exec(sc.Store.Rebind(`DELETE FROM gateway_nat_state WHERE network_id = $1`), id)
+		_, _ = sc.Store.DB.Exec(sc.Store.Rebind(`DELETE FROM gateway_health_state WHERE network_id = $1`), id)
 		httpx.OK(w, nil)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/iflyelf/iflygo/internal/config"
+	"github.com/iflyelf/iflygo/internal/configgen"
 	"github.com/iflyelf/iflygo/internal/model"
 	"github.com/iflyelf/iflygo/internal/svc"
 )
@@ -58,4 +59,20 @@ func prefixListContains(prefixes []netip.Prefix, addr netip.Addr) bool {
 		}
 	}
 	return false
+}
+
+func TestWithoutDefaultRoutes(t *testing.T) {
+	in := []configgen.Route{
+		{Route: "0.0.0.0/0", Via: "10.0.0.1"},
+		{Route: "1.0.0.0/8", Via: "10.0.0.1"},
+		{Route: "::/0", Via: "fd00::1"},
+	}
+	out := withoutDefaultRoutes(in)
+	if len(out) != 1 || out[0].Route != "1.0.0.0/8" {
+		t.Fatalf("默认路由未被过滤: %+v", out)
+	}
+	specs := []model.RouteSpec{{CIDR: "0.0.0.0/0"}, {CIDR: "10.9.0.0/16"}}
+	if got := withoutDefaultSpecs(specs); len(got) != 1 || got[0].CIDR != "10.9.0.0/16" {
+		t.Fatalf("默认 RouteSpec 未被过滤: %+v", got)
+	}
 }

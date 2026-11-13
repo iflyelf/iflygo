@@ -85,8 +85,6 @@ type natApplyReq struct {
 	ServerNodeID int64 `json:"server_node_id"`
 	// HostIP 显式指定执行脚本的 Agent 主机 IP/hostname（可选）。
 	HostIP string `json:"host_ip"`
-	// EnsureDefaultRoute full 模式默认创建/更新 0.0.0.0/0（及 ::/0）默认路由。
-	EnsureDefaultRoute *bool `json:"ensure_default_route"`
 	// Start 为 true 时创建并立即启动 Agent 命令任务。
 	Start bool `json:"start"`
 }
@@ -147,11 +145,20 @@ func NATApply(sc *svc.ServiceContext) http.HandlerFunc {
 			return
 		}
 
-		// full 模式写入网络出口模式；全量路由由 Bundle 按排除策略动态生成。
+		// 应用 NAT 时同步网络出口模式：dns 模式开启 DNS 路由；full 模式启用全量出口。
 		egressChanged := false
-		if mode == "full" && net.EgressMode != "full" {
-			if _, err := sc.Store.DB.Exec(sc.Store.Rebind(`UPDATE networks SET egress_mode = 'full' WHERE id = $1`), net.ID); err == nil {
-				net.EgressMode = "full"
+		targetMode := ""
+		switch mode {
+		case "full":
+			targetMode = "full"
+		case "dns":
+			if net.EgressMode == "" || net.EgressMode == "off" {
+				targetMode = "dns"
+			}
+		}
+		if targetMode != "" && net.EgressMode != targetMode {
+			if _, err := sc.Store.DB.Exec(sc.Store.Rebind(`UPDATE networks SET egress_mode = $1 WHERE id = $2`), targetMode, net.ID); err == nil {
+				net.EgressMode = targetMode
 				bumpConfigRev(sc, net.ID)
 				egressChanged = true
 			}
@@ -305,7 +312,7 @@ func collectNetworkDNS(sc *svc.ServiceContext, net *model.Network) []string {
 	if sc.Settings != nil {
 		add(sc.Settings.Snapshot().Client.DNS)
 	} else if sc.Config != nil {
-		add(sc.Config.Client.DNS)
+		add(sc.ConfigSnapshot().Client.DNS)
 	}
 	add(net.DNS)
 	rows, err := sc.Store.DB.Query(sc.Store.Rebind(`SELECT client_settings FROM client_nodes WHERE network_id = $1`), net.ID)
@@ -360,16 +367,41 @@ func resolveNATHost(sc *svc.ServiceContext, net *model.Network, hostIP string, s
 	return &h, nil
 }
 
+// safeScriptCIDR 只允许合法 CIDR 进入 shell 脚本，防止历史脏数据造成命令注入。
+func safeScriptCIDR(raw string) string {
+	p, err := netip.ParsePrefix(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	return p.Masked().String()
+}
+
+// scriptComment 清理注释中的换行/控制字符，避免脚本注释被用于注入命令。
+func scriptComment(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r == '\r' || r == '\n' {
+			b.WriteByte(' ')
+			continue
+		}
+		if r < 0x20 {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 func buildDNSNATScript(net *model.Network, v4, v6 []string, gw4, gw6 string) string {
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\n")
 	b.WriteString("# iflygo overlay 网关 DNS NAT 策略（需 root 执行）\n")
-	b.WriteString("# 网络: " + net.Name + "\n")
+	b.WriteString("# 网络: " + scriptComment(net.Name) + "\n")
 	if gw4 != "" {
-		b.WriteString("# IPv4 网关: " + gw4 + "\n")
+		b.WriteString("# IPv4 网关: " + scriptComment(gw4) + "\n")
 	}
 	if gw6 != "" {
-		b.WriteString("# IPv6 网关: " + gw6 + "\n")
+		b.WriteString("# IPv6 网关: " + scriptComment(gw6) + "\n")
 	}
 	b.WriteString("set -e\n\n")
 	b.WriteString("# 1) 开启内核转发\n")
@@ -381,28 +413,30 @@ func buildDNSNATScript(net *model.Network, v4, v6 []string, gw4, gw6 string) str
 	}
 	b.WriteString("\n")
 	if len(v4) > 0 {
-		src := net.Cidr4
+		src := safeScriptCIDR(net.Cidr4)
 		if src == "" {
-			src = "0.0.0.0/0"
-		}
-		b.WriteString("# 2) IPv4：放行 overlay → DNS，并对回包做源地址伪装\n")
-		for _, d := range v4 {
-			dst := d + "/32"
-			fmt.Fprintf(&b, "iptables -C FORWARD -s %s -d %s -j ACCEPT 2>/dev/null || iptables -A FORWARD -s %s -d %s -j ACCEPT\n", src, dst, src, dst)
-			fmt.Fprintf(&b, "iptables -t nat -C POSTROUTING -s %s -d %s -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s %s -d %s -j MASQUERADE\n", src, dst, src, dst)
+			b.WriteString("# IPv4 overlay CIDR 非法，已跳过 DNS NAT 规则\n")
+		} else {
+			b.WriteString("# 2) IPv4：放行 overlay → DNS，并对回包做源地址伪装\n")
+			for _, d := range v4 {
+				dst := d + "/32"
+				fmt.Fprintf(&b, "iptables -C FORWARD -s %s -d %s -j ACCEPT 2>/dev/null || iptables -A FORWARD -s %s -d %s -j ACCEPT\n", src, dst, src, dst)
+				fmt.Fprintf(&b, "iptables -t nat -C POSTROUTING -s %s -d %s -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s %s -d %s -j MASQUERADE\n", src, dst, src, dst)
+			}
 		}
 		b.WriteString("\n")
 	}
 	if len(v6) > 0 {
-		src := net.Cidr6
+		src := safeScriptCIDR(net.Cidr6)
 		if src == "" {
-			src = "::/0"
-		}
-		b.WriteString("# 3) IPv6：放行 overlay → DNS，并对回包做源地址伪装\n")
-		for _, d := range v6 {
-			dst := d + "/128"
-			fmt.Fprintf(&b, "ip6tables -C FORWARD -s %s -d %s -j ACCEPT 2>/dev/null || ip6tables -A FORWARD -s %s -d %s -j ACCEPT\n", src, dst, src, dst)
-			fmt.Fprintf(&b, "ip6tables -t nat -C POSTROUTING -s %s -d %s -j MASQUERADE 2>/dev/null || ip6tables -t nat -A POSTROUTING -s %s -d %s -j MASQUERADE\n", src, dst, src, dst)
+			b.WriteString("# IPv6 overlay CIDR 非法，已跳过 DNS NAT 规则\n")
+		} else {
+			b.WriteString("# 3) IPv6：放行 overlay → DNS，并对回包做源地址伪装\n")
+			for _, d := range v6 {
+				dst := d + "/128"
+				fmt.Fprintf(&b, "ip6tables -C FORWARD -s %s -d %s -j ACCEPT 2>/dev/null || ip6tables -A FORWARD -s %s -d %s -j ACCEPT\n", src, dst, src, dst)
+				fmt.Fprintf(&b, "ip6tables -t nat -C POSTROUTING -s %s -d %s -j MASQUERADE 2>/dev/null || ip6tables -t nat -A POSTROUTING -s %s -d %s -j MASQUERADE\n", src, dst, src, dst)
+			}
 		}
 		b.WriteString("\n")
 	}
@@ -429,28 +463,28 @@ func buildFullNATScript(net *model.Network, gw4, gw6 string, excludes []netip.Pr
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\n")
 	b.WriteString("# iflygo 全量公网出口 NAT 策略（需 root 执行）\n")
-	b.WriteString("# 网络: " + net.Name + "\n")
+	b.WriteString("# 网络: " + scriptComment(net.Name) + "\n")
 	if gw4 != "" {
-		b.WriteString("# IPv4 网关: " + gw4 + "\n")
+		b.WriteString("# IPv4 网关: " + scriptComment(gw4) + "\n")
 	}
 	if gw6 != "" {
-		b.WriteString("# IPv6 网关: " + gw6 + "\n")
+		b.WriteString("# IPv6 网关: " + scriptComment(gw6) + "\n")
 	}
 	b.WriteString("# 注意：该脚本会把 overlay 网段的所有出公网流量 NAT 到本网关，请确认安全组策略。\n")
 	b.WriteString("set -e\n\n")
-	if net.Cidr4 != "" {
+	if src4 := safeScriptCIDR(net.Cidr4); src4 != "" {
 		b.WriteString("sysctl -w net.ipv4.ip_forward=1\n")
-		b.WriteString("iptables -C FORWARD -s " + net.Cidr4 + " -j ACCEPT 2>/dev/null || iptables -A FORWARD -s " + net.Cidr4 + " -j ACCEPT\n")
-		b.WriteString("iptables -C FORWARD -d " + net.Cidr4 + " -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -A FORWARD -d " + net.Cidr4 + " -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT\n")
-		writeNATExcludeRules(&b, "iptables", net.Cidr4, excludes, true)
-		b.WriteString("iptables -t nat -C POSTROUTING -s " + net.Cidr4 + " -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s " + net.Cidr4 + " -j MASQUERADE\n\n")
+		b.WriteString("iptables -C FORWARD -s " + src4 + " -j ACCEPT 2>/dev/null || iptables -A FORWARD -s " + src4 + " -j ACCEPT\n")
+		b.WriteString("iptables -C FORWARD -d " + src4 + " -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -A FORWARD -d " + src4 + " -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT\n")
+		writeNATExcludeRules(&b, "iptables", src4, excludes, true)
+		b.WriteString("iptables -t nat -C POSTROUTING -s " + src4 + " -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s " + src4 + " -j MASQUERADE\n\n")
 	}
-	if net.Cidr6 != "" {
+	if src6 := safeScriptCIDR(net.Cidr6); src6 != "" {
 		b.WriteString("sysctl -w net.ipv6.conf.all.forwarding=1\n")
-		b.WriteString("ip6tables -C FORWARD -s " + net.Cidr6 + " -j ACCEPT 2>/dev/null || ip6tables -A FORWARD -s " + net.Cidr6 + " -j ACCEPT\n")
-		b.WriteString("ip6tables -C FORWARD -d " + net.Cidr6 + " -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || ip6tables -A FORWARD -d " + net.Cidr6 + " -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT\n")
-		writeNATExcludeRules(&b, "ip6tables", net.Cidr6, excludes, false)
-		b.WriteString("ip6tables -t nat -C POSTROUTING -s " + net.Cidr6 + " -j MASQUERADE 2>/dev/null || ip6tables -t nat -A POSTROUTING -s " + net.Cidr6 + " -j MASQUERADE\n\n")
+		b.WriteString("ip6tables -C FORWARD -s " + src6 + " -j ACCEPT 2>/dev/null || ip6tables -A FORWARD -s " + src6 + " -j ACCEPT\n")
+		b.WriteString("ip6tables -C FORWARD -d " + src6 + " -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || ip6tables -A FORWARD -d " + src6 + " -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT\n")
+		writeNATExcludeRules(&b, "ip6tables", src6, excludes, false)
+		b.WriteString("ip6tables -t nat -C POSTROUTING -s " + src6 + " -j MASQUERADE 2>/dev/null || ip6tables -t nat -A POSTROUTING -s " + src6 + " -j MASQUERADE\n\n")
 	}
 	b.WriteString("# 持久化（按发行版选择其一）\n")
 	b.WriteString("# Debian/Ubuntu: apt-get install -y iptables-persistent && netfilter-persistent save\n")

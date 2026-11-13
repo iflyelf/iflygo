@@ -892,8 +892,7 @@ func consumeEnrollTokenTx(ctx context.Context, tx *sql.Tx, token, clientIP strin
 			ipForCIDR = parsed.String()
 		}
 	}
-	var tenantID int64
-	err := tx.QueryRowContext(ctx, store.SQL(`
+	q := `
 		UPDATE enroll_tokens
 		SET used_at = CASE WHEN token_type='one_time' THEN NOW() ELSE used_at END,
 		    used_by_ip = CASE WHEN token_type='one_time' THEN $2 ELSE used_by_ip END,
@@ -912,7 +911,13 @@ func consumeEnrollTokenTx(ctx context.Context, tx *sql.Tx, token, clientIP strin
 		        cardinality(allowed_cidrs)=0
 		     OR NULLIF($3,'')::inet <<= ANY(allowed_cidrs::cidr[])
 		  )
-		RETURNING COALESCE(tenant_id,1)`),
+		RETURNING COALESCE(tenant_id,1)`
+	if store.CurrentDialect() == store.SQLite {
+		// SQLite 用 JSON 数组存 allowed_cidrs；由注册的兼容函数完成 CIDR 匹配。
+		q = strings.Replace(q, "NULLIF($3,'')::inet <<= ANY(allowed_cidrs::cidr[])", "($3 <> '' AND inet_in_list($3, allowed_cidrs))", 1)
+	}
+	var tenantID int64
+	err := tx.QueryRowContext(ctx, store.SQL(q),
 		agentgw.HashToken(token), ip, ipForCIDR).Scan(&tenantID)
 	if err != nil || tenantID <= 0 {
 		return 0, false

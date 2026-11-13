@@ -1,7 +1,10 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
+	"net/netip"
+	"strings"
 
 	"github.com/iflyelf/iflygo/internal/model"
 	"github.com/iflyelf/iflygo/internal/pkg/httpx"
@@ -44,6 +47,57 @@ func ListRoutes(sc *svc.ServiceContext) http.HandlerFunc {
 	}
 }
 
+// normalizeRouteReq 校验路由 CIDR、网关 IP 与模式，防止非法值进入客户端配置。
+func normalizeRouteReq(net *model.Network, req *createRouteReq) error {
+	req.CIDR = strings.TrimSpace(req.CIDR)
+	if _, err := netip.ParsePrefix(req.CIDR); err != nil {
+		return fmt.Errorf("cidr 非法: %s", req.CIDR)
+	}
+	if len(req.Gateways) == 0 {
+		return fmt.Errorf("gateways 必填")
+	}
+	if req.MTU < 0 || req.MTU > 9000 {
+		return fmt.Errorf("MTU 应在 0-9000 之间")
+	}
+	if req.Mode == "" {
+		req.Mode = "active_active"
+	}
+	switch req.Mode {
+	case "active_active", "active_passive":
+	default:
+		return fmt.Errorf("mode 只能是 active_active / active_passive")
+	}
+	if req.AllDownPolicy == "" {
+		req.AllDownPolicy = "fail_closed"
+	}
+	switch req.AllDownPolicy {
+	case "fail_closed", "fail_open":
+	default:
+		return fmt.Errorf("all_down_policy 只能是 fail_closed / fail_open")
+	}
+	for i := range req.Gateways {
+		g := &req.Gateways[i]
+		g.OverlayIP = strings.TrimSpace(g.OverlayIP)
+		a, err := netip.ParseAddr(g.OverlayIP)
+		if err != nil {
+			return fmt.Errorf("网关 IP 非法: %s", g.OverlayIP)
+		}
+		if !prefixContains(net.Cidr4, a) && !prefixContains(net.Cidr6, a) {
+			return fmt.Errorf("网关 %s 不在该网络 overlay 网段内", g.OverlayIP)
+		}
+		if g.Weight <= 0 {
+			g.Weight = 1
+		}
+		if g.Priority < 0 {
+			return fmt.Errorf("网关优先级不能为负数")
+		}
+		if g.HealthPort < 0 || g.HealthPort > 65535 {
+			return fmt.Errorf("健康检查端口非法: %d", g.HealthPort)
+		}
+	}
+	return nil
+}
+
 // CreateRoute 创建不安全路由及其网关。
 func CreateRoute(sc *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -57,15 +111,14 @@ func CreateRoute(sc *svc.ServiceContext) http.HandlerFunc {
 			httpx.Fail(w, http.StatusBadRequest, "请求体非法")
 			return
 		}
-		if req.CIDR == "" || len(req.Gateways) == 0 {
-			httpx.Fail(w, http.StatusBadRequest, "cidr 与 gateways 必填")
+		net, err := getNetwork(sc, nid)
+		if err != nil {
+			httpx.Fail(w, http.StatusNotFound, "网络不存在")
 			return
 		}
-		if req.Mode == "" {
-			req.Mode = "active_active"
-		}
-		if req.AllDownPolicy == "" {
-			req.AllDownPolicy = "fail_closed"
+		if err := normalizeRouteReq(net, &req); err != nil {
+			httpx.Fail(w, http.StatusBadRequest, err.Error())
+			return
 		}
 
 		now := nowStr()
@@ -122,15 +175,14 @@ func UpdateRoute(sc *svc.ServiceContext) http.HandlerFunc {
 			httpx.Fail(w, http.StatusBadRequest, "请求体非法")
 			return
 		}
-		if req.CIDR == "" || len(req.Gateways) == 0 {
-			httpx.Fail(w, http.StatusBadRequest, "cidr 与 gateways 必填")
+		net, nerr := getNetwork(sc, nid)
+		if nerr != nil {
+			httpx.Fail(w, http.StatusNotFound, "网络不存在")
 			return
 		}
-		if req.Mode == "" {
-			req.Mode = "active_active"
-		}
-		if req.AllDownPolicy == "" {
-			req.AllDownPolicy = "fail_closed"
+		if err := normalizeRouteReq(net, &req); err != nil {
+			httpx.Fail(w, http.StatusBadRequest, err.Error())
+			return
 		}
 		if _, err := sc.Store.DB.Exec(sc.Store.Rebind(`UPDATE subnet_routes SET cidr=$1,mtu=$2,metric=$3,mode=$4,all_down_policy=$5,description=$6 WHERE id=$7`),
 			req.CIDR, req.MTU, req.Metric, req.Mode, req.AllDownPolicy, req.Description, id); err != nil {
