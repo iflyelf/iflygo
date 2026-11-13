@@ -593,7 +593,7 @@ iflygo-server -role gateway -overlay-config /etc/iflygo/node/config.yml
 - **形态**：完整 VpnService/TUN 隧道（不是仅管理页面）
 - **功能**：填写控制面地址 + enroll token → 注册 → 启动/停止 VPN → 状态/IP/日志
 - **兼容性**：APK 可安装在 **HarmonyOS 4 / 4.2 及以下**（Android 兼容）；
-  HarmonyOS NEXT（5.x）不兼容 Android APK，需要原生 ArkTS HAP（本仓库暂未构建）
+  HarmonyOS NEXT（5.x）不兼容 Android APK，需要原生 ArkTS HAP（**当前未构建**）
 - **构建**：`.github/workflows/android.yml` 自动执行
   `gomobile bind` + `gradle assembleDebug`；构建产物为 `app-debug.apk`，
   发布资产命名为 `iflygo-android.apk`（附 `.sha256`），手动触发/tag 时附加到 Release
@@ -605,6 +605,10 @@ iflygo-server -role gateway -overlay-config /etc/iflygo/node/config.yml
   当前为 debug 签名（可直接安装）；正式分发建议配置自有 release keystore 后重新签名。
 - **本地构建**：见 `mobile/android/README.md`（需要 JDK 17、Android SDK 34、
   NDK 26.1、Gradle 8.7、gomobile）
+- **HarmonyOS NEXT**：原生 HAP 的技术路线、`VpnExtensionAbility` 声明、
+  NAPI/Nebula 数据面移植与签名要求见 `mobile/harmony/README.md`。
+  当前环境缺少 HarmonyOS SDK/NDK 与华为签名材料，无法构建可安装 HAP；
+  Android APK 不适用于 NEXT（5.x）。
 - **使用**：
   1. 控制台「隧道 → 客户端」创建客户端，复制 enroll token；
   2. 安装 APK，填写控制面地址与 token，点「注册」；
