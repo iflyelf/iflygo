@@ -1,24 +1,33 @@
 package handler
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 
-	"github.com/iflyelf/iflygo/internal/config"
 	"github.com/iflyelf/iflygo/internal/store"
 	"github.com/iflyelf/iflygo/internal/svc"
 )
 
 func TestNATStateRetryPersistence(t *testing.T) {
-	cfg := config.Default()
-	cfg.Database.Driver = "sqlite"
-	cfg.Database.SQLitePath = filepath.Join(t.TempDir(), "nat-state.db")
-	st, err := store.Open(cfg)
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "nat-state.db"))
 	if err != nil {
 		t.Fatalf("打开 SQLite 失败: %v", err)
 	}
-	defer st.Close()
-	sc := &svc.ServiceContext{Store: st}
+	defer db.Close()
+	_, err = db.Exec(`CREATE TABLE gateway_nat_state (
+		network_id INTEGER NOT NULL, mode TEXT NOT NULL, fingerprint TEXT NOT NULL DEFAULT '',
+		server_node_id INTEGER NOT NULL DEFAULT 0, gateway TEXT NOT NULL DEFAULT '',
+		host_ip TEXT NOT NULL DEFAULT '', task_id INTEGER NOT NULL DEFAULT 0,
+		status TEXT NOT NULL DEFAULT '', last_error TEXT NOT NULL DEFAULT '',
+		retry_count INTEGER NOT NULL DEFAULT 0, alerted_at TEXT NOT NULL DEFAULT '',
+		last_attempt_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '',
+		PRIMARY KEY (network_id, mode)
+	)`)
+	if err != nil {
+		t.Fatalf("建表失败: %v", err)
+	}
+	sc := &svc.ServiceContext{Store: &store.Store{DB: db, Dialect: store.SQLite}}
 
 	want := natState{
 		Fingerprint: "fp-1", Status: "failed", RetryCount: 3,
