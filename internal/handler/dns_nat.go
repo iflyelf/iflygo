@@ -240,6 +240,16 @@ func NATApply(sc *svc.ServiceContext) http.HandlerFunc {
 			return
 		}
 		auditOp(sc, r, audit.ActionTaskCreate, "task", strconv.FormatInt(taskID, 10), "nat:"+mode, nil)
+		// 手动执行同样更新自动对账状态，避免页面继续显示旧的 failed/告警状态。
+		activeGateway := gw4
+		if activeGateway == "" {
+			activeGateway = gw6
+		}
+		saveNATState(sc, net.ID, mode, natState{
+			Fingerprint: sha256hex(mode + "|" + activeGateway + "|" + host.IP + "|" + script),
+			Status:      "running", TaskID: taskID, ServerNodeID: req.ServerNodeID,
+			Gateway: activeGateway, HostIP: host.IP, LastAttempt: nowStr(),
+		})
 		resp["task_id"] = taskID
 		resp["host_ip"] = host.IP
 		resp["host_name"] = host.Hostname
