@@ -76,6 +76,42 @@ func DNSNATScript(sc *svc.ServiceContext) http.HandlerFunc {
 	}
 }
 
+// NATStatus 返回网络的自动 NAT 状态（含重试次数与最近错误）。
+func NATStatus(sc *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, err := tunnelID(r)
+		if err != nil {
+			httpx.Fail(w, http.StatusBadRequest, "id 非法")
+			return
+		}
+		rows, err := sc.Store.DB.Query(sc.Store.Rebind(`SELECT mode,COALESCE(status,''),COALESCE(retry_count,0),
+			COALESCE(last_error,''),COALESCE(last_attempt_at,''),COALESCE(task_id,0),
+			COALESCE(gateway,''),COALESCE(host_ip,''),COALESCE(alerted_at,'')
+			FROM gateway_nat_state WHERE network_id = $1 ORDER BY mode`), id)
+		if err != nil {
+			httpx.FailErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		defer rows.Close()
+		items := []map[string]any{}
+		for rows.Next() {
+			var mode, status, lastErr, lastAt, gateway, hostIP, alertedAt string
+			var retries, taskID int64
+			if err := rows.Scan(&mode, &status, &retries, &lastErr, &lastAt, &taskID, &gateway, &hostIP, &alertedAt); err != nil {
+				httpx.FailErr(w, http.StatusInternalServerError, err)
+				return
+			}
+			items = append(items, map[string]any{
+				"mode": mode, "status": status, "retry_count": retries,
+				"max_retries": maxNATRetries(sc), "last_error": lastErr,
+				"last_attempt_at": lastAt, "task_id": taskID,
+				"gateway": gateway, "host_ip": hostIP, "alerted_at": alertedAt,
+			})
+		}
+		httpx.OK(w, map[string]any{"max_retries": maxNATRetries(sc), "items": items})
+	}
+}
+
 type natApplyReq struct {
 	Mode string `json:"mode"` // dns / full
 	DNS  string `json:"dns"`

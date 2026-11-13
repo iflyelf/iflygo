@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -57,6 +58,28 @@ func clientRegistry() []Item {
 				"需 agent.allow_exec_mode=true。网关健康变化时自动切换并递增客户端配置版本。",
 			Get: func(c *config.Config) string { return b2s(c.Client.AutoNAT) },
 			Set: func(c *config.Config, v string) { c.Client.AutoNAT = v == "true" }},
+		{Key: "client.auto_nat_max_retries", Group: "客户端下发",
+			Label: "自动 NAT 最大重试次数（达到后停止并告警）", Type: "int",
+			Note:     "默认 5；任务失败按 10 分钟退避重试，达到上限后不再自动重建，可在参数下发页查看状态。",
+			Get:      func(c *config.Config) string { return strconv.Itoa(c.Client.AutoNATMaxRetries) },
+			Set:      func(c *config.Config, v string) { setInt(&c.Client.AutoNATMaxRetries, v) },
+			Validate: validateIntRange(1, 100, "自动 NAT 最大重试次数")},
+		{Key: "client.auto_nat_webhook", Group: "客户端下发",
+			Label: "NAT 失败/恢复告警 Webhook（可选，http/https）", Type: "string",
+			Note: "达到最大重试次数或恢复成功时 POST JSON；留空则只写审计日志并在页面展示状态。",
+			Get:  func(c *config.Config) string { return c.Client.AutoNATWebhook },
+			Set:  func(c *config.Config, v string) { c.Client.AutoNATWebhook = strings.TrimSpace(v) },
+			Validate: func(v string) error {
+				v = strings.TrimSpace(v)
+				if v == "" {
+					return nil
+				}
+				u, err := url.Parse(v)
+				if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+					return fmt.Errorf("Webhook 必须是 http/https URL")
+				}
+				return nil
+			}},
 		{Key: "client.egress_exclude", Group: "客户端下发",
 			Label: "全量出口额外排除网段（逗号分隔 CIDR，如 10.0.0.0/8,192.168.0.0/16）", Type: "string",
 			Note: "在内置内网/控制面排除策略之外追加；全量出口只下发未被排除的公网前缀。",

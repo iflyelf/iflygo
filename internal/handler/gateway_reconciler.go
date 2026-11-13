@@ -1,16 +1,21 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
+	"io"
 	"log"
+	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/iflyelf/iflygo/internal/logic/task"
 	"github.com/iflyelf/iflygo/internal/model"
+	"github.com/iflyelf/iflygo/internal/pkg/audit"
 	"github.com/iflyelf/iflygo/internal/pkg/scope"
 	"github.com/iflyelf/iflygo/internal/protocol"
 	"github.com/iflyelf/iflygo/internal/svc"
@@ -196,37 +201,62 @@ func effectiveEgressMode(sc *svc.ServiceContext, net *model.Network) string {
 }
 
 type natState struct {
-	Fingerprint string
-	Status      string
-	LastAttempt string
-	TaskID      int64
-	LastError   string
+	Fingerprint  string
+	Status       string
+	LastAttempt  string
+	LastError    string
+	AlertedAt    string
+	RetryCount   int
+	TaskID       int64
+	ServerNodeID int64
+	Gateway      string
+	HostIP       string
 }
 
 func loadNATState(sc *svc.ServiceContext, networkID int64, mode string) (natState, bool) {
 	var st natState
 	q := sc.Store.Rebind(`SELECT COALESCE(fingerprint,''), COALESCE(status,''), COALESCE(last_attempt_at,''),
-		COALESCE(task_id,0), COALESCE(last_error,'') FROM gateway_nat_state WHERE network_id = $1 AND mode = $2`)
-	if err := sc.Store.DB.QueryRow(q, networkID, mode).Scan(&st.Fingerprint, &st.Status, &st.LastAttempt, &st.TaskID, &st.LastError); err != nil {
+		COALESCE(task_id,0), COALESCE(last_error,''), COALESCE(retry_count,0), COALESCE(alerted_at,''),
+		COALESCE(server_node_id,0), COALESCE(gateway,''), COALESCE(host_ip,'')
+		FROM gateway_nat_state WHERE network_id = $1 AND mode = $2`)
+	if err := sc.Store.DB.QueryRow(q, networkID, mode).Scan(&st.Fingerprint, &st.Status, &st.LastAttempt,
+		&st.TaskID, &st.LastError, &st.RetryCount, &st.AlertedAt, &st.ServerNodeID, &st.Gateway, &st.HostIP); err != nil {
 		return st, false
 	}
 	return st, true
 }
 
-func saveNATState(sc *svc.ServiceContext, networkID int64, mode, fingerprint string, nodeID int64, gateway, hostIP string, taskID int64, status, lastErr string) {
+func saveNATState(sc *svc.ServiceContext, networkID int64, mode string, st natState) {
 	now := nowStr()
 	_, err := sc.Store.DB.Exec(sc.Store.Rebind(`INSERT INTO gateway_nat_state
-		(network_id,mode,fingerprint,server_node_id,gateway,host_ip,task_id,status,last_error,last_attempt_at,updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		(network_id,mode,fingerprint,server_node_id,gateway,host_ip,task_id,status,last_error,retry_count,alerted_at,last_attempt_at,updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 		ON CONFLICT (network_id,mode) DO UPDATE SET
 			fingerprint=EXCLUDED.fingerprint, server_node_id=EXCLUDED.server_node_id,
 			gateway=EXCLUDED.gateway, host_ip=EXCLUDED.host_ip, task_id=EXCLUDED.task_id,
-			status=EXCLUDED.status, last_error=EXCLUDED.last_error,
-			last_attempt_at=EXCLUDED.last_attempt_at, updated_at=EXCLUDED.updated_at`),
-		networkID, mode, fingerprint, nodeID, gateway, hostIP, taskID, status, lastErr, now, now)
+			status=EXCLUDED.status, last_error=EXCLUDED.last_error, retry_count=EXCLUDED.retry_count,
+			alerted_at=EXCLUDED.alerted_at, last_attempt_at=EXCLUDED.last_attempt_at, updated_at=EXCLUDED.updated_at`),
+		networkID, mode, st.Fingerprint, st.ServerNodeID, st.Gateway, st.HostIP, st.TaskID,
+		st.Status, st.LastError, st.RetryCount, st.AlertedAt, st.LastAttempt, now)
 	if err != nil {
 		log.Printf("⚠️ 保存网关 NAT 状态失败: %v", err)
 	}
+}
+
+func maxNATRetries(sc *svc.ServiceContext) int {
+	n := 5
+	if sc.Settings != nil {
+		if v := sc.Settings.Snapshot().Client.AutoNATMaxRetries; v > 0 {
+			n = v
+		}
+	}
+	if n < 1 {
+		n = 1
+	}
+	if n > 100 {
+		n = 100
+	}
+	return n
 }
 
 // autoApplyNAT 在匹配到 Agent 的健康网关上自动应用 NAT。
@@ -291,26 +321,62 @@ func autoApplyNAT(ctx context.Context, sc *svc.ServiceContext, net *model.Networ
 
 	st, ok := loadNATState(sc, net.ID, mode)
 	if ok {
-		// 同步任务最终状态，避免重复下发。
+		// 同步任务最终状态，避免重复下发；失败只计一次重试。
 		if st.TaskID > 0 {
 			var ts string
-			if err := sc.Store.DB.QueryRow(sc.Store.Rebind(`SELECT status FROM upgrade_tasks WHERE id = $1`), st.TaskID).Scan(&ts); err == nil && ts != "" {
-				if ts != st.Status {
-					st.Status = ts
-					saveNATState(sc, net.ID, mode, st.Fingerprint, nodeID, gateway, hostIP, st.TaskID, ts, st.LastError)
+			if err := sc.Store.DB.QueryRow(sc.Store.Rebind(`SELECT status FROM upgrade_tasks WHERE id = $1`), st.TaskID).Scan(&ts); err == nil && ts != "" && ts != st.Status {
+				prevStatus := st.Status
+				st.Status = ts
+				switch ts {
+				case "failed", "timeout":
+					st.RetryCount++
+					st.LastAttempt = nowStr()
+					st.LastError = taskErrorText(sc, st.TaskID, st.LastError)
+					if strings.TrimSpace(st.LastError) == "" {
+						st.LastError = "任务 #" + strconv.FormatInt(st.TaskID, 10) + " " + ts + "，无命令日志（请检查 Agent 在线状态）"
+					}
+				case "success":
+					st.RetryCount = 0
+					st.LastError = ""
+					if st.AlertedAt != "" {
+						notifyNATRecovered(sc, net, mode, st.Gateway, st.HostIP)
+						st.AlertedAt = ""
+					}
+				case "running", "pending", "draft":
+					st.LastAttempt = nowStr()
 				}
+				_ = prevStatus
+				saveNATState(sc, net.ID, mode, st)
 			}
+		}
+		// 配置/网关变化时重新计数，允许重新尝试。
+		if st.Fingerprint != fp {
+			st.Fingerprint = fp
+			st.RetryCount = 0
+			st.AlertedAt = ""
+			st.Status = ""
+			st.LastError = ""
 		}
 		if st.Fingerprint == fp {
 			switch st.Status {
 			case "running", "pending", "success", "canceled":
 				return nil
 			case "failed", "timeout":
+				if st.RetryCount >= maxNATRetries(sc) {
+					if st.AlertedAt == "" {
+						notifyNATFailure(sc, net, mode, gateway, hostIP, st.LastError, st.RetryCount)
+						st.AlertedAt = nowStr()
+						saveNATState(sc, net.ID, mode, st)
+					}
+					return nil
+				}
 				if t, err := time.Parse(time.RFC3339, st.LastAttempt); err == nil && time.Since(t) < 10*time.Minute {
 					return nil
 				}
 			}
 		}
+	} else {
+		st = natState{Fingerprint: fp, ServerNodeID: nodeID, Gateway: gateway, HostIP: hostIP}
 	}
 
 	treq := task.CreateRequest{
@@ -324,14 +390,121 @@ func autoApplyNAT(ctx context.Context, sc *svc.ServiceContext, net *model.Networ
 	treq.SetActor(nil) // 内部后台任务，System scope 允许跨租户
 	taskID, cerr := sc.Task.Create(ctx, scope.System(), treq)
 	if cerr != nil {
-		saveNATState(sc, net.ID, mode, fp, nodeID, gateway, hostIP, 0, "failed", cerr.Error())
+		st.Status = "failed"
+		st.LastError = cerr.Error()
+		st.RetryCount++
+		st.LastAttempt = nowStr()
+		if st.RetryCount >= maxNATRetries(sc) && st.AlertedAt == "" {
+			notifyNATFailure(sc, net, mode, gateway, hostIP, st.LastError, st.RetryCount)
+			st.AlertedAt = nowStr()
+		}
+		saveNATState(sc, net.ID, mode, st)
 		return cerr
 	}
 	if serr := sc.Task.Start(ctx, scope.System(), taskID); serr != nil {
-		saveNATState(sc, net.ID, mode, fp, nodeID, gateway, hostIP, taskID, "failed", serr.Error())
+		st.Status = "failed"
+		st.LastError = serr.Error()
+		st.RetryCount++
+		st.LastAttempt = nowStr()
+		if st.RetryCount >= maxNATRetries(sc) && st.AlertedAt == "" {
+			notifyNATFailure(sc, net, mode, gateway, hostIP, st.LastError, st.RetryCount)
+			st.AlertedAt = nowStr()
+		}
+		saveNATState(sc, net.ID, mode, st)
 		return serr
 	}
-	saveNATState(sc, net.ID, mode, fp, nodeID, gateway, hostIP, taskID, "running", "")
-	log.Printf("🛡️ 网络 %s 已自动下发 %s NAT 任务 #%d → %s", net.Name, mode, taskID, hostIP)
+	st.Fingerprint = fp
+	st.Status = "running"
+	st.TaskID = taskID
+	st.ServerNodeID = nodeID
+	st.Gateway = gateway
+	st.HostIP = hostIP
+	st.LastAttempt = nowStr()
+	st.LastError = ""
+	saveNATState(sc, net.ID, mode, st)
+	log.Printf("🛡️ 网络 %s 已自动下发 %s NAT 任务 #%d → %s（第 %d 次）", net.Name, mode, taskID, hostIP, st.RetryCount+1)
 	return nil
+}
+
+// taskErrorText 返回任务最近一次错误信息（任务表未保存时回退旧错误）。
+func taskErrorText(sc *svc.ServiceContext, taskID int64, fallback string) string {
+	var logText string
+	_ = sc.Store.DB.QueryRow(sc.Store.Rebind(`SELECT COALESCE(log,'') FROM commands WHERE task_id = $1 ORDER BY id DESC LIMIT 1`), taskID).Scan(&logText)
+	logText = strings.TrimSpace(logText)
+	if logText == "" {
+		return fallback
+	}
+	if len(logText) > 500 {
+		logText = logText[len(logText)-500:]
+	}
+	return logText
+}
+
+func notifyNATFailure(sc *svc.ServiceContext, net *model.Network, mode, gateway, hostIP, errMsg string, retries int) {
+	log.Printf("🚨 网关 NAT 连续失败，已停止自动重试: 网络=%s 模式=%s 网关=%s 主机=%s 次数=%d 错误=%s",
+		net.Name, mode, gateway, hostIP, retries, errMsg)
+	ev := audit.Event{
+		Action: audit.ActionGatewayNATFailed, Username: "system", TenantID: 1,
+		ResourceType: "network", ResourceID: strconv.FormatInt(net.ID, 10), ResourceName: net.Name,
+		Success: false, Message: errMsg,
+		Details: map[string]any{"mode": mode, "gateway": gateway, "host_ip": hostIP, "retries": retries},
+	}
+	if sc.Audit != nil {
+		sc.Audit.Log(context.Background(), ev)
+	}
+	notifyNATWebhook(sc, map[string]any{
+		"event": "gateway.nat_failed", "network": net.Name, "mode": mode,
+		"gateway": gateway, "host_ip": hostIP, "retries": retries, "error": errMsg,
+		"time": nowStr(),
+	})
+}
+
+func notifyNATRecovered(sc *svc.ServiceContext, net *model.Network, mode, gateway, hostIP string) {
+	log.Printf("✅ 网关 NAT 已恢复: 网络=%s 模式=%s 网关=%s 主机=%s", net.Name, mode, gateway, hostIP)
+	ev := audit.Event{
+		Action: audit.ActionGatewayNATRecovered, Username: "system", TenantID: 1,
+		ResourceType: "network", ResourceID: strconv.FormatInt(net.ID, 10), ResourceName: net.Name,
+		Success: true, Details: map[string]any{"mode": mode, "gateway": gateway, "host_ip": hostIP},
+	}
+	if sc.Audit != nil {
+		sc.Audit.Log(context.Background(), ev)
+	}
+	notifyNATWebhook(sc, map[string]any{
+		"event": "gateway.nat_recovered", "network": net.Name, "mode": mode,
+		"gateway": gateway, "host_ip": hostIP, "time": nowStr(),
+	})
+}
+
+func notifyNATWebhook(sc *svc.ServiceContext, payload map[string]any) {
+	if sc.Settings == nil {
+		return
+	}
+	raw := strings.TrimSpace(sc.Settings.Snapshot().Client.AutoNATWebhook)
+	if raw == "" {
+		return
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, raw, bytes.NewReader(b))
+		if err != nil {
+			log.Printf("⚠️ NAT 告警 Webhook 构造失败: %v", err)
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			log.Printf("⚠️ NAT 告警 Webhook 发送失败: %v", err)
+			return
+		}
+		defer resp.Body.Close()
+		_, _ = io.Copy(io.Discard, resp.Body)
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			log.Printf("⚠️ NAT 告警 Webhook 返回 %d", resp.StatusCode)
+		}
+	}()
 }

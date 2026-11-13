@@ -85,6 +85,8 @@ TUNNEL_JS = r'''
   state.tunnelParamsNet = 0;
   state.tunnelParamsDetail = null;
   state.tunnelParamsDetailFor = 0;
+  state.tunnelNATStatus = null;
+  state.tunnelNATFor = 0;
 
   function tunnelSetMsg(ok, text) { state.tunnelMsg = text || ''; state.tunnelOk = !!ok; }
   function tunnelMsgEl() {
@@ -268,6 +270,8 @@ TUNNEL_JS = r'''
     var mode = tunnelSelect([['auto', 'auto'], ['tcp', 'tcp'], ['udp', 'udp']], tunnelSettingValue(m, 'tcp_relay.mode', 'auto'));
     var dnsRoute = tunnelSelect([['false', '关闭'], ['true', '启用']], tunnelSettingValue(m, 'client.dns_route', 'false'));
     var autoNAT = tunnelSelect([['true', '启用'], ['false', '关闭']], tunnelSettingValue(m, 'client.auto_nat', 'true'));
+    var autoNATRetries = tunnelInput({ type: 'number', min: 1, max: 100, value: tunnelSettingValue(m, 'client.auto_nat_max_retries', '5') });
+    var autoNATWebhook = tunnelInput({ value: tunnelSettingValue(m, 'client.auto_nat_webhook', ''), placeholder: 'https://hooks.example.com/iflygo' });
     var egressExclude = tunnelInput({ value: tunnelSettingValue(m, 'client.egress_exclude', ''), placeholder: '额外排除 CIDR，逗号分隔（可选）' });
     tunnelFormModal({
       title: '编辑客户端全局默认',
@@ -278,6 +282,8 @@ TUNNEL_JS = r'''
         { label: '客户端默认数据面模式', input: mode, hint: 'auto：UDP 优先自动兜底 TCP；tcp：强制中继；udp：仅 UDP。' },
         { label: '公网 DNS 主机路由', input: dnsRoute, hint: '开启后公网 DNS 自动下发 /32 或 /128 主机路由，需网关 NAT（下方可生成脚本）。' },
         { label: '自动网关 NAT', input: autoNAT, hint: '网关匹配到 Agent 后自动应用 NAT；网关离线时自动切换。' },
+        { label: 'NAT 最大重试次数', input: autoNATRetries, hint: '失败按 10 分钟退避；达到上限停止重试并告警。' },
+        { label: 'NAT 告警 Webhook（可选）', input: autoNATWebhook, hint: '失败达到上限或恢复时 POST JSON；留空只写审计并在页面展示。' },
         { label: '全量出口全局排除网段', input: egressExclude, hint: '在内置内网/控制面排除策略之外追加。' }
       ],
       submitText: '保存全局默认',
@@ -288,6 +294,8 @@ TUNNEL_JS = r'''
           'client.interval': interval.value.trim(),
           'client.dns_route': dnsRoute.value,
           'client.auto_nat': autoNAT.value,
+          'client.auto_nat_max_retries': String(Number(autoNATRetries.value || 5)),
+          'client.auto_nat_webhook': autoNATWebhook.value.trim(),
           'client.egress_exclude': egressExclude.value.trim(),
           'tcp_relay.mode': mode.value
         };
@@ -418,12 +426,23 @@ TUNNEL_JS = r'''
         render();
       }).catch(function () { state.tunnelParamsDetail = null; });
     }
+    if (nid && state.tunnelNATFor !== nid) {
+      state.tunnelNATFor = nid;
+      state.tunnelNATStatus = null;
+      api('/api/networks/' + nid + '/nat/status').then(function (d) {
+        state.tunnelNATStatus = d || { items: [] };
+        render();
+      }).catch(function () { state.tunnelNATStatus = { items: [] }; });
+    }
     var detail = state.tunnelParamsDetailFor === nid ? state.tunnelParamsDetail : null;
+    var natStatus = state.tunnelNATFor === nid ? state.tunnelNATStatus : null;
     var nb = (detail && detail.nebula) || {};
     var netSel = tunnelNetSelect(nid, function () {
       state.tunnelParamsNet = Number(netSel.value);
       state.tunnelParamsDetail = null;
       state.tunnelParamsDetailFor = 0;
+      state.tunnelNATStatus = null;
+      state.tunnelNATFor = 0;
       render();
     });
 
@@ -450,7 +469,20 @@ TUNNEL_JS = r'''
       ['TUN 设备 / MTU', (nb.tun_device || '默认') + ' / ' + (nb.tun_disabled ? '禁用' : '启用')],
       ['日志', (nb.log_level || 'info') + ' / ' + (nb.log_format || 'text')],
       ['统计', (nb.stats_type || '关闭') + (nb.stats_listen ? ' @ ' + nb.stats_listen : '')]
-    ].map(function (r) {
+    ];
+    if (natStatus && natStatus.items && natStatus.items.length) {
+      natStatus.items.forEach(function (x) {
+        var txt = (x.status || '—') + ' · 重试 ' + (x.retry_count || 0) + '/' + (x.max_retries || 0);
+        if (x.alerted_at) { txt += ' · 已告警'; }
+        if (x.last_error) { txt += ' · ' + String(x.last_error).slice(-80); }
+        netRows.push(['NAT ' + x.mode, txt]);
+      });
+    } else if (natStatus) {
+      netRows.push(['NAT 状态', '暂无自动 NAT 记录']);
+    } else {
+      netRows.push(['NAT 状态', '加载中…']);
+    }
+    netRows = netRows.map(function (r) {
       return h('tr', {}, [h('td', {}, [r[0]]), h('td', { class: 'tunnel-wrap' }, [String(r[1])])]);
     });
 

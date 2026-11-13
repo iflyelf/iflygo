@@ -60,6 +60,10 @@ type ClientConfig struct {
 	DNSRoute bool `yaml:"dns_route"`
 	// AutoNAT 自动为健康网关应用 DNS/全量出口 NAT（需 Agent 与命令执行权限）。
 	AutoNAT bool `yaml:"auto_nat"`
+	// AutoNATMaxRetries NAT 任务最大自动重试次数（达到后停止并告警）。
+	AutoNATMaxRetries int `yaml:"auto_nat_max_retries"`
+	// AutoNATWebhook NAT 失败/恢复告警 Webhook（可选，http/https）。
+	AutoNATWebhook string `yaml:"auto_nat_webhook"`
 	// EgressExclude 全量出口额外排除网段（逗号分隔 CIDR）。
 	EgressExclude string `yaml:"egress_exclude"`
 }
@@ -363,7 +367,7 @@ func Default() *Config {
 		},
 		Auth:     AuthConfig{Provider: "builtin", AdminUsername: "admin"},
 		TCPRelay: TCPRelayConfig{Mode: "auto"},
-		Client:   ClientConfig{MTU: 1280, Interval: "30s", AutoNAT: true},
+		Client:   ClientConfig{MTU: 1280, Interval: "30s", AutoNAT: true, AutoNATMaxRetries: 5},
 		Consul:   ConsulConfig{Timeout: 10, Concurrency: 16, CleanupMissing: true},
 		Redis: RedisConfig{
 			Enabled: false, Mode: "single", Host: "localhost", Port: 6379,
@@ -470,6 +474,8 @@ func (c *Config) applyEnv() {
 	setStr(&c.Client.Interval, "CLIENT_INTERVAL")
 	setBool(&c.Client.DNSRoute, "CLIENT_DNS_ROUTE")
 	setBool(&c.Client.AutoNAT, "CLIENT_AUTO_NAT")
+	setInt(&c.Client.AutoNATMaxRetries, "CLIENT_AUTO_NAT_MAX_RETRIES")
+	setStr(&c.Client.AutoNATWebhook, "CLIENT_AUTO_NAT_WEBHOOK")
 	setStr(&c.Client.EgressExclude, "CLIENT_EGRESS_EXCLUDE")
 	setStr(&c.TCPRelay.Mode, "TCP_RELAY_MODE")
 	setStr(&c.TCPRelay.Listen, "TCP_RELAY_LISTEN")

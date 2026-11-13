@@ -28,6 +28,8 @@ client:
   interval: 30s       # 客户端心跳间隔
   dns_route: false    # 公网 DNS 自动下发 /32 主机路由（需网关 NAT）
   auto_nat: true      # 网关匹配 Agent 后自动应用 NAT，健康切换自动重建
+  auto_nat_max_retries: 5  # NAT 失败最大自动重试次数
+  auto_nat_webhook: ""     # NAT 失败/恢复告警 Webhook（可选）
   egress_exclude: ""  # 全量出口额外排除网段（逗号分隔 CIDR）
 
 log:

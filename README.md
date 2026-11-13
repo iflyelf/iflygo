@@ -284,6 +284,8 @@ client:
   interval: 30s               # 客户端心跳间隔
   dns_route: false            # 公网 DNS 自动下发 /32 主机路由（需网关 NAT）
   auto_nat: true              # 网关匹配 Agent 后自动应用 NAT，健康切换自动重建
+  auto_nat_max_retries: 5     # NAT 失败最大自动重试次数（达到后停止并告警）
+  auto_nat_webhook: ""        # NAT 失败/恢复告警 Webhook（可选）
   egress_exclude: ""          # 全量出口额外排除网段（逗号分隔 CIDR）
 
 log:
@@ -304,6 +306,8 @@ SERVER_EXTERNAL_URL=https://iflygo.example.com
 # CLIENT_INTERVAL=30s
 # CLIENT_DNS_ROUTE=false
 # CLIENT_AUTO_NAT=true
+# CLIENT_AUTO_NAT_MAX_RETRIES=5
+# CLIENT_AUTO_NAT_WEBHOOK=https://hooks.example.com/iflygo
 # CLIENT_EGRESS_EXCLUDE=10.0.0.0/8,192.168.0.0/16
 ```
 
@@ -757,7 +761,9 @@ VPN。开启 **公网 DNS 主机路由** 后：
    - Agent 注册成功后**立即触发**一次对账，之后每分钟巡检；
    - 无需手工点击，NAT 与 Agent 安装流程自动衔接；
    - 网关离线/恢复时自动切换，并递增客户端 `config_rev` 让客户端自动拉取新网关；
-   - 失败任务自动重试（10 分钟退避），脚本/网关变化时自动重建；
+   - 失败任务按 10 分钟退避自动重试，默认最多 5 次；达到上限后停止并告警；
+   - 告警写入审计日志（`gateway.nat_failed` / `gateway.nat_recovered`），
+     可配置 `client.auto_nat_webhook` POST JSON；参数下发页展示重试次数与最近错误；
 7. 执行后客户端解析公网域名即可正常走 overlay 网关；
 8. 脚本会开启转发、放行 overlay → DNS 的 FORWARD，并对回包做 `MASQUERADE`。
 
