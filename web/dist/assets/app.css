@@ -200,7 +200,26 @@ details.help summary { cursor: pointer; font-weight: 600; }
   color: var(--primary-color);
 }
 .guide-step ul { margin: 8px 0 0 30px; padding: 0; color: var(--text-secondary); font-size: 13px; line-height: 1.7; }
-.code-wrap { position: relative; margin-top: 10px; }
+/* 代码/命令：完整展示并自动换行，超长内容纵向滚动；仍可弹窗查看 */
+.code-block { margin-top: 10px; }
+.code-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.code-actions-title {
+  flex: 1 1 auto; min-width: 0; font-size: 12px; color: var(--text-secondary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+pre.code-inline {
+  padding-right: 14px; overflow: visible;
+  white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
+}
+/* 超长代码默认折叠一部分：底部渐隐 + 「展开/收起」，不是截断首行 */
+.code-inline-wrap { position: relative; }
+.code-inline-wrap.collapsed pre.code-inline { max-height: 180px; overflow: hidden; }
+.code-inline-wrap.collapsed::after {
+  content: ''; position: absolute; left: 1px; right: 1px; bottom: 1px; height: 64px;
+  background: linear-gradient(to bottom, transparent, var(--panel-bg) 78%);
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  pointer-events: none;
+}
 pre.code {
   margin: 0; padding: 14px; padding-right: 68px; overflow: auto;
   background: var(--panel-bg); border: 1px solid var(--border-color);
@@ -208,7 +227,6 @@ pre.code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px; line-height: 1.7;
 }
-.copy-btn { position: absolute; right: 8px; top: 8px; z-index: 1; }
 .preview {
   margin: 6px 0 14px; padding: 12px 14px;
   border: 1px solid var(--border-color); border-radius: var(--radius-sm);
@@ -251,8 +269,29 @@ pre.code {
 .auto-refresh-tip::first-letter { color: var(--ok-color); }
 .detail-subtitle { margin: 16px 0 8px; }
 .modal .table-wrap { max-height: 340px; overflow: auto; }
-.log-details summary { cursor: pointer; color: var(--primary-color); font-size: 12px; }
-.log-pre { max-height: 260px; margin-top: 6px; white-space: pre-wrap; word-break: break-word; }
+/* 内容查看弹窗：宽幅等宽字体。表格列/窄容器内的行内 pre 会被挤成细长条，
+   因此日志、脚本、JSON 详情等统一改为在独立弹窗中查看。 */
+.content-viewer-mask { z-index: 600; }
+.modal.content-viewer { max-width: min(1100px, 100%); }
+.content-viewer-pre {
+  margin: 0; padding: 14px; padding-right: 14px; max-height: 68vh; max-height: 68dvh; overflow: auto;
+  white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px; line-height: 1.7;
+}
+/* 非代码文本（错误信息等）用正文字体，行高更易读 */
+.content-viewer-text { font-family: inherit; line-height: 1.75; }
+.content-viewer-meta { font-size: 12px; white-space: nowrap; }
+/* 工具栏：自动换行开关与字号选择 */
+.content-viewer-tools { align-items: center; gap: 8px; }
+.content-viewer-wrap { align-items: center; white-space: nowrap; font-size: 12px; }
+.content-viewer-font-wrap { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
+.content-viewer-font { min-height: 30px; padding: 2px 6px; font-size: 12px; }
+/* 关闭自动换行：保持原始对齐，长行横向滚动 */
+.content-viewer-pre.nowrap {
+  white-space: pre; overflow-wrap: normal; word-break: normal; overflow-x: auto;
+}
+.log-open-btn { white-space: nowrap; }
 .tag.status-running { background: color-mix(in srgb, var(--primary-color) 22%, transparent); }
 .tag.status-success { background: color-mix(in srgb, #22c55e 20%, transparent); }
 .tag.status-failed, .tag.status-timeout { background: color-mix(in srgb, var(--err-color) 18%, transparent); }
@@ -442,17 +481,16 @@ th { position: relative; }
 /* 长组件名/任务名（如「Windows Exporter（Win 脚本安装）」）不再溢出卡片：允许在格内换行 */
 .detail-stat { white-space: normal; overflow-wrap: anywhere; flex-wrap: wrap; }
 .modal-head h3 { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
-/* 日志复制按钮 */
-.log-toolbar { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
 /* 任务列表批量选择 */
 .task-check { width: 16px; height: 16px; cursor: pointer; }
 
 /* 表格内状态/时间等短值不换行，避免列被压成两行 */
-td .tag, td .muted, .row-actions, td .log-details summary { white-space: nowrap; }
+td .tag, td .muted, .row-actions { white-space: nowrap; }
+/* 长文本单元格（如审计错误信息）：允许换行，避免把表格撑得过宽 */
+td .cell-wrap { white-space: normal; overflow-wrap: anywhere; }
 /* 表头保持单行：'业务组'/'详细日志' 等中文表头不再折成两行 */
 .table-wrap table thead th { white-space: nowrap; }
 .table-wrap table td { vertical-align: middle; }
-.table-wrap table td .log-details { min-width: 120px; }
 
 /* 表单：宽屏两列，窄屏一列；说明文字与控件对齐 */
 .grid2 { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
@@ -608,8 +646,6 @@ button, .tab, .nav-link, .nav-menu-item, .theme-btn, .user-chip {
   .table-wrap table.mobile-cards td[data-label="操作"]::before,
   .table-wrap table.mobile-cards td[data-label="Actions"]::before { display: none; }
   .table-wrap table.mobile-cards td .row-actions { justify-content: flex-end; }
-  .table-wrap table.mobile-cards td .log-pre { max-height: 180px; }
-  .table-wrap table.mobile-cards td .log-details { min-width: 0; }
   .table-tools { margin-bottom: 4px; }
 }
 
@@ -624,9 +660,8 @@ button, .tab, .nav-link, .nav-menu-item, .theme-btn, .user-chip {
   h2 { font-size: 20px; }
   h3 { font-size: 16px; }
   .detail-summary { grid-template-columns: 1fr; }
-  /* 长命令优先换行而不是横向滚动；复制按钮独占一行，避免遮挡内容 */
+  /* 长命令优先换行而不是横向滚动 */
   pre.code { padding-right: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .copy-btn { position: static; display: block; margin: 0 0 6px auto; }
 }
 
 /* ============================================================
@@ -645,17 +680,28 @@ select { max-width: 100%; }
   .table-wrap table.mobile-cards td .muted,
   .table-wrap table.mobile-cards td .tag,
   .table-wrap table.mobile-cards td > div,
-  .table-wrap table.mobile-cards td .check,
-  .table-wrap table.mobile-cards td .log-details summary {
+  .table-wrap table.mobile-cards td .check {
     white-space: normal; overflow-wrap: anywhere; min-width: 0; max-width: 100%;
   }
   .table-wrap table.mobile-cards td .row-actions { flex-wrap: wrap; white-space: normal; }
   .table-wrap table.mobile-cards td .user-cell { min-width: 0; }
   .table-wrap table.mobile-cards td .tag.clip { max-width: 100%; }
+
+  /* 内容查看弹窗：窄屏压缩内边距与字号，日志区域用视口高度自适应 */
+  .modal { padding: 14px; }
+  .content-viewer-pre { max-height: 60vh; max-height: 60dvh; padding: 10px; font-size: 12px; }
+  .content-viewer-meta { display: none; }
+  /* 弹窗内的表格在窄屏已变成卡片，不再需要嵌套滚动区域 */
+  .modal .table-wrap { max-height: none; overflow: visible; }
+}
+
+@media (max-width: 480px) {
+  .content-viewer-pre { max-height: 56vh; max-height: 56dvh; }
+  .content-viewer .modal-head h3 { font-size: 15px; }
 }
 
 /* AI 接入页面 */
-.ai-code { user-select: all; }
+.ai-code { user-select: all; overflow-wrap: anywhere; word-break: break-all; }
 .ai-check { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 .ai-check input[type="checkbox"] { margin: 0; }
 .ai-notice { padding: 12px; border-radius: var(--radius); margin: 12px 0; border-left: 3px solid; }
@@ -669,7 +715,7 @@ select { max-width: 100%; }
 .ai-msg.user { background: color-mix(in srgb, var(--primary-color) 10%, transparent); margin-left: 40px; }
 .ai-msg.bot { background: var(--panel-bg); margin-right: 40px; border: 1px solid var(--border-color); }
 .ai-msg-role { font-size: 13px; font-weight: 600; margin-bottom: 4px; opacity: 0.8; }
-.ai-msg-body { white-space: pre-wrap; word-wrap: break-word; }
+.ai-msg-body { white-space: pre-wrap; word-wrap: break-word; overflow-wrap: anywhere; }
 .ai-chat-steps { margin-top: 8px; font-size: 13px; }
 .ai-chat-steps summary { cursor: pointer; opacity: 0.7; }
 .ai-chat-steps ul { list-style: none; padding-left: 12px; margin-top: 6px; }

@@ -120,7 +120,7 @@
     hostImport: null, hostBatchEdit: null,
     tunnelTest: null,
     taskDetailId: null, taskDetail: null, taskDetailPage: 1, taskDetailLoading: false, taskDetailErr: '', taskDetailScroll: 0,
-    taskDetailOpenLogs: {},
+    contentViewer: null, contentViewerScroll: 0, contentViewerWrap: true, contentViewerFont: 12.5, codeBlockOpen: {},
     // 自动刷新：记录上一次数据指纹，状态没变化时不重建 DOM，避免滚动/焦点抖动。
     hostsSig: '', tasksSig: '', taskDetailSig: '', loginName: '', loginBusy: false,
     // 认证方式：casdoor 时登录页只展示 SSO 按钮（authLoginURL 由 /api/auth/config 提供）。
@@ -1756,24 +1756,116 @@
       done(fallbackCopy(text));
     }
   }
-  function codeBlock(text) {
-    var label = copyBaseLabel();
-    var btn = h('button', { type: 'button', class: 'btn ghost small copy-btn', 'aria-label': label }, [label]);
-    btn.onclick = function () { copyText(text, btn); };
-    return h('div', { class: 'code-wrap' }, [btn, h('pre', { class: 'code' }, [text])]);
+  // codeBlock 完整展示代码/命令：自动换行、自适应宽度。
+  // 特别长的内容默认折叠一段（不是截断首行），可「展开/收起」；仍可弹窗查看完整内容。
+  function codeBlock(text, title) {
+    var body = String(text || '');
+    var key = codeBlockKey(title, body);
+    var long = isLongCode(body);
+    var open = long && !!state.codeBlockOpen[key];
+    var wrap = h('div', { class: 'code-inline-wrap' + (long && !open ? ' collapsed' : '') }, [
+      h('pre', { class: 'code code-inline' }, [body || '（空）'])
+    ]);
+    var toggle = null;
+    if (long) {
+      var expandLabel = state.lang === 'en' ? 'Expand' : '展开';
+      var collapseLabel = state.lang === 'en' ? 'Collapse' : '收起';
+      toggle = h('button', {
+        class: 'btn ghost small', type: 'button',
+        onclick: function () {
+          var next = !state.codeBlockOpen[key];
+          // 只记录「已展开」；收起即回到默认折叠状态，避免 localStorage 长期膨胀。
+          if (next) state.codeBlockOpen[key] = true;
+          else delete state.codeBlockOpen[key];
+          saveCodeBlockOpen();
+          wrap.classList.toggle('collapsed', !next);
+          toggle.textContent = next ? collapseLabel : expandLabel;
+          toggle.setAttribute('aria-expanded', next ? 'true' : 'false');
+        }
+      }, [open ? collapseLabel : expandLabel]);
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    return h('div', { class: 'code-block' }, [
+      h('div', { class: 'code-actions' }, [
+        h('span', { class: 'code-actions-title' }, [title || '代码']),
+        toggle,
+        h('button', {
+          class: 'btn ghost small', type: 'button',
+          onclick: function () { openContentViewer(title || '代码', body); }
+        }, ['弹窗查看']),
+        copyTextBtn(body)
+      ]),
+      wrap
+    ]);
   }
-  // copyLogBtn 日志复制按钮：复制完整日志文本，按钮文字短暂提示结果。
-  function copyLogBtn(text) {
-    var label = state.lang === 'en' ? 'Copy log' : '复制日志';
-    var btn = h('button', { type: 'button', class: 'btn ghost small', 'aria-label': label }, [label]);
+
+  // isLongCode 判断代码块是否需要默认折叠：行数多或单行特别长（换行后会很高）。
+  function isLongCode(body) {
+    if (!body) return false;
+    return body.split('\n').length > 10 || body.length > 800;
+  }
+
+  // codeBlockKey 为代码块生成稳定键：优先用标题（如「主机接入命令」「自动化令牌」），
+  // 这样重新生成的命令仍沿用展开状态；无标题时用首行兜底。
+  function codeBlockKey(title, body) {
+    var t = String(title || '').trim();
+    if (t) return t;
+    var first = String(body || '').split('\n')[0].slice(0, 60);
+    return 'code:' + first;
+  }
+
+  // 代码块展开状态持久化：只保存已展开的标题，刷新后继续展开。
+  var CB_OPEN_KEY = 'upgrade_mgr_code_block_open_v1';
+  function loadCodeBlockOpen() {
+    try {
+      var p = JSON.parse(localStorage.getItem(CB_OPEN_KEY) || '{}') || {};
+      Object.keys(p).forEach(function (k) {
+        if (p[k]) state.codeBlockOpen[k] = true;
+      });
+    } catch (e) {}
+  }
+  function saveCodeBlockOpen() {
+    try {
+      var out = {};
+      Object.keys(state.codeBlockOpen).forEach(function (k) {
+        if (state.codeBlockOpen[k]) out[k] = true;
+      });
+      localStorage.setItem(CB_OPEN_KEY, JSON.stringify(out));
+    } catch (e) {}
+  }
+  loadCodeBlockOpen();
+  // copyTextBtn 通用复制按钮：复制完整文本，按钮文字短暂提示结果。
+  function copyTextBtn(text, label) {
+    var l = label || (state.lang === 'en' ? 'Copy' : '复制');
+    var btn = h('button', { type: 'button', class: 'btn ghost small', 'aria-label': l }, [l]);
     btn.onclick = function (e) {
-      // 按钮放在 details 内，阻止冒泡避免折叠日志。
+      // 按钮可能放在 details 内，阻止冒泡避免折叠内容。
       e.preventDefault();
       e.stopPropagation();
-      copyText(text, btn, label);
+      copyText(text, btn, l);
     };
     return btn;
   }
+
+  // 内容查看弹窗的显示偏好（自动换行 / 字号）保存在浏览器本地，
+  // 下次打开日志、脚本、JSON 时沿用。
+  var CV_PREFS_KEY = 'upgrade_mgr_content_viewer_prefs_v1';
+  function loadContentViewerPrefs() {
+    try {
+      var p = JSON.parse(localStorage.getItem(CV_PREFS_KEY) || '{}') || {};
+      if (typeof p.wrap === 'boolean') state.contentViewerWrap = p.wrap;
+      var f = parseFloat(p.font);
+      if (isFinite(f) && f >= 9 && f <= 24) state.contentViewerFont = f;
+    } catch (e) {}
+  }
+  function saveContentViewerPrefs() {
+    try {
+      localStorage.setItem(CV_PREFS_KEY, JSON.stringify({
+        wrap: !!state.contentViewerWrap, font: state.contentViewerFont
+      }));
+    } catch (e) {}
+  }
+  loadContentViewerPrefs();
   function isAdmin() { return !!(state.user && state.user.IsAdmin); }
   function isSuperAdmin() {
     return !!(state.user && (state.user.Roles || []).indexOf('superadmin') >= 0);
@@ -2790,7 +2882,7 @@
       var code = pick(st.code);
       return step(
         st.no, pick(st.title), st.view, pickList(st.lines),
-        code && code.trim() ? codeBlock(code) : null,
+        code && code.trim() ? codeBlock(code, '快速上手 · ' + (pick(st.title) || '示例命令')) : null,
         pick(st.jump)
       );
     });
@@ -3172,10 +3264,12 @@
             (x.agent_update_stage ? ' / ' + stageText(x.agent_update_stage) : '') +
             (x.agent_update_at ? ' · ' + fmtTime(x.agent_update_at) : '')
           ]) : null,
-          x.agent_update_log ? h('details', { class: 'log-details' }, [
-            h('summary', {}, ['自升级日志']),
-            h('pre', { class: 'code log-pre' }, [x.agent_update_log])
-          ]) : null
+          x.agent_update_log ? h('button', {
+            class: 'btn ghost small', type: 'button',
+            onclick: function () {
+              openContentViewer('Agent 自升级日志 · ' + (x.exit_ip || x.ip), x.agent_update_log);
+            }
+          }, ['自升级日志']) : null
         ]),
         h('td', {}, [x.source])
       ];
@@ -3668,7 +3762,7 @@
             h('td', {}, [st.name]),
             h('td', {}, [st.ok ? '✅' : '❌']),
             h('td', {}, [st.latency_ms + ' ms']),
-            h('td', {}, [st.detail || '-'])
+            h('td', {}, [h('div', { class: 'cell-wrap' }, [st.detail || '-'])])
           ]);
         }))
       ])]),
@@ -4001,7 +4095,7 @@
       e && e.cmd ? h('div', {}, [
         e.base ? hint('安装命令使用地址：' + e.base + '。可在“设置”页修改 server.external_url，保存后立即生效；Nginx 域名场景填 https://your-domain。') : null,
         hint(((e.os === 'windows') ? '在目标机器用“管理员 PowerShell”执行（令牌一次性使用，' : '在目标机器用 root 执行（令牌一次性使用，') + Math.round((e.expires || 900) / 60) + ' 分钟内有效，每台机器各生成一次）：'),
-        codeBlock(e.cmd),
+        codeBlock(e.cmd, '主机接入命令'),
         e.os === 'windows' ? hint('Windows 安装使用 PowerShell + System.Net.WebClient，兼容 Server 2008 R2 自带的 PowerShell 2.0。cmd 可先执行 powershell -NoProfile -ExecutionPolicy Bypass 再粘贴命令。服务以 LocalSystem 运行，重启后自动恢复。') : null,
         e.force ? hint('当前为强制重新注册命令（含 --force）：会覆盖目标机现有 Agent 身份，旧 Agent 记录将不再被该主机使用。') : null,
         hint('执行完成后点上方“搜索”刷新列表。如果 IP 显示成了代理地址，检查服务端 server.trust_proxy 配置。'),
@@ -4044,9 +4138,9 @@
 
     var createdBlock = created ? h('div', { class: 'field' }, [
       hint('自动化令牌已生成（仅显示一次，请立即复制到自动化平台）：'),
-      codeBlock(created.token),
+      codeBlock(created.token, '自动化令牌'),
       created.install_command ? hint('安装命令示例（token 已嵌入）：') : null,
-      created.install_command ? codeBlock(created.install_command) : null,
+      created.install_command ? codeBlock(created.install_command, '安装命令示例') : null,
       created.expires_at ? hint('到期时间：' + fmtTime(created.expires_at)) : hint('永久有效：不会自动过期，请妥善保管并定期轮换。'),
       h('button', { type: 'button', class: 'btn ghost small', onclick: function () { state.automationCreated = null; render(); } }, ['关闭提示'])
     ]) : null;
@@ -5075,7 +5169,9 @@
     return h('div', { class: 'card' }, [
       h('h3', {}, ['用户详情：' + (u.display_name || u.username)]),
       hint('扩展字段来自 FlyIAM 同步到 Casdoor properties 的值，本系统只读展示，不回写。'),
-      simpleTable(['字段', '值'], rows, function (r) { return [r[0], r[1]]; }),
+      simpleTable(['字段', '值'], rows, function (r) {
+        return [r[0], h('div', { class: 'cell-wrap' }, [r[1]])];
+      }),
       h('div', { class: 'toolbar' }, [
         h('button', { class: 'btn ghost', onclick: function () { state.orgUserDetail = null; render(); } }, ['关闭'])
       ])
@@ -5927,7 +6023,7 @@
               k.note ? h('div', { class: 'muted' }, [k.note]) : null
             ]),
             String(k.count),
-            h('div', { class: 'muted' }, [(k.samples || []).join(' / ') || '-']),
+            h('div', { class: 'muted cell-wrap' }, [(k.samples || []).join(' / ') || '-']),
             k.mapped ? h('span', { class: 'muted' }, [k.mapped_to || '']) : ''
           ];
         });
@@ -6513,7 +6609,10 @@
       return [
         p.group_name || p.group_id,
         (p.permissions || []).join(', ') || '-',
-        (p.role_ids || []).join(', ') || '-',
+        (p.role_ids || []).map(function (id) {
+          var r = (o.roles || []).filter(function (x) { return String(x.id) === String(id); })[0];
+          return r ? r.name : ('#' + id);
+        }).join(', ') || '-',
         (p.services || []).join(', ') || '-',
         (p.host_groups || []).join(', ') || '不限',
         h('button', {
@@ -6628,19 +6727,48 @@
     var groupEl = h('select', {}, o.groups.map(function (g) {
       return h('option', { value: g.id }, [g.name]);
     }));
-    var permEl = h('input', { value: 'read', placeholder: 'read,write,delete,deploy' }, []);
-    var roleEl = h('input', { placeholder: '角色 ID，逗号分隔（可空）' }, []);
+    // 直接权限：勾选多选，默认 read，避免手填权限字符串出错。
+    var permEls = {};
+    var permBoxes = ROLE_PERMS.map(function (p) {
+      var cb = h('input', { type: 'checkbox', checked: p[0] === 'read' }, []);
+      permEls[p[0]] = cb;
+      return h('label', { class: 'check check-row' }, [cb, h('span', {}, [
+        h('strong', {}, [p[1] + '（' + p[0] + '）']),
+        h('span', { class: 'muted' }, [' — ' + p[2]])
+      ])]);
+    });
+    // 引用角色：按角色名称勾选（可多选），提交时换算成角色 ID。
+    var roles = o.roles || [];
+    var roleEls = {};
+    var roleBoxes = roles.map(function (r) {
+      var cb = h('input', { type: 'checkbox' }, []);
+      roleEls[r.id] = cb;
+      return h('label', { class: 'check check-row' }, [cb, h('span', {}, [
+        h('strong', {}, [r.name + (r.code ? '（' + r.code + '）' : '')]),
+        h('span', { class: 'muted' }, [
+          (r.permissions || []).length ? (r.permissions || []).join(', ') : '无权限'
+        ])
+      ])]);
+    });
     var svcEl = h('input', { value: '*', placeholder: '* 表示组内全部组件' }, []);
     var hgPicker = tagPicker(state.hostGroupOptions || [], '选择或输入 app_code / biz_group 后回车');
     return h('div', { class: 'card' }, [
       h('h3', {}, ['设置授权']),
       h('div', { class: 'grid2' }, [
         field('服务组', groupEl, ''),
-        field('直接权限', permEl, '逗号分隔')
-      ]),
-      h('div', { class: 'grid2' }, [
-        field('引用角色', roleEl, '角色 ID，可空'),
         field('授权服务', svcEl, '* 或组件名，逗号分隔')
+      ]),
+      h('div', { class: 'field' }, [
+        h('label', {}, ['直接权限']),
+        h('div', { class: 'check-group' }, permBoxes),
+        hint('勾选需要的权限（可多选）；与引用角色的权限取并集。')
+      ]),
+      h('div', { class: 'field' }, [
+        h('label', {}, ['引用角色']),
+        roles.length
+          ? h('div', { class: 'check-group scroll' }, roleBoxes)
+          : h('div', { class: 'muted' }, ['还没有角色，可先到「角色管理」创建后再引用。']),
+        hint('勾选要引用的角色（可多选，也可只选一个）；角色权限与直接权限取并集。')
       ]),
       field('主机分组范围', hgPicker.el, '限定可操作的主机（按 app_code / biz_group 匹配；留空表示不限）。超出范围的主机会拒绝创建任务。'),
       h('div', { class: 'toolbar' }, [
@@ -6649,13 +6777,19 @@
             var split = function (v) {
               return v.split(',').map(function (x) { return x.trim(); }).filter(Boolean);
             };
+            var perms = Object.keys(permEls).filter(function (k) { return permEls[k].checked; });
+            var roleIDs = roles.filter(function (r) { return roleEls[r.id].checked; })
+              .map(function (r) { return r.id; });
+            if (!perms.length && !roleIDs.length) {
+              alert('请至少勾选一个直接权限，或引用一个角色');
+              return;
+            }
             api('/api/teams/' + teamID + '/permissions', {
               method: 'PUT',
               body: JSON.stringify({
                 group_id: parseInt(groupEl.value, 10),
-                permissions: split(permEl.value),
-                role_ids: split(roleEl.value).map(function (x) { return parseInt(x, 10); })
-                  .filter(function (x) { return !isNaN(x); }),
+                permissions: perms,
+                role_ids: roleIDs,
                 services: split(svcEl.value),
                 host_groups: hgPicker.getValues()
               })
@@ -6910,7 +7044,13 @@
       var details = '';
       try { details = JSON.stringify(x.details || {}); } catch (e) { details = ''; }
       if (details === '{}') details = '';
+      var errText = x.error_message || '';
+      var full = [];
+      if (errText) full.push('错误信息：\n' + errText);
+      if (details) full.push('详情：\n' + details);
+      var fullText = full.join('\n\n');
       var shortDetails = details.length > 120 ? details.slice(0, 120) + '…' : details;
+      var shortErr = errText.length > 80 ? errText.slice(0, 80) + '…' : errText;
       return [
         fmtTime(x.created_at),
         x.username || '-',
@@ -6921,9 +7061,16 @@
           class: 'tag ' + (x.status === 'success' ? 'status-success' : 'status-failed')
         }, [x.status === 'success' ? '成功' : '失败']),
         x.ip_address || '-',
-        x.error_message || '-',
-        shortDetails
-          ? h('span', { class: 'muted', title: details }, [shortDetails])
+        shortErr ? h('span', { class: 'muted cell-wrap', title: errText }, [shortErr]) : '-',
+        // 详情/错误可能很长：窄屏没有 hover，统一放进弹窗查看。
+        fullText
+          ? h('button', {
+              class: 'btn ghost small', type: 'button', title: shortDetails || errText,
+              onclick: function () {
+                openContentViewer('审计详情 · ' + (x.action || '') + ' · ' + fmtTime(x.created_at),
+                  fullText, { mono: details !== '' });
+              }
+            }, ['查看详情'])
           : '-'
       ];
     });
@@ -7197,6 +7344,13 @@
     '新增团队': 'Add team', '新增角色': 'Add role', '新增服务组': 'Add service group',
     '编辑角色': 'Edit role', '编辑服务组': 'Edit service group', '被引用': 'Referenced by',
     '权限': 'Permissions', '只读': 'Read', '写入': 'Write', '部署': 'Deploy',
+    '直接权限': 'Direct permissions', '引用角色': 'Referenced roles',
+    '查看详情': 'View details', '查看参数': 'View parameters',
+    '查看结果': 'View result', '查看命令脚本': 'View command script',
+    '查看': 'View', '弹窗查看': 'View in dialog', '自动换行': 'Wrap lines', '字号': 'Font size',
+    '展开': 'Expand', '收起': 'Collapse',
+    '代码': 'Code', '主机接入命令': 'Host enrollment command',
+    '自动化令牌': 'Automation token', '安装命令示例': 'Install command example',
     '新增字段': 'Add field', '保存': 'Save', '取消': 'Cancel', '删除': 'Delete',
     '编辑': 'Edit', '关闭': 'Close', '刷新': 'Refresh', '上传': 'Upload',
     '查询': 'Search', '重置': 'Reset', '上一页': 'Previous', '下一页': 'Next',
@@ -8291,6 +8445,106 @@
     return h('div', {}, [uploadForm, table]);
   }
 
+  // taskHostLogText 汇总某台主机在当前页的指令日志与任务主机日志。
+  function taskHostLogText(d, hostId) {
+    if (!d) return '';
+    var text = '';
+    (d.commands || []).forEach(function (c) {
+      if (c.task_host_id === hostId && c.log) text += c.log;
+    });
+    if (!text) {
+      (d.hosts || []).forEach(function (x) {
+        if (x.id === hostId && x.log) text = x.log;
+      });
+    }
+    return text;
+  }
+
+  // openContentViewer 在独立宽弹窗中展示长文本（日志、脚本、JSON 详情等）。
+  // 表格列/窄容器内的行内 <pre> 会被挤成细长条、内容难以阅读，因此统一改为弹窗。
+  // text 可以是字符串或函数（函数用于任务执行日志随自动刷新实时更新）。
+  // opts.mono=false 时用普通字体（适合错误信息等非代码文本）。
+  function openContentViewer(title, text, opts) {
+    state.contentViewer = { title: title, text: text, opts: opts || {} };
+    state.contentViewerScroll = 0;
+    render();
+  }
+  function closeContentViewer() {
+    if (!state.contentViewer) return;
+    state.contentViewer = null;
+    state.contentViewerScroll = 0;
+    render();
+  }
+  function contentViewerModal() {
+    var v = state.contentViewer;
+    var opts = v.opts || {};
+    var text = typeof v.text === 'function' ? (v.text() || '') : (v.text || '');
+    var wrap = state.contentViewerWrap !== false;
+    var font = state.contentViewerFont || 12.5;
+    var meta = text
+      ? (text.split('\n').length + ' 行 · ' + text.length + ' 字符')
+      : '';
+    // 自动换行开关：关闭后长行横向滚动，便于查看对齐的代码/JSON。
+    var wrapEl = h('input', {
+      type: 'checkbox', checked: wrap,
+      onchange: function (e) {
+        state.contentViewerWrap = !!e.target.checked;
+        saveContentViewerPrefs();
+        var pre = document.getElementById('content-viewer-pre');
+        if (pre) pre.classList.toggle('nowrap', !state.contentViewerWrap);
+      }
+    }, []);
+    // 字号选择：立即生效并记住偏好。
+    var fontEl = h('select', {
+      class: 'content-viewer-font', 'aria-label': '字号',
+      onchange: function (e) {
+        var n = parseFloat(e.target.value);
+        if (!isFinite(n)) return;
+        state.contentViewerFont = n;
+        saveContentViewerPrefs();
+        var pre = document.getElementById('content-viewer-pre');
+        if (pre) pre.style.fontSize = n + 'px';
+      }
+    }, [
+      h('option', { value: '11' }, ['11 px']),
+      h('option', { value: '12.5' }, ['12.5 px']),
+      h('option', { value: '14' }, ['14 px']),
+      h('option', { value: '16' }, ['16 px'])
+    ]);
+    fontEl.value = String(font);
+    var mask = h('div', {
+      id: 'content-viewer-mask',
+      class: 'modal-mask content-viewer-mask',
+      onclick: function (e) { if (e.target === mask) closeContentViewer(); }
+    }, []);
+    var modal = h('div', { class: 'modal content-viewer', role: 'dialog', 'aria-modal': 'true' }, [
+      h('div', { class: 'modal-head' }, [
+        h('h3', {}, [v.title || '详情']),
+        h('div', { class: 'row-actions content-viewer-tools' }, [
+          meta ? h('span', { class: 'muted content-viewer-meta' }, [meta]) : null,
+          h('label', {
+            class: 'check content-viewer-wrap',
+            title: '关闭后长行横向滚动，便于查看对齐的代码/JSON'
+          }, [wrapEl, ' 自动换行']),
+          h('label', { class: 'content-viewer-font-wrap' }, ['字号 ', fontEl]),
+          text ? copyTextBtn(text) : null,
+          h('button', { class: 'btn ghost small', type: 'button', onclick: closeContentViewer }, ['关闭'])
+        ])
+      ]),
+      h('pre', {
+        id: 'content-viewer-pre',
+        class: 'code content-viewer-pre' +
+          (opts.mono === false ? ' content-viewer-text' : '') +
+          (wrap ? '' : ' nowrap'),
+        style: 'font-size:' + font + 'px',
+        // 任务日志会自动刷新，保存滚动位置，避免每次刷新都跳回顶部。
+        onscroll: function (e) { state.contentViewerScroll = e.target.scrollTop; }
+      }, [text || opts.empty || '暂无内容'])
+    ]);
+    mask.appendChild(modal);
+    return mask;
+  }
+
   function taskDetailModal() {
     var d = state.taskDetail;
     var mask = h('div', {
@@ -8344,10 +8598,15 @@
       h('div', { class: 'detail-stat' }, ['创建时间: ', fmtTime(d.created_at)])
     ]));
     if (d.kind === 'command' && d.command && d.command.script) {
-      modal.appendChild(h('details', { class: 'log-details' }, [
-        h('summary', {}, ['查看命令脚本']),
-        h('div', { class: 'log-toolbar' }, [copyLogBtn(d.command.script)]),
-        h('pre', { class: 'code log-pre' }, [d.command.script])
+      // 命令脚本可能很长：与执行日志一致，改为独立宽弹窗查看，避免撑高任务详情。
+      modal.appendChild(h('div', { class: 'toolbar' }, [
+        h('button', {
+          class: 'btn ghost small', type: 'button',
+          onclick: function () {
+            openContentViewer('命令脚本 · 任务 #' + d.id, d.command.script);
+          }
+        }, ['查看命令脚本']),
+        copyTextBtn(d.command.script)
       ]));
     }
     modal.appendChild(h('div', { class: 'progress', title: '完成 ' + done + ' / ' + total }, [
@@ -8380,27 +8639,16 @@
       function (x) {
         var cmds = cmdByHost[x.id] || [];
         var latest = cmds.length ? cmds[cmds.length - 1] : null;
-        var logText = '';
-        cmds.forEach(function (c) { if (c.log) logText += c.log; });
-        if (!logText) logText = x.log || '';
-        // 命令任务默认展开执行中/失败主机的日志，轮询刷新时用户无需反复点击。
-        var expanded = state.taskDetailOpenLogs[x.id];
-        if (expanded === undefined) {
-          expanded = d.kind === 'command' &&
-            (x.status === 'running' || x.status === 'failed' || x.status === 'timeout');
-        }
+        var logText = taskHostLogText(d, x.id);
+        // 日志放在独立宽弹窗中查看：表格列太窄会把 pre 挤成长条。
         var logEl = logText
-          ? h('details', {
-              class: 'log-details',
-              open: expanded ? 'open' : null,
-              ontoggle: function (e) {
-                state.taskDetailOpenLogs[x.id] = !!e.target.open;
+          ? h('button', {
+              class: 'btn ghost small log-open-btn', type: 'button',
+              onclick: function () {
+                openContentViewer('执行日志 · ' + x.ip + (x.hostname ? ' · ' + x.hostname : ''),
+                  function () { return taskHostLogText(state.taskDetail, x.id); });
               }
-            }, [
-              h('summary', {}, ['查看日志' + (latest ? '（' + cmdStatusText(latest.status) + '）' : '')]),
-              h('div', { class: 'log-toolbar' }, [copyLogBtn(logText)]),
-              h('pre', { class: 'code log-pre' }, [logText])
-            ])
+            }, ['查看日志' + (latest ? '（' + cmdStatusText(latest.status) + '）' : '')])
           : h('span', { class: 'muted' }, ['暂无日志']);
         var ver = (x.from_version || '-') + ' → ' + (x.to_version || '-');
         var stage = stageText(x.stage);
@@ -8905,8 +9153,14 @@
           '任务系统：' + (p.target_os === 'windows' ? 'Windows' : p.target_os === 'linux' ? 'Linux' : '未识别（不按系统过滤）') +
           (p.skipped_os ? '；已跳过 ' + p.skipped_os + ' 台系统不匹配的主机' : '')
         ]),
+        h('div', { class: 'hint' }, [
+          '仅在线主机参与任务' +
+          (p.skipped_offline
+            ? '：已自动跳过 ' + p.skipped_offline + ' 台不在线主机（Agent 心跳超时或未接入）'
+            : '；离线主机自动跳过')
+        ]),
         h('div', { class: 'hint' }, ['每批台数：' + (batches.length ? batches.join(' / ') : '-')]),
-        h('div', { class: 'hint' }, ['示例 IP：' + (sample.join(', ') || '-') + (sample.length >= 20 ? ' …' : '')])
+        h('div', { class: 'hint' }, ['示例 IP（仅在线主机）：' + (sample.join(', ') || '-') + (sample.length >= 20 ? ' …' : '')])
       ]);
     }
 
@@ -8917,11 +9171,11 @@
       h('div', { class: 'grid2' }, [
         field('任务名', nameEl, '留空会自动生成。'),
         f.kind === 'command'
-          ? field('IP 段', ipEl, '支持 10.1.255.24-26、10.1.255.0/24，多个用逗号分隔；留空表示所有主机。同时匹配主机注册地址与 Agent 上报的出口 IP（多网卡主机按实际出口网段选）。')
+          ? field('IP 段', ipEl, '支持 10.1.255.24-26、10.1.255.0/24，多个用逗号分隔；留空表示所有在线主机。同时匹配主机注册地址与 Agent 上报的出口 IP（多网卡主机按实际出口网段选）。仅在线主机参与任务，离线主机自动跳过。')
           : field('组件', compEl, state.components.length ? '' : '还没有组件，请先到“组件”页创建。')
       ]),
       f.kind === 'command' ? null : h('div', { class: 'grid2' }, [
-        field('目标版本', verEl, '使用制品时从已上传制品中选择；使用 script_url 时可填 latest（仅作记录）。'),        field('IP 段', ipEl, '支持 10.1.255.24-26、10.1.255.0/24，多个用逗号分隔；留空表示所有主机。')
+        field('目标版本', verEl, '使用制品时从已上传制品中选择；使用 script_url 时可填 latest（仅作记录）。'),        field('IP 段', ipEl, '支持 10.1.255.24-26、10.1.255.0/24，多个用逗号分隔；留空表示所有在线主机。仅在线主机参与任务，离线主机自动跳过。')
       ]),
       f.kind === 'command' ? null : datalist,
       // 主机字段筛选（如果配置了可选字段）
@@ -9474,6 +9728,23 @@
   }
 
   // ========== AI 助手独立页面 ==========
+  // aiStepResult 工具调用结果：短结果内联，长结果放入内容查看弹窗，
+  // 避免大段 JSON/日志把聊天气泡撑得很高，窄屏下也便于阅读。
+  function aiStepResult(s) {
+    if (s.error) return h('span', { class: 'err' }, ['失败：' + s.error]);
+    if (s.pending) return '已生成待确认操作';
+    var text = s.result || '';
+    if (!text) return h('span', { class: 'muted' }, ['完成']);
+    if (text.length <= 200) return h('span', { class: 'muted' }, [text]);
+    return h('span', {}, [
+      h('span', { class: 'muted' }, [text.slice(0, 200) + '… ']),
+      h('button', {
+        class: 'btn ghost small', type: 'button',
+        onclick: function () { openContentViewer('工具结果 · ' + s.tool, text); }
+      }, ['查看结果'])
+    ]);
+  }
+
   function aiAssistantView() {
     var d = state.ai;
     if (!d) return h('div', { class: 'card' }, [h('h2', {}, ['AI 助手']), hint('加载中…')]);
@@ -9500,9 +9771,7 @@
         var steps = (m.steps || []).length ? h('details', { class: 'ai-chat-steps' }, [
           h('summary', {}, ['工具调用 ' + m.steps.length + ' 次']),
           h('ul', {}, m.steps.map(function (s) {
-            return h('li', {}, [h('code', {}, [s.tool]), ' ',
-              s.error ? h('span', { class: 'err' }, ['失败：' + s.error])
-                : (s.pending ? '已生成待确认操作' : h('span', { class: 'muted' }, [s.result || '完成']))]);
+            return h('li', {}, [h('code', {}, [s.tool]), ' ', aiStepResult(s)]);
           }))
         ]) : null;
         return h('div', { class: 'ai-msg ' + (m.role === 'user' ? 'user' : 'bot') }, [
@@ -9519,7 +9788,15 @@
     ].concat(pending.map(function (a) {
         return h('div', { class: 'ai-notice warn' }, [
           h('div', { class: 'ai-notice-title' }, [a.title || a.tool]),
-          h('pre', { class: 'code' }, [JSON.stringify(a.args || {}, null, 2)]),
+          h('div', { class: 'toolbar' }, [
+            h('button', {
+              class: 'btn ghost small', type: 'button',
+              onclick: function () {
+                openContentViewer('待确认操作参数 · ' + (a.title || a.tool),
+                  JSON.stringify(a.args || {}, null, 2));
+              }
+            }, ['查看参数'])
+          ]),
           a.expires_at ? hint('有效期至 ' + fmtTime(a.expires_at) + '，过期需重新生成。') : null,
           h('div', { class: 'toolbar' }, [
             h('button', { class: 'btn small', onclick: function () { executeAIAction(a); } }, ['确认执行']),
@@ -9752,7 +10029,7 @@
       h('ol', { class: 'ai-steps' }, (d.snippets || []).map(function (s) {
         return h('li', {}, [
           h('div', { class: 'ai-step-title' }, [s.title]),
-          codeBlock(s.content),
+          codeBlock(s.content, '接入命令 · ' + (s.title || '')),
           s.note ? hint(s.note) : null
         ]);
       })),
@@ -9839,6 +10116,12 @@
       // 自动刷新会重建 DOM，恢复用户原来的滚动位置。
       var mask = document.getElementById('task-detail-mask');
       if (mask) mask.scrollTop = state.taskDetailScroll || 0;
+    }
+    // 内容查看弹窗放在最后：层级高于任务详情，关闭时不影响任务详情滚动位置。
+    if (state.contentViewer) {
+      app.appendChild(contentViewerModal());
+      var cvPre = document.getElementById('content-viewer-pre');
+      if (cvPre) cvPre.scrollTop = state.contentViewerScroll || 0;
     }
     // i18n 必须放在弹窗之后：否则弹窗内按钮/标题不会被翻译。
     applyI18n(app);
@@ -10113,7 +10396,7 @@
     state.taskDetailLoading = false;
     state.taskDetailErr = '';
     state.taskDetailScroll = 0;
-    state.taskDetailOpenLogs = {};
+    state.contentViewer = null;
     state.taskDetailSig = '';
     if (!skipRender) render();
   }
@@ -10126,7 +10409,7 @@
     state.taskDetailLoading = true;
     state.taskDetailErr = '';
     state.taskDetailScroll = 0;
-    state.taskDetailOpenLogs = {};
+    state.contentViewer = null;
     state.taskDetailSig = '';
     render();
     loadTaskDetail(id, 1);
