@@ -611,6 +611,9 @@ docker compose up -d
 > CrossDesk 客户端为 GPL-3.0、Server 为 LGPL-3.0，以独立镜像/进程运行，
 > 不链接进 iFlyGo 的 MIT 代码。详细部署、端口、证书与客户端配置见
 > `deploy/docker/crossdesk/README.md`。
+>
+> 若要把 CrossDesk 全部能力原生并入 iFlyGo，实施阶段、许可证与验收标准见
+> `docs/crossdesk-native-plan.md`。
 
 ### 移动客户端（Android / HarmonyOS 4）
 
