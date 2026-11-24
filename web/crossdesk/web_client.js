@@ -51,6 +51,7 @@ const DEFAULT_CONFIG = {
   clientTag: "web",
 };
 const CONFIG = Object.assign({}, DEFAULT_CONFIG, window.CROSSDESK_CONFIG || {});
+let joinTicket = new URLSearchParams(location.search).get("join_ticket") || "";
 
 const control = window.CrossDeskControl;
 const turnCredentials = window.CrossDeskTurnCredentials;
@@ -807,13 +808,13 @@ function getNormalizedTransmissionPwd() {
 function isConnectionFormValid() {
   return (
     getNormalizedTransmissionId().length > 0 &&
-    getNormalizedTransmissionPwd().length === 6
+    (joinTicket.length > 0 || getNormalizedTransmissionPwd().length === 6)
   );
 }
 
 function validateConnectionForm(showFeedback = true) {
   const hasTransmissionId = getNormalizedTransmissionId().length > 0;
-  const hasValidPassword = getNormalizedTransmissionPwd().length === 6;
+  const hasValidPassword = joinTicket.length > 0 || getNormalizedTransmissionPwd().length === 6;
 
   elements.transmissionIdInput?.setAttribute(
     "aria-invalid",
@@ -1530,14 +1531,22 @@ function getTransmissionPwd() {
 }
 
 function sendJoinRequest() {
-  return sendSignaling(
-    {
-      type: "join_transmission",
-      user_id: clientId,
-      transmission_id: `${getTransmissionId()}@${getTransmissionPwd()}`,
-    },
-    { label: "join_transmission" }
-  );
+  const payload = {
+    type: "join_transmission",
+    user_id: clientId,
+    transmission_id: `${getTransmissionId()}@${getTransmissionPwd()}`,
+  };
+  if (joinTicket) payload.join_ticket = joinTicket;
+  const sent = sendSignaling(payload, { label: "join_transmission" });
+  if (sent && joinTicket) {
+    joinTicket = "";
+    try {
+      const u = new URL(location.href);
+      u.searchParams.delete("join_ticket");
+      history.replaceState({}, "", u);
+    } catch (e) {}
+  }
+  return sent;
 }
 
 function sendLeaveRequest() {

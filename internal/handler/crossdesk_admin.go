@@ -2,8 +2,10 @@ package handler
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 
+	"github.com/iflyelf/iflygo/internal/crossdesk"
 	"github.com/iflyelf/iflygo/internal/pkg/audit"
 	"github.com/iflyelf/iflygo/internal/pkg/httpx"
 	"github.com/iflyelf/iflygo/internal/svc"
@@ -54,6 +56,39 @@ func DeleteCrossDeskDevice(sc *svc.ServiceContext) http.HandlerFunc {
 		}
 		auditOp(sc, r, audit.ActionCrossDeskDeviceDelete, "crossdesk_device", id, id, nil)
 		httpx.OK(w, nil)
+	}
+}
+
+// CrossDeskJoinTicket 为指定设备生成一次性 Web 连接票据（管理员）。
+//
+// Web 客户端携带 join_ticket 时无需再输入设备密码；票据 60 秒有效且只能使用一次。
+func CrossDeskJoinTicket(sc *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimSpace(r.PathValue("id"))
+		if id == "" || len(id) > 128 {
+			httpx.Fail(w, http.StatusBadRequest, "id 非法")
+			return
+		}
+		var kind string
+		if err := sc.Store.DB.QueryRow(sc.Store.Rebind(`SELECT COALESCE(kind,'desktop') FROM crossdesk_devices WHERE device_id = $1`), id).Scan(&kind); err != nil {
+			httpx.Fail(w, http.StatusNotFound, "设备不存在")
+			return
+		}
+		if kind != "desktop" {
+			httpx.Fail(w, http.StatusBadRequest, "仅桌面设备支持免密连接")
+			return
+		}
+		store := crossdesk.NewSQLStore(sc.Store)
+		token, expires, err := store.IssueJoinTicket(id)
+		if err != nil {
+			httpx.FailErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		httpx.OK(w, map[string]any{
+			"join_ticket": token,
+			"expires_at":  expires,
+			"join_url":    "/crossdesk/web/?device_id=" + url.QueryEscape(id) + "&join_ticket=" + url.QueryEscape(token),
+		})
 	}
 }
 

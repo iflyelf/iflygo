@@ -1142,6 +1142,7 @@ CROSSDESK_JS = r'''
   state.crossdeskSessions = [];
   state.crossdeskAdminLoaded = false;
   state.crossdeskConnectDevice = '';
+  state.crossdeskJoinTicket = '';
 
   function loadCrossDesk() {
     if (state.crossdeskLoading) return Promise.resolve();
@@ -1192,7 +1193,10 @@ CROSSDESK_JS = r'''
     var d = state.crossdesk || {};
     var enabled = !!d.enabled;
     var native = !!d.native_signaling;
-    var web = native ? ('/crossdesk/web/' + (state.crossdeskConnectDevice ? '?device_id=' + encodeURIComponent(state.crossdeskConnectDevice) : '')) : (d.web_url || 'https://web.crossdesk.cn');
+    var webQuery = [];
+    if (state.crossdeskConnectDevice) { webQuery.push('device_id=' + encodeURIComponent(state.crossdeskConnectDevice)); }
+    if (state.crossdeskJoinTicket) { webQuery.push('join_ticket=' + encodeURIComponent(state.crossdeskJoinTicket)); }
+    var web = native ? ('/crossdesk/web/' + (webQuery.length ? '?' + webQuery.join('&') : '')) : (d.web_url || 'https://web.crossdesk.cn');
     if (enabled && native && !state.crossdeskAdminLoaded) {
       state.crossdeskAdminLoaded = true;
       loadCrossDeskAdmin().then(render);
@@ -1261,8 +1265,19 @@ CROSSDESK_JS = r'''
                 h('td', {}, [h('div', { class: 'tunnel-actions' }, [
                   (x.kind === 'desktop' ? h('button', { class: 'btn sm primary', onclick: function () {
                     state.crossdeskConnectDevice = x.device_id;
+                    state.crossdeskJoinTicket = '';
                     state.crossdeskShowWeb = true;
-                    render();
+                    api('/api/crossdesk/devices/' + encodeURIComponent(x.device_id) + '/join-ticket', { method: 'POST' })
+                      .then(function (res) {
+                        state.crossdeskJoinTicket = res.join_ticket || '';
+                        tunnelSetMsg(true, '已生成一次性连接票据（60 秒有效）');
+                        render();
+                        setTimeout(function () { state.crossdeskJoinTicket = ''; }, 3000);
+                      })
+                      .catch(function (e) {
+                        tunnelSetMsg(false, e.message);
+                        render();
+                      });
                   } }, ['连接']) : null),
                   h('button', { class: 'btn sm danger', onclick: function () { crossdeskDeleteDevice(x.device_id); } }, ['删除'])
                 ])])

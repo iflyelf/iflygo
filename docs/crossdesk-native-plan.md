@@ -119,12 +119,13 @@ CrossDesk 不是单一服务，而是完整的跨平台远控产品：
   - `clientTag=web`；
 - 原生信令页面直接 iframe 内置 Web 客户端；
 - 设备列表「连接」按钮可带 `device_id` 打开并预填 Web 客户端；
+- iFlyGo 管理员「连接」会生成 60 秒一次性 join_ticket，Web 客户端免输设备密码；
 - 资源通过 `go:embed` 打包进服务端二进制；
 - 保留 CrossDesk Web 的 LGPL-3.0 LICENSE。
 
 尚未完成：
 
-- Web 端 SSO / 免输设备密码；
+- 面向普通用户的细粒度 SSO（当前免密票据仅管理员）；
 - 官方 Web 客户端完整功能回归；
 - 文件传输/剪贴板/多显示器与原生信令的端到端验证。
 

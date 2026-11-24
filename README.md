@@ -619,7 +619,7 @@ docker compose up -d
 >
 > **Phase 2 内置 Web 客户端**：原生信令模式下，Web 客户端由 iFlyGo 直接提供
 > （`/crossdesk/web/`），并自动注入原生 WSS/STUN 配置，无需单独部署静态站点。
-> SSO 与设备密码免输仍在后续阶段。
+> 管理员在设备列表点「连接」会生成 60 秒一次性 join_ticket，Web 客户端免输设备密码。
 >
 > 若要把 CrossDesk 全部能力原生并入 iFlyGo，实施阶段、许可证与验收标准见
 > `docs/crossdesk-native-plan.md`。

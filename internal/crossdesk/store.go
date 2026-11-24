@@ -37,6 +37,8 @@ type DeviceStore interface {
 	ChangePassword(id, newPassword string) error
 	LoginKey(id string) (string, bool)
 	BindLoginKey(id, publicKey string) error
+	IssueJoinTicket(deviceID string) (token string, expiresAt int64, err error)
+	ConsumeJoinTicket(deviceID, token string) bool
 }
 
 // SQLStore 基于 iFlyGo 数据库的 CrossDesk 设备库。
@@ -204,6 +206,41 @@ func (s *SQLStore) BindLoginKey(id, publicKey string) error {
 		return fmt.Errorf("设备已绑定其他登录公钥")
 	}
 	return nil
+}
+
+func (s *SQLStore) IssueJoinTicket(deviceID string) (string, int64, error) {
+	if !persistentDevice(deviceID) {
+		return "", 0, fmt.Errorf("设备不支持连接票据")
+	}
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", 0, err
+	}
+	token := hex.EncodeToString(raw)
+	sum := sha256.Sum256([]byte(token))
+	expires := time.Now().Add(60 * time.Second).Unix()
+	_, _ = s.s.DB.Exec(s.s.Rebind(`DELETE FROM crossdesk_join_tickets WHERE expires_at < $1`), time.Now().Unix())
+	_, err := s.s.DB.Exec(s.s.Rebind(`INSERT INTO crossdesk_join_tickets (token_hash,device_id,expires_at,used_at) VALUES ($1,$2,$3,0)`),
+		hex.EncodeToString(sum[:]), deviceID, expires)
+	if err != nil {
+		return "", 0, err
+	}
+	return token, expires, nil
+}
+
+func (s *SQLStore) ConsumeJoinTicket(deviceID, token string) bool {
+	if !persistentDevice(deviceID) || len(token) != 64 {
+		return false
+	}
+	sum := sha256.Sum256([]byte(token))
+	res, err := s.s.DB.Exec(s.s.Rebind(`UPDATE crossdesk_join_tickets SET used_at = $1
+		WHERE token_hash = $2 AND device_id = $3 AND used_at = 0 AND expires_at > $4`),
+		time.Now().Unix(), hex.EncodeToString(sum[:]), deviceID, time.Now().Unix())
+	if err != nil {
+		return false
+	}
+	n, _ := res.RowsAffected()
+	return n > 0
 }
 
 func (s *SQLStore) Stats() (int64, int64, error) {

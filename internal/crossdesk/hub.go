@@ -548,19 +548,30 @@ func (h *Hub) handleJoin(c *client, msg map[string]any) {
 		c.sendJSON(map[string]any{"type": "user_join_transmission", "status": "failed", "reason": "Invalid transmission"})
 		return
 	}
-	if pwd == "" {
-		c.sendJSON(map[string]any{
-			"type": "user_join_transmission", "transmission_id": target,
-			"status": "failed", "error_code": "PASSWORD_REQUIRED", "reason": "Password required",
-		})
-		return
-	}
-	if _, ok := h.store.Verify(target, pwd); !ok {
-		c.sendJSON(map[string]any{
-			"type": "user_join_transmission", "transmission_id": target,
-			"status": "failed", "error_code": "AUTHENTICATION_FAILED", "reason": "Authentication failed",
-		})
-		return
+	ticket, _ := msg["join_ticket"].(string)
+	if strings.TrimSpace(ticket) != "" {
+		if !h.store.ConsumeJoinTicket(target, strings.TrimSpace(ticket)) {
+			c.sendJSON(map[string]any{
+				"type": "user_join_transmission", "transmission_id": target,
+				"status": "failed", "error_code": "JOIN_TICKET_INVALID", "reason": "Join ticket invalid or expired",
+			})
+			return
+		}
+	} else {
+		if pwd == "" {
+			c.sendJSON(map[string]any{
+				"type": "user_join_transmission", "transmission_id": target,
+				"status": "failed", "error_code": "PASSWORD_REQUIRED", "reason": "Password required",
+			})
+			return
+		}
+		if _, ok := h.store.Verify(target, pwd); !ok {
+			c.sendJSON(map[string]any{
+				"type": "user_join_transmission", "transmission_id": target,
+				"status": "failed", "error_code": "AUTHENTICATION_FAILED", "reason": "Authentication failed",
+			})
+			return
+		}
 	}
 
 	h.mu.Lock()

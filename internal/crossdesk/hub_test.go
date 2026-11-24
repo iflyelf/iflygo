@@ -105,6 +105,14 @@ func (m *memStore) BindLoginKey(id, publicKey string) error {
 	return nil
 }
 
+func (m *memStore) IssueJoinTicket(deviceID string) (string, int64, error) {
+	return strings.Repeat("b", 64), time.Now().Add(time.Minute).Unix(), nil
+}
+
+func (m *memStore) ConsumeJoinTicket(deviceID, token string) bool {
+	return token == strings.Repeat("b", 64)
+}
+
 func (m *memStore) Stats() (int64, int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -400,4 +408,37 @@ func TestDeviceKeyLogin(t *testing.T) {
 	if fail["error_code"] != "DEVICE_KEY_REQUIRED" {
 		t.Fatalf("密码登录应要求设备密钥: %v", fail)
 	}
+}
+
+func TestJoinWithTicket(t *testing.T) {
+	store := newMemStore()
+	h := NewHub(store, TurnConfig{}, func() bool { return true }, nil)
+	srv := httptest.NewServer(http.HandlerFunc(h.ServeWS))
+	defer srv.Close()
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+	host := dial(t, wsURL)
+	defer host.Close(websocket.StatusNormalClosure, "")
+	host.send(t, map[string]any{"type": "login", "user_id": ""})
+	login := host.read(t)
+	fullID, _ := login["user_id"].(string)
+	parts := strings.SplitN(fullID, "@", 2)
+	id := parts[0]
+
+	guest := dial(t, wsURL)
+	defer guest.Close(websocket.StatusNormalClosure, "")
+	guest.send(t, map[string]any{"type": "login", "user_id": "web"})
+	login = guest.read(t)
+	guestID, _ := login["user_id"].(string)
+
+	guest.send(t, map[string]any{
+		"type": "join_transmission", "user_id": guestID,
+		"transmission_id": id + "@", "join_ticket": strings.Repeat("b", 64),
+	})
+	join := host.read(t)
+	if join["type"] != "user_join_transmission" || join["user_id"] != guestID || join["status"] != "success" {
+		t.Fatalf("免密 join 失败: %v", join)
+	}
+	_ = host.read(t) // session_ticket
+	_ = guest.read(t)
 }

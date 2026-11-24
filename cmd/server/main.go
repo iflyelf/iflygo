@@ -496,6 +496,7 @@ func registerCrossDeskRoutes(mux *http.ServeMux, sc *svc.ServiceContext) {
 	mux.Handle("/crossdesk/web/", handler.CrossDeskWeb(sc))
 	mux.Handle("GET /api/crossdesk/devices", middleware.RequireAuth(sc.Auth, middleware.RequireAdmin(handler.ListCrossDeskDevices(sc))))
 	mux.Handle("DELETE /api/crossdesk/devices/{id}", middleware.RequireAuth(sc.Auth, middleware.RequireAdmin(handler.DeleteCrossDeskDevice(sc))))
+	mux.Handle("POST /api/crossdesk/devices/{id}/join-ticket", middleware.RequireAuth(sc.Auth, middleware.RequireAdmin(handler.CrossDeskJoinTicket(sc))))
 	mux.Handle("GET /api/crossdesk/sessions", middleware.RequireAuth(sc.Auth, middleware.RequireAdmin(handler.ListCrossDeskSessions(sc))))
 	mux.Handle("POST /api/crossdesk/sessions/disconnect", middleware.RequireAuth(sc.Auth, middleware.RequireAdmin(handler.DisconnectCrossDeskSession(sc))))
 	mux.Handle("GET /api/crossdesk/native-stats", middleware.RequireAuth(sc.Auth, middleware.RequireAdmin(handler.CrossDeskNativeStats(sc))))
