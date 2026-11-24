@@ -784,4 +784,5 @@ select { max-width: 100%; }
 }
 .crossdesk-features { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 8px; }
 .crossdesk-feature { padding: 8px 10px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--panel-bg); font-size: 13px; overflow-wrap: anywhere; }
+.crossdesk-user-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; max-height: 260px; overflow: auto; }
 @media (max-width: 720px) { .crossdesk-frame { min-height: 360px; height: 70vh; } }
