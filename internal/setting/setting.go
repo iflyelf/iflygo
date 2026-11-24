@@ -56,6 +56,7 @@ var Registry = func() []Item {
 	out = append(out, aiRegistry()...)
 	out = append(out, relayRegistry()...)
 	out = append(out, clientRegistry()...)
+	out = append(out, crossdeskRegistry()...)
 	return out
 }()
 

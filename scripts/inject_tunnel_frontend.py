@@ -64,6 +64,15 @@ EXTRA_CSS = """
   .tunnel-actions { flex-direction: column; align-items: stretch; }
   .tunnel-actions .btn { width: 100%; }
 }
+
+/* CrossDesk 集成 */
+.crossdesk-frame {
+  width: 100%; height: calc(100vh - 240px); min-height: 480px;
+  border: 1px solid var(--border-color); border-radius: 8px; background: #fff;
+}
+.crossdesk-features { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 8px; }
+.crossdesk-feature { padding: 8px 10px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--panel-bg); font-size: 13px; overflow-wrap: anywhere; }
+@media (max-width: 720px) { .crossdesk-frame { min-height: 360px; height: 70vh; } }
 """
 
 # ---------------------------------------------------------------------------
@@ -1122,6 +1131,109 @@ TUNNEL_JS = r'''
 
 # 导航下拉菜单（插入到「帮助」菜单前）
 # ---------------------------------------------------------------------------
+# CrossDesk 远程桌面集成视图
+# ---------------------------------------------------------------------------
+CROSSDESK_JS = r'''
+  // ===== CrossDesk 远程桌面（inject_tunnel_frontend.py 注入）=====
+  state.crossdesk = null;
+  state.crossdeskLoading = false;
+  state.crossdeskShowWeb = false;
+
+  function loadCrossDesk() {
+    if (state.crossdeskLoading) return Promise.resolve();
+    state.crossdeskLoading = true;
+    return api('/api/crossdesk/status').then(function (d) {
+      state.crossdesk = d || {};
+      state.crossdeskLoading = false;
+    }).catch(function (e) {
+      state.crossdesk = { enabled: false, error: e.message };
+      state.crossdeskLoading = false;
+    });
+  }
+
+  function crossdeskView() {
+    if (state.crossdesk === null) {
+      loadCrossDesk().then(render);
+    }
+    var d = state.crossdesk || {};
+    var enabled = !!d.enabled;
+    var web = d.web_url || 'https://web.crossdesk.cn';
+    var dl = d.download_url || 'https://github.com/kunkundi/crossdesk/releases/latest';
+    var server = d.server_url || '';
+    var admin = server ? server.replace(/\/+$/, '') + '/admin' : '';
+
+    var statusRows = [
+      ['集成状态', enabled ? '已启用' : '未启用'],
+      ['服务地址', server || '未配置'],
+      ['连通性', d.reachable ? ('正常 · ' + (d.latency_ms || 0) + 'ms') : (d.error || '未检测')],
+      ['Web 客户端', web],
+      ['客户端下载', dl]
+    ].map(function (r) {
+      return h('tr', {}, [h('td', {}, [r[0]]), h('td', { class: 'tunnel-wrap' }, [String(r[1])])]);
+    });
+
+    var actions = [];
+    if (web) actions.push(h('a', { class: 'btn primary', href: web, target: '_blank', rel: 'noopener noreferrer' }, ['打开 Web 客户端']));
+    if (dl) actions.push(h('a', { class: 'btn', href: dl, target: '_blank', rel: 'noopener noreferrer' }, ['下载桌面/移动客户端']));
+    if (admin) actions.push(h('a', { class: 'btn', href: admin, target: '_blank', rel: 'noopener noreferrer' }, ['服务端管理后台']));
+    actions.push(h('button', { class: 'btn ghost', onclick: function () { switchView('settings'); } }, ['前往设置']));
+
+    var body = [
+      h('div', { class: 'muted' }, ['CrossDesk 提供跨平台远程桌面、Web 客户端、桌面墙、文件传输、音频、CLI/MCP、可信设备与自托管信令。iFlyGo 负责服务端部署入口、状态检查与统一导航。']),
+      h('div', { class: 'card' }, [
+        h('div', { class: 'card-head' }, [h('h3', {}, ['CrossDesk 服务状态']), h('div', { class: 'toolbar' }, actions)]),
+        h('div', { class: 'table-wrap' }, [
+          h('table', { class: 'tunnel-table' }, [
+            h('thead', {}, [h('tr', {}, [h('th', {}, ['项目']), h('th', {}, ['当前值'])])]),
+            h('tbody', {}, statusRows)
+          ])
+        ]),
+        !enabled ? h('div', { class: 'err field' }, ['尚未启用：请在「设置 → 远程桌面（CrossDesk）」填写服务地址并开启。']) : null
+      ]),
+      h('div', { class: 'card' }, [
+        h('div', { class: 'card-head' }, [
+          h('h3', {}, ['浏览器远控（Web 客户端）']),
+          h('button', { class: 'btn', onclick: function () { state.crossdeskShowWeb = !state.crossdeskShowWeb; render(); } }, [state.crossdeskShowWeb ? '收起 Web 客户端' : '在页面内打开']),
+          h('a', { class: 'btn ghost', href: web, target: '_blank', rel: 'noopener noreferrer' }, ['新窗口打开'])
+        ]),
+        h('div', { class: 'muted' }, ['Web 客户端需要浏览器信任 CrossDesk Server 的 WSS 证书；自签证书请先导入根证书。']),
+        state.crossdeskShowWeb ? h('iframe', {
+          class: 'crossdesk-frame', src: web, allow: 'clipboard-read; clipboard-write; fullscreen',
+          allowfullscreen: 'allowfullscreen', referrerpolicy: 'no-referrer'
+        }) : null
+      ]),
+      h('div', { class: 'card' }, [
+        h('div', { class: 'card-head' }, [h('h3', {}, ['支持的 CrossDesk 功能'])]),
+        h('div', { class: 'crossdesk-features' }, [
+          'Windows / macOS / Linux 桌面互控，浏览器、iOS、Android、鸿蒙客户端访问',
+          '局域网 IP 直连（IP:端口 + 六位密码），无云信令也可用',
+          '桌面墙 DeskHub：多设备预览、分组、放大、群控、批量文件分发',
+          'H.264/AV1、硬件编解码、远端音频、多显示器、剪贴板、文本/文件传输',
+          'CLI 终端主控（ANSI/Kitty/Sixel）与 Agent/MCP 远程操作',
+          '可信设备配对、自托管信令 + TURN、SRTP 媒体加密',
+          'Windows 登录前远控、Linux 无头运行'
+        ].map(function (x) { return h('div', { class: 'crossdesk-feature' }, ['• ' + x]); }))
+      ]),
+      h('div', { class: 'card' }, [
+        h('div', { class: 'card-head' }, [h('h3', {}, ['自托管部署提示'])]),
+        h('div', { class: 'muted' }, ['部署 CrossDesk Server + Coturn 后，在两端桌面/移动客户端填写同一服务地址与信令端口。']),
+        h('pre', { class: 'tunnel-script', readonly: 'readonly' }, [
+          '# 在 iflygo 仓库根目录\n' +
+          'cp deploy/docker/crossdesk/.env.example deploy/docker/crossdesk/.env\n' +
+          '# 编辑 .env：EXTERNAL_IP / INTERNAL_IP / COTURN_AUTH_SECRET / COTURN_STATELESS_NONCE_SECRET\n' +
+          'cd deploy/docker/crossdesk && docker compose up -d\n\n' +
+          '# 客户端自托管配置：\n' +
+          'Server: ' + (server || 'https://your-server:9099') + '\n' +
+          'Signal Port: 9099\n' +
+          'Web: ' + web
+        ])
+      ])
+    ];
+    return h('div', {}, body);
+  }
+'''
+
+# ---------------------------------------------------------------------------
 # DDNSTO 远程访问 + Liaison 远程管理套件视图 JS 片段
 # ---------------------------------------------------------------------------
 REMOTE_JS = r'''
@@ -1537,16 +1649,19 @@ REMOTE_NAV = r'''
           { label: '策略管理', active: state.view === 'liaison' && state.liaisonSection === 'policies', onclick: function () { state.liaisonSection = 'policies'; switchView('liaison'); } },
           { label: 'Web SSH', active: state.view === 'liaison' && state.liaisonSection === 'ssh', onclick: function () { state.liaisonSection = 'ssh'; switchView('liaison'); } },
           { label: '远程桌面（VNC）', active: state.view === 'liaison' && state.liaisonSection === 'vnc', onclick: function () { state.liaisonSection = 'vnc'; switchView('liaison'); } },
-          { label: '远程桌面（RDP）', active: state.view === 'liaison' && state.liaisonSection === 'rdp', onclick: function () { state.liaisonSection = 'rdp'; switchView('liaison'); } }
-        ], state.view === 'liaison'),
+          { label: '远程桌面（RDP）', active: state.view === 'liaison' && state.liaisonSection === 'rdp', onclick: function () { state.liaisonSection = 'rdp'; switchView('liaison'); } },
+          { label: '远程桌面（CrossDesk）', active: state.view === 'crossdesk', onclick: function () { switchView('crossdesk'); } }
+        ], state.view === 'liaison' || state.view === 'crossdesk'),
 '''
 
 REMOTE_CASE = r"""      case 'ddnsto': body = ddnstoView(); break;
       case 'liaison': body = liaisonView(); break;
+      case 'crossdesk': body = crossdeskView(); break;
 """
 
 REMOTE_SWITCHVIEW = r"""    else if (v === 'ddnsto') loadDDNSTO().then(render);
     else if (v === 'liaison') render();
+    else if (v === 'crossdesk') loadCrossDesk().then(render);
 """
 
 
@@ -1637,7 +1752,7 @@ def inject(app_js):
     anchor_state = "navOpen: null };"
     if anchor_state not in app_js:
         raise RuntimeError("未找到 state 末尾锚点: " + anchor_state)
-    app_js = app_js.replace(anchor_state, anchor_state + "\n" + TUNNEL_JS + REMOTE_JS + SETTINGS_JS, 1)
+    app_js = app_js.replace(anchor_state, anchor_state + "\n" + TUNNEL_JS + REMOTE_JS + CROSSDESK_JS + SETTINGS_JS, 1)
 
     # 2. 导航菜单注入（隧道下拉 + 远程访问 + 远程管理下拉）
     anchor_nav = "navDropdown('帮助', helpItems, false)"
@@ -1662,7 +1777,7 @@ def inject(app_js):
     anchor_known = "ai: 1, assistant: 1"
     if anchor_known not in app_js:
         raise RuntimeError("未找到 KNOWN_VIEWS 锚点: " + anchor_known)
-    app_js = app_js.replace(anchor_known, anchor_known + ",\n    tunnel: 1, ddnsto: 1, liaison: 1", 1)
+    app_js = app_js.replace(anchor_known, anchor_known + ",\n    tunnel: 1, ddnsto: 1, liaison: 1, crossdesk: 1", 1)
 
     return app_js
 

@@ -776,3 +776,12 @@ select { max-width: 100%; }
   .tunnel-actions { flex-direction: column; align-items: stretch; }
   .tunnel-actions .btn { width: 100%; }
 }
+
+/* CrossDesk 集成 */
+.crossdesk-frame {
+  width: 100%; height: calc(100vh - 240px); min-height: 480px;
+  border: 1px solid var(--border-color); border-radius: 8px; background: #fff;
+}
+.crossdesk-features { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 8px; }
+.crossdesk-feature { padding: 8px 10px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--panel-bg); font-size: 13px; overflow-wrap: anywhere; }
+@media (max-width: 720px) { .crossdesk-frame { min-height: 360px; height: 70vh; } }

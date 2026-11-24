@@ -17,6 +17,7 @@
 - ✅ **跨平台**：`CGO_ENABLED=0` 交叉编译，Linux / Windows / macOS / 树莓派 / NAS
 - ✅ **多种部署**：二进制/systemd、Windows 服务（SCM）、Docker Compose、Nginx 反向代理示例
 - ✅ **移动客户端**：Android APK（完整 VpnService 隧道，兼容 HarmonyOS 4/4.2 及以下）
+- ✅ **远程桌面（CrossDesk）**：独立 CrossDesk Server + Coturn + Web 客户端集成，支持跨平台远控、桌面墙、文件传输、CLI/MCP、可信设备与自托管
 
 ### 升级控制平台（完整复刻 upgrade_mgr）
 - ✅ 主机清单 / 组件 / 制品 / 升级任务（灰度编排、批次、重试、取消、回滚；创建/预览仅包含在线主机）
@@ -585,6 +586,31 @@ iflygo-server -role gateway -overlay-config /etc/iflygo/node/config.yml
 > `-edge-acme-email ops@example.com -edge-acme-cache /var/lib/iflygo/acme`。
 
 ---
+
+### 远程桌面（CrossDesk 集成）
+
+iFlyGo 通过独立服务集成 [CrossDesk](https://github.com/kunkundi/crossdesk)：
+
+- **CrossDesk Server + Coturn**：WSS 信令、设备身份/密码、在线状态、TURN 中继；
+- **Web 客户端**：浏览器远控；
+- **官方桌面/移动/CLI/MCP 客户端**：桌面墙、文件传输、音频、多显示器、可信设备等；
+- **iFlyGo 页面**：服务状态探活、Web 客户端嵌入、下载入口、自托管配置提示。
+
+部署（独立 Docker Compose，host 网络）：
+
+```bash
+cd deploy/docker/crossdesk
+cp .env.example .env
+# 编辑 EXTERNAL_IP / INTERNAL_IP / COTURN_AUTH_SECRET / COTURN_STATELESS_NONCE_SECRET
+docker compose up -d
+```
+
+然后进入 **设置 → 远程桌面（CrossDesk）** 填写服务地址并启用；
+打开 **远程管理 → 远程桌面（CrossDesk）** 查看状态与 Web 客户端。
+
+> CrossDesk 客户端为 GPL-3.0、Server 为 LGPL-3.0，以独立镜像/进程运行，
+> 不链接进 iFlyGo 的 MIT 代码。详细部署、端口、证书与客户端配置见
+> `deploy/docker/crossdesk/README.md`。
 
 ### 移动客户端（Android / HarmonyOS 4）
 

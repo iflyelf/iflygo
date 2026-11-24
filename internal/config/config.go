@@ -45,6 +45,21 @@ type Config struct {
 	TCPRelay TCPRelayConfig `yaml:"tcp_relay"`
 	// Client 客户端下发默认参数（网络级 DNS/MTU 优先）。
 	Client ClientConfig `yaml:"client"`
+	// CrossDesk 可选：远程桌面服务（信令/TURN/Web 客户端）。
+	CrossDesk CrossDeskConfig `yaml:"crossdesk"`
+}
+
+// CrossDeskConfig 远程桌面（CrossDesk）集成配置。
+type CrossDeskConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// ServerURL CrossDesk Server 外部地址，例如 https://rd.example.com:9099。
+	ServerURL string `yaml:"server_url"`
+	// WebURL CrossDesk Web 客户端地址。
+	WebURL string `yaml:"web_url"`
+	// DownloadURL 客户端下载地址。
+	DownloadURL string `yaml:"download_url"`
+	// InsecureTLS 状态检查跳过证书校验（仅自签证书测试用）。
+	InsecureTLS bool `yaml:"insecure_tls"`
 }
 
 // ClientConfig 客户端下发默认参数（可被网络级 DNS/MTU 覆盖）。
@@ -368,7 +383,11 @@ func Default() *Config {
 		Auth:     AuthConfig{Provider: "builtin", AdminUsername: "admin"},
 		TCPRelay: TCPRelayConfig{Mode: "auto"},
 		Client:   ClientConfig{MTU: 1280, Interval: "30s", AutoNAT: true, AutoNATMaxRetries: 5},
-		Consul:   ConsulConfig{Timeout: 10, Concurrency: 16, CleanupMissing: true},
+		CrossDesk: CrossDeskConfig{
+			WebURL:      "https://web.crossdesk.cn",
+			DownloadURL: "https://github.com/kunkundi/crossdesk/releases/latest",
+		},
+		Consul: ConsulConfig{Timeout: 10, Concurrency: 16, CleanupMissing: true},
 		Redis: RedisConfig{
 			Enabled: false, Mode: "single", Host: "localhost", Port: 6379,
 			TTL: 10, Prefix: "upgrade_mgr:",
@@ -477,6 +496,11 @@ func (c *Config) applyEnv() {
 	setInt(&c.Client.AutoNATMaxRetries, "CLIENT_AUTO_NAT_MAX_RETRIES")
 	setStr(&c.Client.AutoNATWebhook, "CLIENT_AUTO_NAT_WEBHOOK")
 	setStr(&c.Client.EgressExclude, "CLIENT_EGRESS_EXCLUDE")
+	setBool(&c.CrossDesk.Enabled, "CROSSDESK_ENABLED")
+	setStr(&c.CrossDesk.ServerURL, "CROSSDESK_SERVER_URL")
+	setStr(&c.CrossDesk.WebURL, "CROSSDESK_WEB_URL")
+	setStr(&c.CrossDesk.DownloadURL, "CROSSDESK_DOWNLOAD_URL")
+	setBool(&c.CrossDesk.InsecureTLS, "CROSSDESK_INSECURE_TLS")
 	setStr(&c.TCPRelay.Mode, "TCP_RELAY_MODE")
 	setStr(&c.TCPRelay.Listen, "TCP_RELAY_LISTEN")
 	setStr(&c.TCPRelay.Advertise, "TCP_RELAY_ADVERTISE")

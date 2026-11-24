@@ -486,6 +486,8 @@ func registerTunnelRoutes(mux *http.ServeMux, sc *svc.ServiceContext) {
 	mux.Handle("GET /api/networks/{id}/dns-nat", auth(handler.DNSNATScript(sc)))
 	mux.Handle("POST /api/networks/{id}/nat/apply", middleware.RequireAuth(sc.Auth, middleware.RequireAdmin(handler.NATApply(sc))))
 	mux.Handle("GET /api/networks/{id}/nat/status", auth(handler.NATStatus(sc)))
+	// 远程桌面（CrossDesk）集成状态
+	mux.Handle("GET /api/crossdesk/status", auth(handler.CrossDeskStatus(sc)))
 	mux.Handle("DELETE /api/networks/{id}", auth(handler.DeleteNetwork(sc)))
 
 	// 服务端节点（lighthouse/relay/edge/gateway）

@@ -41,3 +41,11 @@ log:
 #   dsn: postgresql://iflygo:password@127.0.0.1:5432/iflygo?sslmode=disable
 #   max_open_conns: 50
 #   max_idle_conns: 10
+
+# 远程桌面（CrossDesk）集成（可选）
+crossdesk:
+  enabled: false
+  server_url: "https://rd.example.com:9099"
+  web_url: "https://web.crossdesk.cn"
+  download_url: "https://github.com/kunkundi/crossdesk/releases/latest"
+  insecure_tls: false

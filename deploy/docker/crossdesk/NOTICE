@@ -1,0 +1,18 @@
+CrossDesk integration notice
+============================
+
+This directory contains deployment configuration for CrossDesk Server and Coturn.
+CrossDesk Server is licensed under LGPL-3.0; CrossDesk clients are licensed under
+GPL-3.0. They run as separate processes/containers and are not linked into the
+MIT-licensed iFlyGo code.
+
+Upstream sources:
+- https://github.com/kunkundi/crossdesk
+- https://github.com/kunkundi/crossdesk-server
+- https://github.com/kunkundi/crossdesk-web-client
+
+Container images:
+- crossdesk/crossdesk-server
+- coturn/coturn
+
+See the upstream repositories for full license texts and source code.

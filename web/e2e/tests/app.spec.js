@@ -187,6 +187,28 @@ test('隧道管理：参数下发聚合页', async ({ page }) => {
   await page.getByRole('button', { name: '关闭', exact: true }).click();
 });
 
+test('远程桌面：CrossDesk 集成页', async ({ page }) => {
+  autoAccept(page);
+  await login(page);
+  await page.evaluate(async () => {
+    await fetch('/api/settings', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        'crossdesk.enabled': 'true',
+        'crossdesk.server_url': 'http://127.0.0.1:18098',
+        'crossdesk.web_url': 'https://web.crossdesk.cn',
+        'crossdesk.download_url': 'https://github.com/kunkundi/crossdesk/releases/latest',
+      }),
+    });
+  });
+  await page.locator('.main-nav .nav-link', { hasText: '远程管理' }).click();
+  await page.locator('.main-nav .nav-menu-item', { hasText: '远程桌面（CrossDesk）' }).click();
+  await expect(page.getByRole('heading', { name: 'CrossDesk 服务状态' })).toBeVisible();
+  await expect(page.locator('.crossdesk-feature')).toHaveCount(7);
+  await page.getByRole('button', { name: '在页面内打开', exact: true }).click();
+  await expect(page.locator('.crossdesk-frame')).toHaveAttribute('src', 'https://web.crossdesk.cn');
+});
+
 test('隧道管理：五个子页可切换', async ({ page }) => {
   for (const section of ['客户端', '参数下发', '网络', '服务端节点', '路由', '边缘服务']) {
     await openTunnel(page, section);
