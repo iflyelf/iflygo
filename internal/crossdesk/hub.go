@@ -707,3 +707,58 @@ func (h *Hub) Stats() map[string]any {
 		"time": time.Now().UTC().Format(time.RFC3339),
 	}
 }
+
+// SessionView 原生信令活动会话视图。
+type SessionView struct {
+	TransmissionID string   `json:"transmission_id"`
+	Host           string   `json:"host"`
+	Guests         []string `json:"guests"`
+}
+
+// Sessions 返回活动传输与 guest 列表。
+func (h *Hub) Sessions() []SessionView {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]SessionView, 0, len(h.transmissions))
+	for tid, tr := range h.transmissions {
+		guests := make([]string, 0, len(tr.guests))
+		for g := range tr.guests {
+			guests = append(guests, g)
+		}
+		out = append(out, SessionView{TransmissionID: tid, Host: tr.host, Guests: guests})
+	}
+	return out
+}
+
+// Kick 断开指定用户连接；host 断开时会由 unregister 通知其 guests。
+func (h *Hub) Kick(id string) bool {
+	h.mu.Lock()
+	c := h.clients[id]
+	h.mu.Unlock()
+	if c == nil {
+		return false
+	}
+	c.close()
+	return true
+}
+
+// DisconnectGuest 由 host 或管理员断开指定 guest。
+func (h *Hub) DisconnectGuest(transmissionID, guest string) bool {
+	h.mu.Lock()
+	tr := h.transmissions[transmissionID]
+	if tr == nil || !tr.guests[guest] {
+		h.mu.Unlock()
+		return false
+	}
+	delete(tr.guests, guest)
+	gc := h.clients[guest]
+	host := h.clients[tr.host]
+	h.mu.Unlock()
+	if gc != nil {
+		gc.sendJSON(map[string]any{"type": "user_leave_transmission", "transmission_id": transmissionID, "user_id": tr.host})
+	}
+	if host != nil {
+		host.sendJSON(map[string]any{"type": "user_leave_transmission", "transmission_id": transmissionID, "user_id": guest})
+	}
+	return true
+}

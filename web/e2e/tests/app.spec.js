@@ -195,6 +195,7 @@ test('远程桌面：CrossDesk 集成页', async ({ page }) => {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         'crossdesk.enabled': 'true',
+        'crossdesk.native_signaling': 'true',
         'crossdesk.server_url': 'http://127.0.0.1:18098',
         'crossdesk.web_url': 'https://web.crossdesk.cn',
         'crossdesk.download_url': 'https://github.com/kunkundi/crossdesk/releases/latest',
@@ -205,6 +206,7 @@ test('远程桌面：CrossDesk 集成页', async ({ page }) => {
   await page.locator('.main-nav .nav-menu-item', { hasText: '远程桌面（CrossDesk）' }).click();
   await expect(page.getByRole('heading', { name: 'CrossDesk 服务状态' })).toBeVisible();
   await expect(page.locator('.crossdesk-feature')).toHaveCount(7);
+  await expect(page.getByRole('heading', { name: '原生信令设备与会话' })).toBeVisible();
   await page.getByRole('button', { name: '在页面内打开', exact: true }).click();
   await expect(page.locator('.crossdesk-frame')).toHaveAttribute('src', 'https://web.crossdesk.cn');
 });

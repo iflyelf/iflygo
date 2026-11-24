@@ -21,6 +21,7 @@ import (
 
 	"github.com/iflyelf/iflygo/internal/auth"
 	"github.com/iflyelf/iflygo/internal/config"
+	"github.com/iflyelf/iflygo/internal/crossdesk"
 	"github.com/iflyelf/iflygo/internal/ipam"
 	"github.com/iflyelf/iflygo/internal/liaison"
 	"github.com/iflyelf/iflygo/internal/logic/agentgw"
@@ -67,6 +68,8 @@ type ServiceContext struct {
 	Audit      *audit.Logger    // 审计日志
 	AIToken    *aitoken.Repo    // AI 访问令牌
 	Liaison    *liaison.Service // 远程管理套件（Web SSH/文件/DB/LLM/Casbin）
+	// CrossDesk 原生信令 Hub（未启用时为 nil）。
+	CrossDesk *crossdesk.Hub
 	// Relay TCP 中继运行时（可随页面/配置文件热重建，端口/模式随心跳下发）。
 	Relay *RelayRuntime
 	// UserFieldSync 用户字段定义自动同步（从 FlyIAM 拉取定义；不写回）。

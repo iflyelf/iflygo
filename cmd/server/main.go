@@ -490,8 +490,14 @@ func registerCrossDeskRoutes(mux *http.ServeMux, sc *svc.ServiceContext) {
 		c := sc.ConfigSnapshot().CrossDesk
 		return c.Enabled && c.NativeSignaling
 	}, log.Default())
+	sc.CrossDesk = hub
 	mux.HandleFunc(path, hub.ServeWS)
 	mux.HandleFunc("/crossdesk/stats", hub.ServeStats)
+	mux.Handle("GET /api/crossdesk/devices", middleware.RequireAuth(sc.Auth, middleware.RequireAdmin(handler.ListCrossDeskDevices(sc))))
+	mux.Handle("DELETE /api/crossdesk/devices/{id}", middleware.RequireAuth(sc.Auth, middleware.RequireAdmin(handler.DeleteCrossDeskDevice(sc))))
+	mux.Handle("GET /api/crossdesk/sessions", middleware.RequireAuth(sc.Auth, middleware.RequireAdmin(handler.ListCrossDeskSessions(sc))))
+	mux.Handle("POST /api/crossdesk/sessions/disconnect", middleware.RequireAuth(sc.Auth, middleware.RequireAdmin(handler.DisconnectCrossDeskSession(sc))))
+	mux.Handle("GET /api/crossdesk/native-stats", middleware.RequireAuth(sc.Auth, middleware.RequireAdmin(handler.CrossDeskNativeStats(sc))))
 }
 
 // registerTunnelRoutes 注册隧道服务（iflygo）相关路由，与 upgrade_mgr 业务共存。

@@ -1138,6 +1138,9 @@ CROSSDESK_JS = r'''
   state.crossdesk = null;
   state.crossdeskLoading = false;
   state.crossdeskShowWeb = false;
+  state.crossdeskDevices = [];
+  state.crossdeskSessions = [];
+  state.crossdeskAdminLoaded = false;
 
   function loadCrossDesk() {
     if (state.crossdeskLoading) return Promise.resolve();
@@ -1151,12 +1154,46 @@ CROSSDESK_JS = r'''
     });
   }
 
+  function loadCrossDeskAdmin() {
+    if (!state.crossdesk || !state.crossdesk.native_signaling) return Promise.resolve();
+    return Promise.all([
+      api('/api/crossdesk/devices').catch(function () { return []; }),
+      api('/api/crossdesk/sessions').catch(function () { return []; })
+    ]).then(function (r) {
+      state.crossdeskDevices = r[0] || [];
+      state.crossdeskSessions = r[1] || [];
+    });
+  }
+
+  function crossdeskReloadAdmin() {
+    state.crossdeskAdminLoaded = true;
+    return loadCrossDeskAdmin().then(render);
+  }
+
+  function crossdeskDeleteDevice(id) {
+    if (!window.confirm('确认删除设备 ' + id + '？')) return;
+    api('/api/crossdesk/devices/' + encodeURIComponent(id), { method: 'DELETE' })
+      .then(function () { tunnelSetMsg(true, '设备已删除'); return crossdeskReloadAdmin(); })
+      .catch(function (e) { tunnelSetMsg(false, e.message); render(); });
+  }
+
+  function crossdeskDisconnect(tid, uid) {
+    api('/api/crossdesk/sessions/disconnect', {
+      method: 'POST', body: JSON.stringify({ transmission_id: tid, user_id: uid })
+    }).then(function () { tunnelSetMsg(true, '连接已断开'); return crossdeskReloadAdmin(); })
+      .catch(function (e) { tunnelSetMsg(false, e.message); render(); });
+  }
+
   function crossdeskView() {
     if (state.crossdesk === null) {
       loadCrossDesk().then(render);
     }
     var d = state.crossdesk || {};
     var enabled = !!d.enabled;
+    if (enabled && d.native_signaling && !state.crossdeskAdminLoaded) {
+      state.crossdeskAdminLoaded = true;
+      loadCrossDeskAdmin().then(render);
+    }
     var web = d.web_url || 'https://web.crossdesk.cn';
     var dl = d.download_url || 'https://github.com/kunkundi/crossdesk/releases/latest';
     var server = d.server_url || '';
@@ -1206,6 +1243,48 @@ CROSSDESK_JS = r'''
           allowfullscreen: 'allowfullscreen', referrerpolicy: 'no-referrer'
         }) : null
       ]),
+      (native ? h('div', { class: 'card' }, [
+        h('div', { class: 'card-head' }, [
+          h('h3', {}, ['原生信令设备与会话']),
+          h('button', { class: 'btn', onclick: crossdeskReloadAdmin }, ['刷新'])
+        ]),
+        h('div', { class: 'table-wrap' }, [
+          h('table', { class: 'tunnel-table' }, [
+            h('thead', {}, [h('tr', {}, [h('th', {}, ['设备']), h('th', {}, ['类型']), h('th', {}, ['在线']), h('th', {}, ['最近在线']), h('th', {}, ['操作'])])]),
+            h('tbody', {}, (state.crossdeskDevices || []).map(function (x) {
+              return h('tr', {}, [
+                h('td', { class: 'tunnel-name' }, [x.device_id || '']),
+                h('td', {}, [x.kind || '']),
+                h('td', {}, [x.online ? '是' : '否']),
+                h('td', { class: 'tunnel-wrap' }, [x.last_seen || '—']),
+                h('td', {}, [h('button', { class: 'btn sm danger', onclick: function () { crossdeskDeleteDevice(x.device_id); } }, ['删除'])])
+              ]);
+            }).concat((state.crossdeskDevices || []).length ? [] : [h('tr', {}, [h('td', { colspan: 5, class: 'muted' }, ['暂无原生设备'])])]))
+          ])
+        ]),
+        h('div', { class: 'table-wrap', style: 'margin-top:10px' }, [
+          h('table', { class: 'tunnel-table' }, [
+            h('thead', {}, [h('tr', {}, [h('th', {}, ['会话']), h('th', {}, ['Host']), h('th', {}, ['Guest']), h('th', {}, ['操作'])])]),
+            h('tbody', {}, (state.crossdeskSessions || []).flatMap(function (s) {
+              var rows = [h('tr', {}, [
+                h('td', { class: 'tunnel-name' }, [s.transmission_id || '']),
+                h('td', {}, [s.host || '']),
+                h('td', {}, ['—']),
+                h('td', {}, [h('button', { class: 'btn sm danger', onclick: function () { crossdeskDisconnect(s.transmission_id, s.host); } }, ['断开 Host'])])
+              ])];
+              (s.guests || []).forEach(function (g) {
+                rows.push(h('tr', {}, [
+                  h('td', {}, [s.transmission_id || '']),
+                  h('td', {}, [s.host || '']),
+                  h('td', {}, [g]),
+                  h('td', {}, [h('button', { class: 'btn sm danger', onclick: function () { crossdeskDisconnect(s.transmission_id, g); } }, ['断开 Guest'])])
+                ]));
+              });
+              return rows;
+            }).concat((state.crossdeskSessions || []).length ? [] : [h('tr', {}, [h('td', { colspan: 4, class: 'muted' }, ['暂无活动会话'])])]))
+          ])
+        ])
+      ]) : null),
       h('div', { class: 'card' }, [
         h('div', { class: 'card-head' }, [h('h3', {}, ['支持的 CrossDesk 功能'])]),
         h('div', { class: 'crossdesk-features' }, [
