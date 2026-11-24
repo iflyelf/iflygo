@@ -150,6 +150,9 @@ const (
 	ActionTaskDelete  = "task.delete"
 	// 网关自动 NAT 告警（后台任务写入，无登录用户）。
 	ActionCrossDeskDeviceDelete = "crossdesk.device_delete"
+	ActionCrossDeskJoinTicket   = "crossdesk.join_ticket"
+	ActionCrossDeskUserGrant    = "crossdesk.user_grant"
+	ActionCrossDeskUserRevoke   = "crossdesk.user_revoke"
 	ActionCrossDeskDisconnect   = "crossdesk.disconnect"
 	ActionGatewayNATFailed      = "gateway.nat_failed"
 	ActionGatewayNATRecovered   = "gateway.nat_recovered"

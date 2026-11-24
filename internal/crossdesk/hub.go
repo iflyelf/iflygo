@@ -550,7 +550,7 @@ func (h *Hub) handleJoin(c *client, msg map[string]any) {
 	}
 	ticket, _ := msg["join_ticket"].(string)
 	if strings.TrimSpace(ticket) != "" {
-		if !h.store.ConsumeJoinTicket(target, strings.TrimSpace(ticket)) {
+		if !h.store.ConsumeJoinTicket(target, strings.TrimSpace(ticket), c.remote) {
 			c.sendJSON(map[string]any{
 				"type": "user_join_transmission", "transmission_id": target,
 				"status": "failed", "error_code": "JOIN_TICKET_INVALID", "reason": "Join ticket invalid or expired",

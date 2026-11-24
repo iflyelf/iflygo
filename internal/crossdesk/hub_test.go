@@ -105,13 +105,18 @@ func (m *memStore) BindLoginKey(id, publicKey string) error {
 	return nil
 }
 
-func (m *memStore) IssueJoinTicket(deviceID string) (string, int64, error) {
+func (m *memStore) IssueJoinTicket(deviceID, createdBy, createdIP string) (string, int64, error) {
 	return strings.Repeat("b", 64), time.Now().Add(time.Minute).Unix(), nil
 }
 
-func (m *memStore) ConsumeJoinTicket(deviceID, token string) bool {
+func (m *memStore) ConsumeJoinTicket(deviceID, token, usedIP string) bool {
 	return token == strings.Repeat("b", 64)
 }
+
+func (m *memStore) GrantDeviceUser(deviceID, username, createdBy string) error { return nil }
+func (m *memStore) RevokeDeviceUser(deviceID, username string) error           { return nil }
+func (m *memStore) ListDeviceUsers(deviceID string) ([]string, error)          { return nil, nil }
+func (m *memStore) UserCanAccess(deviceID, username string) (bool, error)      { return false, nil }
 
 func (m *memStore) Stats() (int64, int64, error) {
 	m.mu.Lock()

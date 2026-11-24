@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/iflyelf/iflygo/internal/auth"
 	"github.com/iflyelf/iflygo/internal/crossdesk"
 	"github.com/iflyelf/iflygo/internal/pkg/audit"
 	"github.com/iflyelf/iflygo/internal/pkg/httpx"
@@ -78,17 +79,90 @@ func CrossDeskJoinTicket(sc *svc.ServiceContext) http.HandlerFunc {
 			httpx.Fail(w, http.StatusBadRequest, "仅桌面设备支持免密连接")
 			return
 		}
+		u, _ := auth.FromContext(r.Context())
+		if u == nil {
+			httpx.Fail(w, http.StatusUnauthorized, "未认证")
+			return
+		}
 		store := crossdesk.NewSQLStore(sc.Store)
-		token, expires, err := store.IssueJoinTicket(id)
+		if !u.IsAdmin {
+			ok, err := store.UserCanAccess(id, u.Username)
+			if err != nil {
+				httpx.FailErr(w, http.StatusInternalServerError, err)
+				return
+			}
+			if !ok {
+				httpx.Fail(w, http.StatusForbidden, "未授权访问该设备")
+				return
+			}
+		}
+		token, expires, err := store.IssueJoinTicket(id, u.Username, clientIP(sc, r))
 		if err != nil {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
 		}
+		auditOp(sc, r, audit.ActionCrossDeskJoinTicket, "crossdesk_device", id, id, nil)
 		httpx.OK(w, map[string]any{
 			"join_ticket": token,
 			"expires_at":  expires,
 			"join_url":    "/crossdesk/web/?device_id=" + url.QueryEscape(id) + "&join_ticket=" + url.QueryEscape(token),
 		})
+	}
+}
+
+// ListCrossDeskUsers 返回设备授权用户（管理员）。
+func ListCrossDeskUsers(sc *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimSpace(r.PathValue("id"))
+		users, err := crossdesk.NewSQLStore(sc.Store).ListDeviceUsers(id)
+		if err != nil {
+			httpx.FailErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		httpx.OK(w, users)
+	}
+}
+
+// GrantCrossDeskUser 授权普通用户免密连接设备（管理员）。
+func GrantCrossDeskUser(sc *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimSpace(r.PathValue("id"))
+		var req struct {
+			Username string `json:"username"`
+		}
+		if err := httpx.DecodeJSON(r, &req); err != nil || strings.TrimSpace(req.Username) == "" {
+			httpx.Fail(w, http.StatusBadRequest, "username 必填")
+			return
+		}
+		u, _ := auth.FromContext(r.Context())
+		creator := ""
+		if u != nil {
+			creator = u.Username
+		}
+		if err := crossdesk.NewSQLStore(sc.Store).GrantDeviceUser(id, strings.TrimSpace(req.Username), creator); err != nil {
+			httpx.FailErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		auditOp(sc, r, audit.ActionCrossDeskUserGrant, "crossdesk_device", id, req.Username, nil)
+		httpx.OK(w, nil)
+	}
+}
+
+// RevokeCrossDeskUser 撤销普通用户免密连接授权（管理员）。
+func RevokeCrossDeskUser(sc *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := strings.TrimSpace(r.PathValue("id"))
+		username := strings.TrimSpace(r.PathValue("username"))
+		if id == "" || username == "" {
+			httpx.Fail(w, http.StatusBadRequest, "id/username 必填")
+			return
+		}
+		if err := crossdesk.NewSQLStore(sc.Store).RevokeDeviceUser(id, username); err != nil {
+			httpx.FailErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		auditOp(sc, r, audit.ActionCrossDeskUserRevoke, "crossdesk_device", id, username, nil)
+		httpx.OK(w, nil)
 	}
 }
 

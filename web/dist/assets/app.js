@@ -1653,6 +1653,52 @@
       .catch(function (e) { tunnelSetMsg(false, e.message); render(); });
   }
 
+  function tunnelOpenCrossDeskUsers(dev) {
+    var base = '/api/crossdesk/devices/' + encodeURIComponent(dev.device_id) + '/users';
+    api(base).then(function (users) {
+      var list = h('div', { class: 'crossdesk-user-list' }, []);
+      var input = tunnelInput({ placeholder: 'iFlyGo 用户名' });
+      var msg = h('div', { class: 'hint' }, []);
+      function refresh() {
+        api(base).then(function (us) {
+          list.innerHTML = '';
+          (us || []).forEach(function (u) {
+            list.appendChild(h('div', { class: 'tag-picker-values' }, [
+              h('span', {}, [u]),
+              h('button', { class: 'btn sm danger', onclick: function () {
+                api(base + '/' + encodeURIComponent(u), { method: 'DELETE' })
+                  .then(function () { msg.textContent = '已移除 ' + u; refresh(); })
+                  .catch(function (e) { msg.textContent = e.message; });
+              } }, ['移除'])
+            ]));
+          });
+          if (!us || !us.length) { list.appendChild(h('div', { class: 'muted' }, ['暂无授权用户'])); }
+        }).catch(function (e) { msg.textContent = e.message; });
+      }
+      refresh();
+      var add = h('button', { class: 'btn primary', onclick: function () {
+        var u = input.value.trim();
+        if (!u) { msg.textContent = '请输入用户名'; return; }
+        api(base, { method: 'POST', body: JSON.stringify({ username: u }) })
+          .then(function () { input.value = ''; msg.textContent = '已授权 ' + u; refresh(); })
+          .catch(function (e) { msg.textContent = e.message; });
+      } }, ['授权']);
+      var close = h('button', { class: 'btn ghost', type: 'button' }, ['关闭']);
+      var mask = h('div', { class: 'modal-mask', onclick: function (e) { if (e.target === mask) { tunnelCloseModal(mask); } } }, [
+        h('div', { class: 'modal tunnel-modal' }, [
+          h('div', { class: 'modal-head' }, [h('h3', {}, ['设备授权 · ' + dev.device_id]), close]),
+          h('div', { class: 'muted' }, ['被授权用户可在设备列表点「连接」免密打开 Web 客户端。']),
+          list,
+          field('授权用户', input),
+          msg,
+          h('div', { class: 'toolbar' }, [add])
+        ])
+      ]);
+      close.onclick = function () { tunnelCloseModal(mask); };
+      document.body.appendChild(mask);
+    }).catch(function (e) { tunnelSetMsg(false, e.message); render(); });
+  }
+
   function crossdeskDisconnect(tid, uid) {
     api('/api/crossdesk/sessions/disconnect', {
       method: 'POST', body: JSON.stringify({ transmission_id: tid, user_id: uid })
@@ -1737,6 +1783,7 @@
                 h('td', {}, [x.online ? '是' : '否']),
                 h('td', { class: 'tunnel-wrap' }, [x.last_seen || '—']),
                 h('td', {}, [h('div', { class: 'tunnel-actions' }, [
+                  (x.kind === 'desktop' ? h('button', { class: 'btn sm', onclick: function () { tunnelOpenCrossDeskUsers(x); } }, ['授权']) : null),
                   (x.kind === 'desktop' ? h('button', { class: 'btn sm primary', onclick: function () {
                     state.crossdeskConnectDevice = x.device_id;
                     state.crossdeskJoinTicket = '';

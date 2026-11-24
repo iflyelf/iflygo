@@ -37,8 +37,12 @@ type DeviceStore interface {
 	ChangePassword(id, newPassword string) error
 	LoginKey(id string) (string, bool)
 	BindLoginKey(id, publicKey string) error
-	IssueJoinTicket(deviceID string) (token string, expiresAt int64, err error)
-	ConsumeJoinTicket(deviceID, token string) bool
+	IssueJoinTicket(deviceID, createdBy, createdIP string) (token string, expiresAt int64, err error)
+	ConsumeJoinTicket(deviceID, token, usedIP string) bool
+	GrantDeviceUser(deviceID, username, createdBy string) error
+	RevokeDeviceUser(deviceID, username string) error
+	ListDeviceUsers(deviceID string) ([]string, error)
+	UserCanAccess(deviceID, username string) (bool, error)
 }
 
 // SQLStore 基于 iFlyGo 数据库的 CrossDesk 设备库。
@@ -208,7 +212,7 @@ func (s *SQLStore) BindLoginKey(id, publicKey string) error {
 	return nil
 }
 
-func (s *SQLStore) IssueJoinTicket(deviceID string) (string, int64, error) {
+func (s *SQLStore) IssueJoinTicket(deviceID, createdBy, createdIP string) (string, int64, error) {
 	if !persistentDevice(deviceID) {
 		return "", 0, fmt.Errorf("设备不支持连接票据")
 	}
@@ -220,27 +224,64 @@ func (s *SQLStore) IssueJoinTicket(deviceID string) (string, int64, error) {
 	sum := sha256.Sum256([]byte(token))
 	expires := time.Now().Add(60 * time.Second).Unix()
 	_, _ = s.s.DB.Exec(s.s.Rebind(`DELETE FROM crossdesk_join_tickets WHERE expires_at < $1`), time.Now().Unix())
-	_, err := s.s.DB.Exec(s.s.Rebind(`INSERT INTO crossdesk_join_tickets (token_hash,device_id,expires_at,used_at) VALUES ($1,$2,$3,0)`),
-		hex.EncodeToString(sum[:]), deviceID, expires)
+	_, err := s.s.DB.Exec(s.s.Rebind(`INSERT INTO crossdesk_join_tickets
+		(token_hash,device_id,expires_at,used_at,created_by,created_ip,used_ip)
+		VALUES ($1,$2,$3,0,$4,$5,'')`),
+		hex.EncodeToString(sum[:]), deviceID, expires, createdBy, createdIP)
 	if err != nil {
 		return "", 0, err
 	}
 	return token, expires, nil
 }
 
-func (s *SQLStore) ConsumeJoinTicket(deviceID, token string) bool {
+func (s *SQLStore) ConsumeJoinTicket(deviceID, token, usedIP string) bool {
 	if !persistentDevice(deviceID) || len(token) != 64 {
 		return false
 	}
 	sum := sha256.Sum256([]byte(token))
-	res, err := s.s.DB.Exec(s.s.Rebind(`UPDATE crossdesk_join_tickets SET used_at = $1
-		WHERE token_hash = $2 AND device_id = $3 AND used_at = 0 AND expires_at > $4`),
-		time.Now().Unix(), hex.EncodeToString(sum[:]), deviceID, time.Now().Unix())
+	res, err := s.s.DB.Exec(s.s.Rebind(`UPDATE crossdesk_join_tickets SET used_at = $1, used_ip = $2
+		WHERE token_hash = $3 AND device_id = $4 AND used_at = 0 AND expires_at > $5`),
+		time.Now().Unix(), usedIP, hex.EncodeToString(sum[:]), deviceID, time.Now().Unix())
 	if err != nil {
 		return false
 	}
 	n, _ := res.RowsAffected()
 	return n > 0
+}
+
+func (s *SQLStore) GrantDeviceUser(deviceID, username, createdBy string) error {
+	_, err := s.s.DB.Exec(s.s.Rebind(`INSERT INTO crossdesk_device_users (device_id,username,created_by,created_at)
+		VALUES ($1,$2,$3,$4) ON CONFLICT (device_id,username) DO NOTHING`),
+		deviceID, username, createdBy, time.Now().UTC().Format(time.RFC3339))
+	return err
+}
+
+func (s *SQLStore) RevokeDeviceUser(deviceID, username string) error {
+	_, err := s.s.DB.Exec(s.s.Rebind(`DELETE FROM crossdesk_device_users WHERE device_id = $1 AND username = $2`), deviceID, username)
+	return err
+}
+
+func (s *SQLStore) ListDeviceUsers(deviceID string) ([]string, error) {
+	rows, err := s.s.DB.Query(s.s.Rebind(`SELECT username FROM crossdesk_device_users WHERE device_id = $1 ORDER BY username`), deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var u string
+		if err := rows.Scan(&u); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLStore) UserCanAccess(deviceID, username string) (bool, error) {
+	var n int64
+	err := s.s.DB.QueryRow(s.s.Rebind(`SELECT COUNT(*) FROM crossdesk_device_users WHERE device_id = $1 AND username = $2`), deviceID, username).Scan(&n)
+	return n > 0, err
 }
 
 func (s *SQLStore) Stats() (int64, int64, error) {
