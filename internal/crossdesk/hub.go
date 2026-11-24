@@ -2,6 +2,9 @@ package crossdesk
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"log"
 	"net"
@@ -27,6 +30,14 @@ type Hub struct {
 	attempts      map[string]*attemptWindow
 	// passwordResults 记录 change_password 的 request_id -> 新密码，保证重试幂等。
 	passwordResults map[string]string
+	challenges      map[*client]*loginChallenge
+}
+
+type loginChallenge struct {
+	id        string
+	publicKey string
+	nonce     string
+	expires   time.Time
 }
 
 type attemptWindow struct {
@@ -57,6 +68,7 @@ func NewHub(store DeviceStore, turn TurnConfig, enabled func() bool, logger *log
 		store: store, turn: turn, enabled: enabled, log: logger,
 		clients: map[string]*client{}, transmissions: map[string]*transmission{},
 		attempts: map[string]*attemptWindow{}, passwordResults: map[string]string{},
+		challenges: map[*client]*loginChallenge{},
 	}
 }
 
@@ -232,6 +244,11 @@ func (h *Hub) handleLogin(c *client, msg map[string]any) {
 	id, _ := msg["user_id"].(string)
 	id = strings.TrimSpace(id)
 
+	if dk, ok := msg["device_key"].(map[string]any); ok {
+		h.handleKeyLogin(c, msg, dk)
+		return
+	}
+
 	// 重连令牌优先：不依赖密码，令牌本身即凭据。
 	if token, _ := msg["reconnect_token"].(string); token != "" {
 		version, _ := msg["reconnect_version"].(float64)
@@ -256,6 +273,13 @@ func (h *Hub) handleLogin(c *client, msg map[string]any) {
 	if !ok {
 		c.sendJSON(map[string]any{
 			"type": "login", "user_id": "", "status": "fail", "reason": "Authentication failed",
+		})
+		return
+	}
+	if key, exists := h.store.LoginKey(dev.ID); exists && key != "" {
+		c.sendJSON(map[string]any{
+			"type": "login", "user_id": "", "status": "fail",
+			"reason": "Device key authentication required", "error_code": "DEVICE_KEY_REQUIRED",
 		})
 		return
 	}
@@ -286,6 +310,168 @@ func (h *Hub) completeLogin(c *client, id, ret string, extra map[string]any, rec
 		resp[k] = v
 	}
 	c.sendJSON(resp)
+}
+
+func (h *Hub) handleKeyLogin(c *client, msg, dk map[string]any) {
+	version, _ := dk["version"].(float64)
+	if int(version) != 1 {
+		h.keyLoginFail(c, "AUTHENTICATION_FAILED", "Authentication failed")
+		return
+	}
+	publicKey, _ := dk["public_key"].(string)
+	publicKey = strings.ToLower(strings.TrimSpace(publicKey))
+	if !validHex(publicKey, 32) {
+		h.keyLoginFail(c, "AUTHENTICATION_FAILED", "Authentication failed")
+		return
+	}
+	identity, _ := msg["user_id"].(string)
+	identity = strings.TrimSpace(identity)
+	id, password := splitIDPassword(identity)
+	controller := strings.HasPrefix(id, "C-")
+	deviceID := id
+	if controller {
+		deviceID = strings.TrimPrefix(id, "C-")
+	}
+	if len(id) > 128 || strings.ContainsRune(identity, 0) || isTemporaryID(deviceID) || deviceID == "web" || deviceID == "cli" {
+		h.keyLoginFail(c, "AUTHENTICATION_FAILED", "Authentication failed")
+		return
+	}
+
+	signature, _ := dk["signature"].(string)
+	if signature == "" {
+		// 第一阶段：下发随机 nonce 挑战。
+		if password != "" {
+			h.keyLoginFail(c, "AUTHENTICATION_FAILED", "Authentication failed")
+			return
+		}
+		if !h.allowAttempt(c.remote) {
+			h.keyLoginFail(c, "CREDENTIAL_RATE_LIMITED", "Too many authentication attempts")
+			return
+		}
+		nonce, err := newNonce()
+		if err != nil {
+			h.keyLoginFail(c, "AUTHENTICATION_FAILED", "Authentication failed")
+			return
+		}
+		h.mu.Lock()
+		h.challenges[c] = &loginChallenge{id: id, publicKey: publicKey, nonce: nonce, expires: time.Now().Add(10 * time.Second)}
+		h.mu.Unlock()
+		passwordRequired := id != "" && !controller
+		if passwordRequired {
+			if key, exists := h.store.LoginKey(deviceID); exists && key != "" {
+				passwordRequired = false
+			}
+		}
+		c.sendJSON(map[string]any{
+			"type": "login_challenge", "user_id": id, "device_key_version": 1,
+			"nonce": nonce, "password_required": passwordRequired,
+		})
+		return
+	}
+
+	nonce, _ := dk["nonce"].(string)
+	h.mu.Lock()
+	ch := h.challenges[c]
+	delete(h.challenges, c)
+	h.mu.Unlock()
+	if ch == nil || time.Now().After(ch.expires) || ch.id != id || ch.publicKey != publicKey || ch.nonce == "" || ch.nonce != nonce {
+		h.keyLoginFail(c, "AUTHENTICATION_FAILED", "Authentication failed")
+		return
+	}
+	if !verifyDeviceSignature(id, publicKey, nonce, signature) {
+		h.keyLoginFail(c, "AUTHENTICATION_FAILED", "Authentication failed")
+		return
+	}
+
+	if id == "" {
+		// 首次注册：生成设备 ID/密码，并绑定公钥。
+		dev, pwd, err := h.store.Register("desktop")
+		if err != nil {
+			h.keyLoginFail(c, "AUTHENTICATION_FAILED", "Authentication failed")
+			return
+		}
+		if err := h.store.BindLoginKey(dev.ID, publicKey); err != nil {
+			h.keyLoginFail(c, "AUTHENTICATION_FAILED", "Authentication failed")
+			return
+		}
+		h.completeKeyLogin(c, dev.ID, dev.ID+"@"+pwd)
+		return
+	}
+	storedKey, exists := h.store.LoginKey(deviceID)
+	if !exists {
+		h.keyLoginFail(c, "AUTHENTICATION_FAILED", "Authentication failed")
+		return
+	}
+	if storedKey != "" {
+		if storedKey != publicKey || password != "" {
+			h.keyLoginFail(c, "AUTHENTICATION_FAILED", "Authentication failed")
+			return
+		}
+		h.completeKeyLogin(c, id, id)
+		return
+	}
+	// 首次为已有设备绑定公钥：仍要求一次密码验证，且控制器不能绑定。
+	if controller || password == "" {
+		h.keyLoginFail(c, "AUTHENTICATION_FAILED", "Authentication failed")
+		return
+	}
+	if _, ok := h.store.Verify(deviceID, password); !ok {
+		h.keyLoginFail(c, "AUTHENTICATION_FAILED", "Authentication failed")
+		return
+	}
+	if err := h.store.BindLoginKey(deviceID, publicKey); err != nil {
+		h.keyLoginFail(c, "AUTHENTICATION_FAILED", "Authentication failed")
+		return
+	}
+	h.completeKeyLogin(c, id, id)
+}
+
+func (h *Hub) completeKeyLogin(c *client, id, ret string) {
+	c.userID = id
+	h.bind(c)
+	_ = h.store.MarkOnline(id, true)
+	resp := map[string]any{
+		"type": "login", "user_id": ret, "status": "success", "device_key_version": 1,
+	}
+	if t := h.turn.turnFor(id); t != nil {
+		resp["turn"] = t
+	}
+	c.sendJSON(resp)
+}
+
+func (h *Hub) keyLoginFail(c *client, code, reason string) {
+	c.sendJSON(map[string]any{
+		"type": "login", "user_id": "", "status": "fail", "reason": reason, "error_code": code,
+	})
+}
+
+func validHex(s string, bytes int) bool {
+	if len(s) != bytes*2 {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
+}
+
+func newNonce() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+func verifyDeviceSignature(id, publicKey, nonce, signature string) bool {
+	pub, err := hex.DecodeString(publicKey)
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		return false
+	}
+	sig, err := hex.DecodeString(signature)
+	if err != nil || len(sig) != ed25519.SignatureSize {
+		return false
+	}
+	transcript, _ := json.Marshal([]string{"crossdesk.device-login.v1", id, publicKey, nonce})
+	return ed25519.Verify(ed25519.PublicKey(pub), transcript, sig)
 }
 
 func (h *Hub) resolveLogin(raw string) (Device, string, string, bool) {

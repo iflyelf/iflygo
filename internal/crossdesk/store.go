@@ -34,6 +34,8 @@ type DeviceStore interface {
 	VerifyReconnect(id, token string) (expiresAt int64, ok bool)
 	RevokeReconnect(id string) error
 	ChangePassword(id, newPassword string) error
+	LoginKey(id string) (string, bool)
+	BindLoginKey(id, publicKey string) error
 }
 
 // SQLStore 基于 iFlyGo 数据库的 CrossDesk 设备库。
@@ -179,6 +181,27 @@ func (s *SQLStore) ChangePassword(id, newPassword string) error {
 
 func persistentDevice(id string) bool {
 	return id != "" && !isTemporaryID(id) && !strings.ContainsAny(id, "@\x00") && len(id) <= 128
+}
+
+func (s *SQLStore) LoginKey(id string) (string, bool) {
+	var key string
+	err := s.s.DB.QueryRow(s.s.Rebind(`SELECT COALESCE(login_public_key,'') FROM crossdesk_devices WHERE device_id = $1`), id).Scan(&key)
+	if err != nil {
+		return "", false
+	}
+	return key, true
+}
+
+func (s *SQLStore) BindLoginKey(id, publicKey string) error {
+	res, err := s.s.DB.Exec(s.s.Rebind(`UPDATE crossdesk_devices SET login_public_key = $1 WHERE device_id = $2 AND COALESCE(login_public_key,'') = ''`), publicKey, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("设备已绑定其他登录公钥")
+	}
+	return nil
 }
 
 func (s *SQLStore) Stats() (int64, int64, error) {

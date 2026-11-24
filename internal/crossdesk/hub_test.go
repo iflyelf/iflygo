@@ -2,6 +2,9 @@ package crossdesk
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -19,10 +22,11 @@ type memStore struct {
 	passwords map[string]string
 	kinds     map[string]string
 	online    map[string]bool
+	loginKeys map[string]string
 }
 
 func newMemStore() *memStore {
-	return &memStore{passwords: map[string]string{}, kinds: map[string]string{}, online: map[string]bool{}}
+	return &memStore{passwords: map[string]string{}, kinds: map[string]string{}, online: map[string]bool{}, loginKeys: map[string]string{}}
 }
 
 func (m *memStore) Register(kind string) (Device, string, error) {
@@ -82,6 +86,22 @@ func (m *memStore) ChangePassword(id, newPassword string) error {
 	m.mu.Lock()
 	m.passwords[id] = newPassword
 	m.mu.Unlock()
+	return nil
+}
+
+func (m *memStore) LoginKey(id string) (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.loginKeys[id], true
+}
+
+func (m *memStore) BindLoginKey(id, publicKey string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.loginKeys[id] != "" && m.loginKeys[id] != publicKey {
+		return fmt.Errorf("已绑定其他公钥")
+	}
+	m.loginKeys[id] = publicKey
 	return nil
 }
 
@@ -279,5 +299,84 @@ func TestReconnectAndChangePassword(t *testing.T) {
 	})
 	if ch = re.read(t); ch["status"] != "fail" {
 		t.Fatalf("复用 request_id 应失败: %v", ch)
+	}
+}
+
+func TestDeviceKeyLogin(t *testing.T) {
+	store := newMemStore()
+	h := NewHub(store, TurnConfig{}, func() bool { return true }, nil)
+	srv := httptest.NewServer(http.HandlerFunc(h.ServeWS))
+	defer srv.Close()
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey := hex.EncodeToString(pub)
+
+	c := dial(t, wsURL)
+	c.send(t, map[string]any{
+		"type": "login", "user_id": "",
+		"device_key": map[string]any{"version": 1, "public_key": publicKey},
+	})
+	challenge := c.read(t)
+	if challenge["type"] != "login_challenge" {
+		t.Fatalf("未收到 login_challenge: %v", challenge)
+	}
+	nonce, _ := challenge["nonce"].(string)
+
+	sign := func(id, nonce string) string {
+		transcript, _ := json.Marshal([]string{"crossdesk.device-login.v1", id, publicKey, nonce})
+		return hex.EncodeToString(ed25519.Sign(priv, transcript))
+	}
+	c.send(t, map[string]any{
+		"type": "login", "user_id": "",
+		"device_key": map[string]any{
+			"version": 1, "public_key": publicKey, "nonce": nonce, "signature": sign("", nonce),
+		},
+	})
+	login := c.read(t)
+	if login["status"] != "success" || login["device_key_version"] != float64(1) {
+		t.Fatalf("设备密钥注册失败: %v", login)
+	}
+	fullID, _ := login["user_id"].(string)
+	parts := strings.SplitN(fullID, "@", 2)
+	if len(parts) != 2 {
+		t.Fatalf("注册响应缺少密码: %v", fullID)
+	}
+	id := parts[0]
+	_ = c.Close(websocket.StatusNormalClosure, "")
+
+	// 重新连接：设备密钥登录。
+	c2 := dial(t, wsURL)
+	defer c2.Close(websocket.StatusNormalClosure, "")
+	c2.send(t, map[string]any{
+		"type": "login", "user_id": id,
+		"device_key": map[string]any{"version": 1, "public_key": publicKey},
+	})
+	challenge = c2.read(t)
+	if challenge["type"] != "login_challenge" || challenge["password_required"] != false {
+		t.Fatalf("设备密钥重连 challenge 不正确: %v", challenge)
+	}
+	nonce, _ = challenge["nonce"].(string)
+	c2.send(t, map[string]any{
+		"type": "login", "user_id": id,
+		"device_key": map[string]any{
+			"version": 1, "public_key": publicKey, "nonce": nonce, "signature": sign(id, nonce),
+		},
+	})
+	login = c2.read(t)
+	if login["status"] != "success" {
+		t.Fatalf("设备密钥登录失败: %v", login)
+	}
+
+	// 已绑定设备密钥后，普通密码登录应被拒绝。
+	c3 := dial(t, wsURL)
+	defer c3.Close(websocket.StatusNormalClosure, "")
+	c3.send(t, map[string]any{"type": "login", "user_id": fullID})
+	fail := c3.read(t)
+	if fail["error_code"] != "DEVICE_KEY_REQUIRED" {
+		t.Fatalf("密码登录应要求设备密钥: %v", fail)
 	}
 }

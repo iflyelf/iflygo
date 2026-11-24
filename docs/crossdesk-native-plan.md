@@ -101,6 +101,7 @@ CrossDesk 不是单一服务，而是完整的跨平台远控产品：
   - 重连令牌（30 天）与 `reconnect_token` 登录；
   - `change_password`（6 位、request_id 幂等）；
   - `disconnect_peer`、`revoke_reconnect_credential`；
+  - Ed25519 设备密钥登录：`login_challenge` + 签名校验，绑定后禁止密码登录；
   - TURN 临时凭据（HMAC-SHA1，兼容 Coturn REST API）；
   - `/crossdesk/stats` 统计；
   - Hub 并发/连接替换/离线清理测试。
@@ -110,7 +111,7 @@ CrossDesk 不是单一服务，而是完整的跨平台远控产品：
 
 ### 尚未完成（后续阶段）
 
-- CrossDesk 设备密钥登录（Ed25519/配对）；
+- 官方客户端真实兼容性回归；
 - 完整管理后台（设备/会话查询、断开、清理）；
 - 官方客户端兼容性回归（需真机/客户端联调）；
 - Web 客户端内置与 SSO；
