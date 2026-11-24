@@ -211,6 +211,30 @@ test('远程桌面：CrossDesk 集成页', async ({ page }) => {
   await expect(page.locator('.crossdesk-frame')).toHaveAttribute('src', '/crossdesk/web/');
 });
 
+test('CrossDesk：内置 Web 客户端连接原生信令', async ({ page }) => {
+  autoAccept(page);
+  await login(page);
+  await page.evaluate(async () => {
+    await fetch('/api/settings', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        'crossdesk.enabled': 'true',
+        'crossdesk.native_signaling': 'true',
+      }),
+    });
+  });
+  await page.goto('/crossdesk/web/');
+  await expect(page.locator('#connection-form')).toBeVisible();
+  await expect.poll(async () => {
+    return page.evaluate(async () => {
+      const s = await fetch('/crossdesk/stats').then(r => r.json());
+      return Number(s.connections || 0);
+    });
+  }, { timeout: 15000 }).toBeGreaterThan(0);
+  const stats = await page.evaluate(() => fetch('/crossdesk/stats').then(r => r.json()));
+  expect(Number(stats.devices || 0)).toBeGreaterThan(0);
+});
+
 test('隧道管理：五个子页可切换', async ({ page }) => {
   for (const section of ['客户端', '参数下发', '网络', '服务端节点', '路由', '边缘服务']) {
     await openTunnel(page, section);

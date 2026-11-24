@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"math/big"
 	"strconv"
 	"strings"
@@ -72,12 +73,13 @@ func (s *SQLStore) Register(kind string) (Device, string, error) {
 			hash = string(b)
 		}
 		_, err = s.s.DB.Exec(s.s.Rebind(`INSERT INTO crossdesk_devices
-			(device_id,password_hash,kind,online,last_seen,created_at) VALUES ($1,$2,$3,0,$4,$4)`),
-			id, hash, kind, time.Now().UTC().Format(time.RFC3339))
+			(device_id,password_hash,kind,online,last_seen,created_at) VALUES ($1,$2,$3,0,$4,$5)`),
+			id, hash, kind, time.Now().UTC().Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339))
 		if err == nil {
 			return Device{ID: id, Kind: kind}, password, nil
 		}
 		if !isUniqueViolation(err) {
+			log.Printf("⚠️ CrossDesk 设备注册失败: %v", err)
 			return Device{}, "", err
 		}
 	}
