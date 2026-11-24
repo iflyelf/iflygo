@@ -3,7 +3,10 @@ package crossdesk
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"math/big"
 	"strconv"
@@ -27,6 +30,10 @@ type DeviceStore interface {
 	Verify(id, password string) (Device, bool)
 	MarkOnline(id string, online bool) error
 	Stats() (total, online int64, err error)
+	IssueReconnect(id string) (token string, expiresAt int64, err error)
+	VerifyReconnect(id, token string) (expiresAt int64, ok bool)
+	RevokeReconnect(id string) error
+	ChangePassword(id, newPassword string) error
 }
 
 // SQLStore 基于 iFlyGo 数据库的 CrossDesk 设备库。
@@ -105,6 +112,73 @@ func (s *SQLStore) MarkOnline(id string, online bool) error {
 	_, err := s.s.DB.Exec(s.s.Rebind(`UPDATE crossdesk_devices SET online = $1, last_seen = $2 WHERE device_id = $3`),
 		v, time.Now().UTC().Format(time.RFC3339), id)
 	return err
+}
+
+func (s *SQLStore) IssueReconnect(id string) (string, int64, error) {
+	if !persistentDevice(id) {
+		return "", 0, fmt.Errorf("设备不支持重连凭据")
+	}
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", 0, err
+	}
+	token := hex.EncodeToString(raw)
+	sum := sha256.Sum256([]byte(token))
+	expires := time.Now().Add(30 * 24 * time.Hour).Unix()
+	_, err := s.s.DB.Exec(s.s.Rebind(`INSERT INTO crossdesk_reconnect_credentials
+		(device_id,token_hash,expires_at) VALUES ($1,$2,$3)
+		ON CONFLICT (device_id) DO UPDATE SET token_hash=EXCLUDED.token_hash, expires_at=EXCLUDED.expires_at`),
+		id, hex.EncodeToString(sum[:]), expires)
+	if err != nil {
+		return "", 0, err
+	}
+	return token, expires, nil
+}
+
+func (s *SQLStore) VerifyReconnect(id, token string) (int64, bool) {
+	if !persistentDevice(id) || len(token) != 64 {
+		return 0, false
+	}
+	var hash string
+	var expires int64
+	err := s.s.DB.QueryRow(s.s.Rebind(`SELECT token_hash, expires_at FROM crossdesk_reconnect_credentials WHERE device_id = $1`), id).Scan(&hash, &expires)
+	if err != nil || expires <= time.Now().Unix() {
+		return 0, false
+	}
+	sum := sha256.Sum256([]byte(token))
+	got := hex.EncodeToString(sum[:])
+	if subtle.ConstantTimeCompare([]byte(got), []byte(hash)) != 1 {
+		return 0, false
+	}
+	return expires, true
+}
+
+func (s *SQLStore) RevokeReconnect(id string) error {
+	_, err := s.s.DB.Exec(s.s.Rebind(`DELETE FROM crossdesk_reconnect_credentials WHERE device_id = $1`), id)
+	return err
+}
+
+func (s *SQLStore) ChangePassword(id, newPassword string) error {
+	if !persistentDevice(id) || len(newPassword) != 6 {
+		return fmt.Errorf("密码必须为 6 位")
+	}
+	b, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	res, err := s.s.DB.Exec(s.s.Rebind(`UPDATE crossdesk_devices SET password_hash = $1 WHERE device_id = $2`), string(b), id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("设备不存在")
+	}
+	return nil
+}
+
+func persistentDevice(id string) bool {
+	return id != "" && !isTemporaryID(id) && !strings.ContainsAny(id, "@\x00") && len(id) <= 128
 }
 
 func (s *SQLStore) Stats() (int64, int64, error) {

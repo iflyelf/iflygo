@@ -3,6 +3,7 @@ package crossdesk
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -60,6 +61,26 @@ func (m *memStore) Verify(id, password string) (Device, bool) {
 func (m *memStore) MarkOnline(id string, online bool) error {
 	m.mu.Lock()
 	m.online[id] = online
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *memStore) IssueReconnect(id string) (string, int64, error) {
+	return strings.Repeat("a", 64), time.Now().Add(time.Hour).Unix(), nil
+}
+
+func (m *memStore) VerifyReconnect(id, token string) (int64, bool) {
+	return time.Now().Add(time.Hour).Unix(), token == strings.Repeat("a", 64)
+}
+
+func (m *memStore) RevokeReconnect(id string) error { return nil }
+
+func (m *memStore) ChangePassword(id, newPassword string) error {
+	if len(newPassword) != 6 {
+		return fmt.Errorf("密码必须为 6 位")
+	}
+	m.mu.Lock()
+	m.passwords[id] = newPassword
 	m.mu.Unlock()
 	return nil
 }
@@ -201,4 +222,62 @@ func (c *wsClient) read(t *testing.T) map[string]any {
 		t.Fatalf("JSON 解析失败: %v", err)
 	}
 	return m
+}
+
+func TestReconnectAndChangePassword(t *testing.T) {
+	store := newMemStore()
+	h := NewHub(store, TurnConfig{}, func() bool { return true }, nil)
+	srv := httptest.NewServer(http.HandlerFunc(h.ServeWS))
+	defer srv.Close()
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+
+	host := dial(t, wsURL)
+	host.send(t, map[string]any{"type": "login", "user_id": "", "reconnect_version": 1})
+	login := host.read(t)
+	if login["status"] != "success" {
+		t.Fatalf("注册登录失败: %v", login)
+	}
+	fullID, _ := login["user_id"].(string)
+	parts := strings.SplitN(fullID, "@", 2)
+	if len(parts) != 2 {
+		t.Fatalf("登录响应缺少密码: %v", fullID)
+	}
+	id := parts[0]
+	token, _ := login["reconnect_token"].(string)
+	if token == "" {
+		t.Fatalf("登录响应缺少 reconnect_token: %v", login)
+	}
+	_ = host.Close(websocket.StatusNormalClosure, "")
+
+	re := dial(t, wsURL)
+	defer re.Close(websocket.StatusNormalClosure, "")
+	re.send(t, map[string]any{
+		"type": "login", "user_id": id, "reconnect_token": token, "reconnect_version": 1,
+	})
+	login = re.read(t)
+	if login["status"] != "success" || login["reconnected"] != true {
+		t.Fatalf("重连失败: %v", login)
+	}
+
+	re.send(t, map[string]any{
+		"type": "change_password", "request_id": "req-1", "new_password": "newpwd",
+	})
+	ch := re.read(t)
+	if ch["status"] != "success" {
+		t.Fatalf("修改密码失败: %v", ch)
+	}
+	// 同一 request_id + 同一密码幂等成功。
+	re.send(t, map[string]any{
+		"type": "change_password", "request_id": "req-1", "new_password": "newpwd",
+	})
+	if ch = re.read(t); ch["status"] != "success" {
+		t.Fatalf("幂等修改密码失败: %v", ch)
+	}
+	// 同一 request_id + 不同密码应拒绝。
+	re.send(t, map[string]any{
+		"type": "change_password", "request_id": "req-1", "new_password": "other1",
+	})
+	if ch = re.read(t); ch["status"] != "fail" {
+		t.Fatalf("复用 request_id 应失败: %v", ch)
+	}
 }

@@ -25,6 +25,8 @@ type Hub struct {
 	clients       map[string]*client
 	transmissions map[string]*transmission
 	attempts      map[string]*attemptWindow
+	// passwordResults 记录 change_password 的 request_id -> 新密码，保证重试幂等。
+	passwordResults map[string]string
 }
 
 type attemptWindow struct {
@@ -54,7 +56,7 @@ func NewHub(store DeviceStore, turn TurnConfig, enabled func() bool, logger *log
 	return &Hub{
 		store: store, turn: turn, enabled: enabled, log: logger,
 		clients: map[string]*client{}, transmissions: map[string]*transmission{},
-		attempts: map[string]*attemptWindow{},
+		attempts: map[string]*attemptWindow{}, passwordResults: map[string]string{},
 	}
 }
 
@@ -207,10 +209,14 @@ func (h *Hub) dispatch(c *client, msg map[string]any) {
 		h.handlePresence(c, msg)
 	case "session_report":
 		// 会话状态由客户端自行维护；Phase 1 不持久化。
-	case "client_info", "disconnect_peer":
-		// 管理类消息在 Phase 1 暂不处理。
+	case "client_info":
+		// 客户端版本/平台仅用于统计，Phase 1 不持久化。
+	case "disconnect_peer":
+		h.handleDisconnectPeer(c, msg)
+	case "revoke_reconnect_credential":
+		h.handleRevokeReconnect(c)
 	case "change_password":
-		c.sendJSON(map[string]any{"type": "change_password", "status": "fail", "reason": "Phase 1 暂不支持修改密码"})
+		h.handleChangePassword(c, msg)
 	default:
 		// 未知类型保持兼容：忽略而不是断开连接。
 	}
@@ -225,22 +231,61 @@ func (h *Hub) handleLogin(c *client, msg map[string]any) {
 	}
 	id, _ := msg["user_id"].(string)
 	id = strings.TrimSpace(id)
-	dev, ret, pwd, ok := h.resolveLogin(id)
+
+	// 重连令牌优先：不依赖密码，令牌本身即凭据。
+	if token, _ := msg["reconnect_token"].(string); token != "" {
+		version, _ := msg["reconnect_version"].(float64)
+		rawID := id
+		if i := strings.Index(rawID, "@"); i >= 0 {
+			rawID = rawID[:i]
+		}
+		if int(version) == 1 {
+			if expires, ok := h.store.VerifyReconnect(rawID, token); ok {
+				h.completeLogin(c, rawID, rawID, nil, true, expires)
+				return
+			}
+			c.sendJSON(map[string]any{
+				"type": "login", "user_id": "", "status": "fail",
+				"reason": "Reconnect expired or invalid", "reconnect_rejected": true,
+			})
+			return
+		}
+	}
+
+	dev, ret, _, ok := h.resolveLogin(id)
 	if !ok {
 		c.sendJSON(map[string]any{
 			"type": "login", "user_id": "", "status": "fail", "reason": "Authentication failed",
 		})
 		return
 	}
-	c.userID = dev.ID
+	// 客户端请求重连令牌时，成功登录后签发（临时控制器不签发）。
+	var reconnect map[string]any
+	if v, _ := msg["reconnect_version"].(float64); int(v) == 1 && persistentDevice(dev.ID) {
+		if token, expires, err := h.store.IssueReconnect(dev.ID); err == nil {
+			reconnect = map[string]any{"reconnect_version": 1, "reconnect_token": token, "reconnect_expires_at": expires}
+		}
+	}
+	h.completeLogin(c, dev.ID, ret, reconnect, false, 0)
+}
+
+func (h *Hub) completeLogin(c *client, id, ret string, extra map[string]any, reconnected bool, expires int64) {
+	c.userID = id
 	h.bind(c)
-	_ = h.store.MarkOnline(dev.ID, true)
+	_ = h.store.MarkOnline(id, true)
 	resp := map[string]any{"type": "login", "user_id": ret, "status": "success"}
-	if t := h.turn.turnFor(dev.ID); t != nil {
+	if t := h.turn.turnFor(id); t != nil {
 		resp["turn"] = t
 	}
+	if reconnected {
+		resp["reconnected"] = true
+		resp["reconnect_version"] = 1
+		resp["reconnect_expires_at"] = expires
+	}
+	for k, v := range extra {
+		resp[k] = v
+	}
 	c.sendJSON(resp)
-	_ = pwd
 }
 
 func (h *Hub) resolveLogin(raw string) (Device, string, string, bool) {
@@ -423,9 +468,24 @@ func (h *Hub) relay(c *client, msg map[string]any, kind string) {
 
 func (h *Hub) handleLeave(c *client, msg map[string]any) {
 	tid, _ := msg["transmission_id"].(string)
+	userID, _ := msg["user_id"].(string)
+	if userID == "" || userID != c.userID {
+		return
+	}
 	h.mu.Lock()
 	tr := h.transmissions[tid]
 	if tr == nil {
+		h.mu.Unlock()
+		return
+	}
+	if tr.host == c.userID {
+		// host 离开：通知所有 guest 并释放传输。
+		for g := range tr.guests {
+			if gc := h.clients[g]; gc != nil {
+				gc.sendJSON(map[string]any{"type": "user_leave_transmission", "transmission_id": tid, "user_id": c.userID})
+			}
+		}
+		delete(h.transmissions, tid)
 		h.mu.Unlock()
 		return
 	}
@@ -435,6 +495,97 @@ func (h *Hub) handleLeave(c *client, msg map[string]any) {
 	if host != nil {
 		host.sendJSON(map[string]any{"type": "user_leave_transmission", "transmission_id": tid, "user_id": c.userID})
 	}
+}
+
+func (h *Hub) handleDisconnectPeer(c *client, msg map[string]any) {
+	tid, _ := msg["transmission_id"].(string)
+	remote, _ := msg["remote_user_id"].(string)
+	h.mu.Lock()
+	tr := h.transmissions[tid]
+	if tr == nil || tr.host != c.userID || !tr.guests[remote] {
+		h.mu.Unlock()
+		return
+	}
+	delete(tr.guests, remote)
+	guest := h.clients[remote]
+	h.mu.Unlock()
+	if guest != nil {
+		guest.sendJSON(map[string]any{"type": "user_leave_transmission", "transmission_id": tid, "user_id": c.userID})
+	}
+}
+
+func (h *Hub) handleRevokeReconnect(c *client) {
+	if c.userID == "" {
+		c.sendJSON(map[string]any{"type": "revoke_reconnect_credential", "user_id": "", "status": "fail"})
+		return
+	}
+	if err := h.store.RevokeReconnect(c.userID); err != nil {
+		c.sendJSON(map[string]any{"type": "revoke_reconnect_credential", "user_id": c.userID, "status": "fail", "reason": "Unable to revoke reconnect credential"})
+		return
+	}
+	c.sendJSON(map[string]any{"type": "revoke_reconnect_credential", "user_id": c.userID, "status": "success"})
+}
+
+func (h *Hub) handleChangePassword(c *client, msg map[string]any) {
+	requestID, _ := msg["request_id"].(string)
+	newPassword, _ := msg["new_password"].(string)
+	out := map[string]any{"type": "change_password", "user_id": c.userID, "request_id": requestID}
+	if strings.TrimSpace(requestID) == "" || len(requestID) > 128 || strings.ContainsRune(requestID, 0) {
+		out["status"] = "fail"
+		out["reason"] = "Missing or invalid request ID"
+		c.sendJSON(out)
+		return
+	}
+	if c.userID == "" {
+		out["status"] = "fail"
+		out["reason"] = "Not authenticated"
+		c.sendJSON(out)
+		return
+	}
+	if isTemporaryID(c.userID) || strings.HasPrefix(c.userID, "C-") {
+		out["status"] = "fail"
+		out["reason"] = "Password changes are not allowed for this identity"
+		c.sendJSON(out)
+		return
+	}
+	if len(newPassword) != 6 {
+		out["status"] = "fail"
+		out["reason"] = "Password must contain exactly 6 characters"
+		c.sendJSON(out)
+		return
+	}
+	key := c.userID + "\n" + requestID
+	h.mu.Lock()
+	prev, exists := h.passwordResults[key]
+	if len(h.passwordResults) > 4096 && !exists {
+		for k := range h.passwordResults {
+			delete(h.passwordResults, k)
+			break
+		}
+	}
+	h.mu.Unlock()
+	if exists {
+		if prev == newPassword {
+			out["status"] = "success"
+		} else {
+			out["status"] = "fail"
+			out["reason"] = "Request ID was already used"
+		}
+		c.sendJSON(out)
+		return
+	}
+	if err := h.store.ChangePassword(c.userID, newPassword); err != nil {
+		out["status"] = "fail"
+		out["reason"] = "Failed to update password"
+		c.sendJSON(out)
+		return
+	}
+	_ = h.store.RevokeReconnect(c.userID)
+	h.mu.Lock()
+	h.passwordResults[key] = newPassword
+	h.mu.Unlock()
+	out["status"] = "success"
+	c.sendJSON(out)
 }
 
 func (h *Hub) handleTurn(c *client) {
