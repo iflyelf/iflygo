@@ -612,6 +612,11 @@ docker compose up -d
 > 不链接进 iFlyGo 的 MIT 代码。详细部署、端口、证书与客户端配置见
 > `deploy/docker/crossdesk/README.md`。
 >
+> **Phase 1 原生 Go 信令已实现**：开启「使用 iFlyGo 原生 Go 信令」后，
+> CrossDesk 客户端可连接 `wss://<iflygo-host>/crossdesk/signal`，设备 ID/密码、
+> Join/SDP/ICE 转发、TURN 临时凭据由 iFlyGo 管理。当前阶段尚未覆盖设备密钥登录、
+> 重连令牌、修改密码与完整管理后台；这些在后续阶段实现。
+>
 > 若要把 CrossDesk 全部能力原生并入 iFlyGo，实施阶段、许可证与验收标准见
 > `docs/crossdesk-native-plan.md`。
 

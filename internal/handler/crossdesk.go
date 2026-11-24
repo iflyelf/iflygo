@@ -9,9 +9,39 @@ import (
 	"strings"
 	"time"
 
+	"github.com/iflyelf/iflygo/internal/config"
 	"github.com/iflyelf/iflygo/internal/pkg/httpx"
 	"github.com/iflyelf/iflygo/internal/svc"
 )
+
+func crossDeskSignalURL(sc *svc.ServiceContext, r *http.Request, cfg config.CrossDeskConfig) string {
+	path := strings.TrimSpace(cfg.SignalPath)
+	if path == "" {
+		path = "/crossdesk/signal"
+	}
+	base := strings.TrimRight(strings.TrimSpace(sc.ConfigSnapshot().Server.ExternalURL), "/")
+	if base == "" {
+		scheme := "http"
+		if r != nil && r.TLS != nil {
+			scheme = "https"
+		}
+		host := ""
+		if r != nil {
+			host = r.Host
+		}
+		if host == "" {
+			return path
+		}
+		base = scheme + "://" + host
+	}
+	if strings.HasPrefix(base, "https://") {
+		return "wss://" + strings.TrimPrefix(base, "https://") + path
+	}
+	if strings.HasPrefix(base, "http://") {
+		return "ws://" + strings.TrimPrefix(base, "http://") + path
+	}
+	return base + path
+}
 
 // CrossDeskStatus 返回 CrossDesk 集成状态与 Server /stats 探活结果。
 func CrossDeskStatus(sc *svc.ServiceContext) http.HandlerFunc {
@@ -20,7 +50,14 @@ func CrossDeskStatus(sc *svc.ServiceContext) http.HandlerFunc {
 		resp := map[string]any{
 			"enabled": cfg.Enabled, "server_url": cfg.ServerURL,
 			"web_url": cfg.WebURL, "download_url": cfg.DownloadURL,
-			"reachable": false,
+			"native_signaling": cfg.NativeSignaling, "signal_path": cfg.SignalPath,
+			"signal_url": crossDeskSignalURL(sc, r, cfg), "reachable": false,
+		}
+		if cfg.Enabled && cfg.NativeSignaling {
+			// 原生信令不依赖外部 CrossDesk Server，直接返回内置统计。
+			resp["reachable"] = true
+			httpx.OK(w, resp)
+			return
 		}
 		if !cfg.Enabled || strings.TrimSpace(cfg.ServerURL) == "" {
 			httpx.OK(w, resp)

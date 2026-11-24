@@ -20,6 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/iflyelf/iflygo/internal/config"
+	"github.com/iflyelf/iflygo/internal/crossdesk"
 	"github.com/iflyelf/iflygo/internal/ddnsto"
 	"github.com/iflyelf/iflygo/internal/handler"
 	"github.com/iflyelf/iflygo/internal/liaison"
@@ -106,6 +107,8 @@ func main() {
 	limiters := registerRoutes(mux, sc)
 	// 隧道服务（iflygo）路由 + 数据面角色
 	registerTunnelRoutes(mux, sc)
+	// CrossDesk 原生信令（可选，与外部 CrossDesk Server 二选一）
+	registerCrossDeskRoutes(mux, sc)
 	// 远程访问（DDNSTO）与远程管理套件（Liaison）
 	if sc.Liaison != nil {
 		reqAuth := func(h http.HandlerFunc) http.Handler {
@@ -469,6 +472,26 @@ func registerRoutes(mux *http.ServeMux, sc *svc.ServiceContext) []middleware.Sto
 	}
 	limiters := []middleware.Stopper{registerLimiter, loginLimiter, enrollLimiter}
 	return limiters
+}
+
+// registerCrossDeskRoutes 注册原生 CrossDesk 信令与统计端点。
+// 路由始终注册，是否可用由页面设置实时控制，避免改开关必须重启。
+func registerCrossDeskRoutes(mux *http.ServeMux, sc *svc.ServiceContext) {
+	cfg := sc.ConfigSnapshot().CrossDesk
+	path := strings.TrimSpace(cfg.SignalPath)
+	if path == "" {
+		path = "/crossdesk/signal"
+	}
+	turn := crossdesk.TurnConfigFromURL(cfg.ServerURL, cfg.TurnSecret, cfg.TurnPort, cfg.TurnTTL)
+	if strings.TrimSpace(cfg.TurnHost) != "" {
+		turn.Host = strings.TrimSpace(cfg.TurnHost)
+	}
+	hub := crossdesk.NewHub(crossdesk.NewSQLStore(sc.Store), turn, func() bool {
+		c := sc.ConfigSnapshot().CrossDesk
+		return c.Enabled && c.NativeSignaling
+	}, log.Default())
+	mux.HandleFunc(path, hub.ServeWS)
+	mux.HandleFunc("/crossdesk/stats", hub.ServeStats)
 }
 
 // registerTunnelRoutes 注册隧道服务（iflygo）相关路由，与 upgrade_mgr 业务共存。

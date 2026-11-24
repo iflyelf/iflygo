@@ -88,13 +88,37 @@ CrossDesk 不是单一服务，而是完整的跨平台远控产品：
 - **许可证**：原生 Agent/客户端独立分发，iFlyGo 保持 MIT；
   或整体采用 GPL/LGPL 兼容许可。
 
-## 5. 近期可交付
+## 5. 当前进度
 
-1. `docs` + 设计评审；
-2. Phase 1 信令协议抓包/兼容性测试；
-3. Go 信令 PoC（登录/Join/SDP/ICE/TURN）；
-4. Web 客户端内置；
-5. 再进入媒体层。
+### 已完成（Phase 1 初始）
+
+- `internal/crossdesk` 原生 Go 信令包：
+  - 设备 ID / 六位密码注册与校验；
+  - `web` / `cli` 临时控制器身份；
+  - `login`、`ping/pong`、`join_transmission`、`user_leave_transmission`；
+  - `offer` / `answer` / `new_candidate` / `new_candidate_mid` 转发；
+  - `query_user_id_list`、`turn_credentials`、`recent_connections_presence`；
+  - TURN 临时凭据（HMAC-SHA1，兼容 Coturn REST API）；
+  - `/crossdesk/stats` 统计；
+  - Hub 并发/连接替换/离线清理测试。
+- 迁移 `0021_crossdesk_devices`（PG/SQLite）。
+- 设置项：原生信令开关、信令路径、TURN 主机/端口/密钥/有效期。
+- 路由：`/crossdesk/signal`（WSS）、`/crossdesk/stats`。
+
+### 尚未完成（后续阶段）
+
+- CrossDesk 设备密钥登录、重连令牌、修改密码；
+- 完整管理后台（设备/会话查询、断开、清理）；
+- 官方客户端兼容性回归（需真机/客户端联调）；
+- Web 客户端内置与 SSO；
+- 桌面采集/媒体/文件传输/DeskHub/移动端/CLI/MCP。
+
+## 6. 近期可交付
+
+1. 用官方桌面/Web 客户端做 Phase 1 协议兼容性回归；
+2. 补齐设备密钥/重连/改密；
+3. 内置 Web 客户端；
+4. 再进入媒体层。
 
 > 在 Phase 3 完成前，CrossDesk 官方客户端仍负责桌面采集与媒体，
 > iFlyGo 负责信令、设备、入口、状态与管理。

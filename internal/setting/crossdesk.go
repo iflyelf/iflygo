@@ -3,6 +3,7 @@ package setting
 import (
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/iflyelf/iflygo/internal/config"
@@ -52,5 +53,41 @@ func crossdeskRegistry() []Item {
 			Note: "生产环境应导入服务端根证书，不建议开启。",
 			Get:  func(c *config.Config) string { return b2s(c.CrossDesk.InsecureTLS) },
 			Set:  func(c *config.Config, v string) { c.CrossDesk.InsecureTLS = v == "true" }},
+		{Key: "crossdesk.native_signaling", Group: "远程桌面（CrossDesk）",
+			Label: "使用 iFlyGo 原生 Go 信令服务", Type: "bool",
+			Note: "开启后 WSS 由 iFlyGo 提供，不再依赖外部 CrossDesk Server；设备 ID/密码与 TURN 由 iFlyGo 管理。",
+			Get:  func(c *config.Config) string { return b2s(c.CrossDesk.NativeSignaling) },
+			Set:  func(c *config.Config, v string) { c.CrossDesk.NativeSignaling = v == "true" }},
+		{Key: "crossdesk.signal_path", Group: "远程桌面（CrossDesk）",
+			Label: "原生信令 WSS 路径（默认 /crossdesk/signal）", Type: "string", Restart: true,
+			Note: "CrossDesk 客户端的自托管地址需包含该路径；反向代理要支持 WebSocket 升级。修改后需重启服务端。",
+			Get:  func(c *config.Config) string { return c.CrossDesk.SignalPath },
+			Set:  func(c *config.Config, v string) { c.CrossDesk.SignalPath = strings.TrimSpace(v) },
+			Validate: func(v string) error {
+				v = strings.TrimSpace(v)
+				if first := v; first == "" || first[0] != '/' || strings.ContainsAny(v, " \t\r\n") {
+					return fmt.Errorf("信令路径必须以 / 开头且不能包含空白")
+				}
+				return nil
+			}},
+		{Key: "crossdesk.turn_host", Group: "远程桌面（CrossDesk）",
+			Label: "TURN 公网地址（可选，默认取 Server 主机名）", Type: "string", Restart: true,
+			Note: "原生信令下发临时 TURN 凭据；留空时从 CrossDesk Server 地址推断。",
+			Get:  func(c *config.Config) string { return c.CrossDesk.TurnHost },
+			Set:  func(c *config.Config, v string) { c.CrossDesk.TurnHost = strings.TrimSpace(v) }},
+		{Key: "crossdesk.turn_port", Group: "远程桌面（CrossDesk）",
+			Label: "TURN 端口（默认 3478）", Type: "int", Restart: true,
+			Get:      func(c *config.Config) string { return strconv.Itoa(c.CrossDesk.TurnPort) },
+			Set:      func(c *config.Config, v string) { setInt(&c.CrossDesk.TurnPort, v) },
+			Validate: validateIntRange(1, 65535, "TURN 端口")},
+		{Key: "crossdesk.turn_secret", Group: "远程桌面（CrossDesk）", Secret: true,
+			Label: "TURN 共享密钥（与 Coturn static-auth-secret 一致）", Type: "string", Restart: true,
+			Get: func(c *config.Config) string { return c.CrossDesk.TurnSecret },
+			Set: func(c *config.Config, v string) { c.CrossDesk.TurnSecret = strings.TrimSpace(v) }},
+		{Key: "crossdesk.turn_ttl", Group: "远程桌面（CrossDesk）",
+			Label: "TURN 临时凭据有效期（秒，默认 3600）", Type: "int", Restart: true,
+			Get:      func(c *config.Config) string { return strconv.Itoa(c.CrossDesk.TurnTTL) },
+			Set:      func(c *config.Config, v string) { setInt(&c.CrossDesk.TurnTTL, v) },
+			Validate: validateIntRange(60, 86400, "TURN 凭据有效期")},
 	}
 }

@@ -1634,10 +1634,14 @@
     var web = d.web_url || 'https://web.crossdesk.cn';
     var dl = d.download_url || 'https://github.com/kunkundi/crossdesk/releases/latest';
     var server = d.server_url || '';
-    var admin = server ? server.replace(/\/+$/, '') + '/admin' : '';
+    var signal = d.signal_url || '';
+    var native = !!d.native_signaling;
+    var admin = (!native && server) ? server.replace(/\/+$/, '') + '/admin' : '';
 
     var statusRows = [
       ['集成状态', enabled ? '已启用' : '未启用'],
+      ['信令方式', native ? 'iFlyGo 原生 Go 信令' : '外部 CrossDesk Server'],
+      ['信令地址', signal || server || '未配置'],
       ['服务地址', server || '未配置'],
       ['连通性', d.reachable ? ('正常 · ' + (d.latency_ms || 0) + 'ms') : (d.error || '未检测')],
       ['Web 客户端', web],
@@ -1692,14 +1696,17 @@
         h('div', { class: 'card-head' }, [h('h3', {}, ['自托管部署提示'])]),
         h('div', { class: 'muted' }, ['部署 CrossDesk Server + Coturn 后，在两端桌面/移动客户端填写同一服务地址与信令端口。']),
         h('pre', { class: 'tunnel-script', readonly: 'readonly' }, [
-          '# 在 iflygo 仓库根目录\n' +
-          'cp deploy/docker/crossdesk/.env.example deploy/docker/crossdesk/.env\n' +
-          '# 编辑 .env：EXTERNAL_IP / INTERNAL_IP / COTURN_AUTH_SECRET / COTURN_STATELESS_NONCE_SECRET\n' +
-          'cd deploy/docker/crossdesk && docker compose up -d\n\n' +
-          '# 客户端自托管配置：\n' +
-          'Server: ' + (server || 'https://your-server:9099') + '\n' +
-          'Signal Port: 9099\n' +
-          'Web: ' + web
+          native ? ('# 原生 Go 信令已启用\n' +
+            'Signaling URL: ' + (signal || 'wss://<iflygo-host>/crossdesk/signal') + '\n' +
+            'TURN: 由「设置 → 远程桌面（CrossDesk）」下发\n' +
+            'Web: ' + web + '\n' +
+            '注意：官方 Web 客户端需用 crossdesk-web-client 配置该 signalingUrl。')
+          : ('# 外部 CrossDesk Server + Coturn\n' +
+            'cd deploy/docker/crossdesk && cp .env.example .env && docker compose up -d\n\n' +
+            '# 客户端自托管配置：\n' +
+            'Server: ' + (server || 'https://your-server:9099') + '\n' +
+            'Signal Port: 9099\n' +
+            'Web: ' + web)
         ])
       ])
     ];

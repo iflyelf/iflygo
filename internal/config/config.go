@@ -60,6 +60,15 @@ type CrossDeskConfig struct {
 	DownloadURL string `yaml:"download_url"`
 	// InsecureTLS 状态检查跳过证书校验（仅自签证书测试用）。
 	InsecureTLS bool `yaml:"insecure_tls"`
+	// NativeSignaling 使用 iFlyGo 内置 Go 信令服务（不再依赖外部 CrossDesk Server）。
+	NativeSignaling bool `yaml:"native_signaling"`
+	// SignalPath 原生信令 WSS 路径。
+	SignalPath string `yaml:"signal_path"`
+	// TurnHost/TurnPort/TurnSecret/TurnTTL 原生信令下发的 TURN 临时凭据。
+	TurnHost   string `yaml:"turn_host"`
+	TurnPort   int    `yaml:"turn_port"`
+	TurnSecret string `yaml:"turn_secret"`
+	TurnTTL    int    `yaml:"turn_ttl"`
 }
 
 // ClientConfig 客户端下发默认参数（可被网络级 DNS/MTU 覆盖）。
@@ -384,8 +393,12 @@ func Default() *Config {
 		TCPRelay: TCPRelayConfig{Mode: "auto"},
 		Client:   ClientConfig{MTU: 1280, Interval: "30s", AutoNAT: true, AutoNATMaxRetries: 5},
 		CrossDesk: CrossDeskConfig{
-			WebURL:      "https://web.crossdesk.cn",
-			DownloadURL: "https://github.com/kunkundi/crossdesk/releases/latest",
+			WebURL:          "https://web.crossdesk.cn",
+			DownloadURL:     "https://github.com/kunkundi/crossdesk/releases/latest",
+			NativeSignaling: false,
+			SignalPath:      "/crossdesk/signal",
+			TurnPort:        3478,
+			TurnTTL:         3600,
 		},
 		Consul: ConsulConfig{Timeout: 10, Concurrency: 16, CleanupMissing: true},
 		Redis: RedisConfig{
@@ -501,6 +514,12 @@ func (c *Config) applyEnv() {
 	setStr(&c.CrossDesk.WebURL, "CROSSDESK_WEB_URL")
 	setStr(&c.CrossDesk.DownloadURL, "CROSSDESK_DOWNLOAD_URL")
 	setBool(&c.CrossDesk.InsecureTLS, "CROSSDESK_INSECURE_TLS")
+	setBool(&c.CrossDesk.NativeSignaling, "CROSSDESK_NATIVE_SIGNALING")
+	setStr(&c.CrossDesk.SignalPath, "CROSSDESK_SIGNAL_PATH")
+	setStr(&c.CrossDesk.TurnHost, "CROSSDESK_TURN_HOST")
+	setInt(&c.CrossDesk.TurnPort, "CROSSDESK_TURN_PORT")
+	setStr(&c.CrossDesk.TurnSecret, "CROSSDESK_TURN_SECRET")
+	setInt(&c.CrossDesk.TurnTTL, "CROSSDESK_TURN_TTL")
 	setStr(&c.TCPRelay.Mode, "TCP_RELAY_MODE")
 	setStr(&c.TCPRelay.Listen, "TCP_RELAY_LISTEN")
 	setStr(&c.TCPRelay.Advertise, "TCP_RELAY_ADVERTISE")

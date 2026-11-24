@@ -49,3 +49,9 @@ crossdesk:
   web_url: "https://web.crossdesk.cn"
   download_url: "https://github.com/kunkundi/crossdesk/releases/latest"
   insecure_tls: false
+  native_signaling: false         # 使用 iFlyGo 内置 Go 信令（Phase 1，按需开启）
+  signal_path: /crossdesk/signal
+  turn_host: ""                   # 留空取 server_url 主机
+  turn_port: 3478
+  turn_secret: ""                 # 与 Coturn static-auth-secret 一致
+  turn_ttl: 3600

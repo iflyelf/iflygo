@@ -89,3 +89,19 @@ iFlyGo 提供统一入口、服务状态、Web 嵌入、下载与部署管理。
 - **能打开网页但无法连接**：检查 WSS/TURN/媒体端口和安全组。
 - **页面状态不可达**：iFlyGo 容器/主机需能访问 CrossDesk Server；自签证书可临时开启
   「跳过 TLS 校验」测试。
+
+## 7. 原生 Go 信令（Phase 1）
+
+如不部署外部 CrossDesk Server，可开启 iFlyGo 内置信令：
+
+1. 设置 → 远程桌面（CrossDesk）：
+   - 启用；
+   - 使用 iFlyGo 原生 Go 信令 = 开；
+   - 信令路径 `/crossdesk/signal`；
+   - TURN 地址/端口/密钥（与 Coturn `static-auth-secret` 一致）。
+2. 反向代理把 `wss://<iflygo-host>/crossdesk/signal` 转发到 iFlyGo，并支持 WebSocket 升级。
+3. CrossDesk 客户端自托管地址填 `wss://<iflygo-host>/crossdesk/signal`（或域名 + 路径）。
+4. 原生统计：`GET /crossdesk/stats`。
+
+当前 Phase 1 覆盖设备注册/登录、Join、Offer/Answer/ICE、TURN 临时凭据；
+设备密钥登录、重连令牌、修改密码与完整管理后台在后续阶段补齐。
