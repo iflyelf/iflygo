@@ -109,6 +109,23 @@ CrossDesk 不是单一服务，而是完整的跨平台远控产品：
 - 设置项：原生信令开关、信令路径、TURN 主机/端口/密钥/有效期。
 - 路由：`/crossdesk/signal`（WSS）、`/crossdesk/stats`。
 
+### 已完成（Phase 2 初始）
+
+- 内置 CrossDesk Web 客户端静态资源：`/crossdesk/web/`；
+- 动态注入 `window.CROSSDESK_CONFIG`：
+  - `signalingUrl` 指向 iFlyGo 原生 WSS；
+  - STUN 使用配置的 TURN 主机/端口；
+  - `clientTag=web`；
+- 原生信令页面直接 iframe 内置 Web 客户端；
+- 资源通过 `go:embed` 打包进服务端二进制；
+- 保留 CrossDesk Web 的 LGPL-3.0 LICENSE。
+
+尚未完成：
+
+- Web 端 SSO / 免输设备密码；
+- 官方 Web 客户端完整功能回归；
+- 文件传输/剪贴板/多显示器与原生信令的端到端验证。
+
 ### 尚未完成（后续阶段）
 
 - 官方客户端真实兼容性回归；

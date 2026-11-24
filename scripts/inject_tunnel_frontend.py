@@ -1190,15 +1190,15 @@ CROSSDESK_JS = r'''
     }
     var d = state.crossdesk || {};
     var enabled = !!d.enabled;
-    if (enabled && d.native_signaling && !state.crossdeskAdminLoaded) {
+    var native = !!d.native_signaling;
+    var web = native ? '/crossdesk/web/' : (d.web_url || 'https://web.crossdesk.cn');
+    if (enabled && native && !state.crossdeskAdminLoaded) {
       state.crossdeskAdminLoaded = true;
       loadCrossDeskAdmin().then(render);
     }
-    var web = d.web_url || 'https://web.crossdesk.cn';
     var dl = d.download_url || 'https://github.com/kunkundi/crossdesk/releases/latest';
     var server = d.server_url || '';
     var signal = d.signal_url || '';
-    var native = !!d.native_signaling;
     var admin = (!native && server) ? server.replace(/\/+$/, '') + '/admin' : '';
 
     var statusRows = [

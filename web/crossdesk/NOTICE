@@ -1,0 +1,6 @@
+This directory contains the CrossDesk Web Client, licensed under LGPL-3.0.
+It is served as a separate static application under /crossdesk/web/ and is not
+linked into iFlyGo's MIT-licensed Go code.
+
+Upstream: https://github.com/kunkundi/crossdesk-web-client
+License: see LICENSE in this directory.

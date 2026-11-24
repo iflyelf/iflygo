@@ -101,7 +101,8 @@ iFlyGo 提供统一入口、服务状态、Web 嵌入、下载与部署管理。
    - TURN 地址/端口/密钥（与 Coturn `static-auth-secret` 一致）。
 2. 反向代理把 `wss://<iflygo-host>/crossdesk/signal` 转发到 iFlyGo，并支持 WebSocket 升级。
 3. CrossDesk 客户端自托管地址填 `wss://<iflygo-host>/crossdesk/signal`（或域名 + 路径）。
-4. 原生统计：`GET /crossdesk/stats`。
+4. 原生 Web 客户端：`/crossdesk/web/`（已内置，自动注入原生 WSS/STUN 配置）。
+5. 原生统计：`GET /crossdesk/stats`。
 
 当前 Phase 1 覆盖设备注册/登录、Join、Offer/Answer/ICE、TURN 临时凭据；
 设备密钥登录、重连令牌、修改密码与完整管理后台在后续阶段补齐。

@@ -1,0 +1,408 @@
+<!-- index.html -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <title>CrossDesk Web Client - 浏览器远程桌面客户端</title>
+    <meta
+      name="description"
+      content="CrossDesk Web Client 是 CrossDesk 的浏览器远程桌面客户端，可通过设备 ID 和密码连接远程桌面，支持 WebRTC 画面传输、鼠标键盘控制和移动端操作。"
+    />
+    <meta
+      name="keywords"
+      content="CrossDesk, CrossDesk Web Client, 远程桌面, WebRTC, 远程控制, 浏览器远程连接"
+    />
+    <meta name="application-name" content="CrossDesk Web Client" />
+    <meta name="author" content="CrossDesk" />
+    <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1" />
+    <link rel="canonical" href="https://web.crossdesk.cn/" />
+
+    <!-- 搜索和社交分享展示 -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="CrossDesk" />
+    <meta property="og:title" content="CrossDesk Web Client - 浏览器远程桌面客户端" />
+    <meta
+      property="og:description"
+      content="在浏览器中使用 CrossDesk 连接远程桌面，支持 WebRTC 画面传输、鼠标键盘控制和移动端操作。"
+    />
+    <meta property="og:url" content="https://web.crossdesk.cn/" />
+    <meta property="og:image" content="https://web.crossdesk.cn/icons/crossdesk-180-square.png" />
+    <meta property="og:image:alt" content="CrossDesk Web Client" />
+    <meta property="og:locale" content="zh_CN" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="CrossDesk Web Client - 浏览器远程桌面客户端" />
+    <meta
+      name="twitter:description"
+      content="在浏览器中使用 CrossDesk 连接远程桌面，支持 WebRTC 画面传输、鼠标键盘控制和移动端操作。"
+    />
+    <meta name="twitter:image" content="https://web.crossdesk.cn/icons/crossdesk-180-square.png" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "CrossDesk Web Client",
+        "alternateName": "CrossDesk",
+        "url": "https://web.crossdesk.cn/",
+        "description": "CrossDesk Web Client 是 CrossDesk 的浏览器远程桌面客户端，可通过设备 ID 和密码连接远程桌面，支持 WebRTC 画面传输、鼠标键盘控制和移动端操作。",
+        "applicationCategory": "RemoteDesktopApplication",
+        "operatingSystem": "Windows, macOS, Linux, Android, iOS",
+        "browserRequirements": "Requires a modern browser with WebRTC support",
+        "inLanguage": "zh-CN",
+        "image": "https://web.crossdesk.cn/icons/crossdesk-180-square.png",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        }
+      }
+    </script>
+
+    <!-- iOS Web App 配置 -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta
+      name="apple-mobile-web-app-status-bar-style"
+      content="black-translucent"
+    />
+    <meta name="apple-mobile-web-app-title" content="CrossDesk" />
+    <meta name="theme-color" content="#edf4fc" />
+
+    <!-- 图标配置 -->
+    <link rel="icon" type="image/x-icon" href="favicon.ico" />
+    <link rel="apple-touch-icon" sizes="120x120" href="icons/crossdesk-120-square.png">
+    <link rel="apple-touch-icon" sizes="152x152" href="icons/crossdesk-152-square.png">
+    <link rel="apple-touch-icon" sizes="167x167" href="icons/crossdesk-167-square.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="icons/crossdesk-180-square.png">
+
+    <!-- PWA Manifest (可选，用于更好的Web App体验) -->
+    <link rel="manifest" href="manifest.json" />
+
+    <link rel="stylesheet" href="file_manager.css?v=2026.11.18.1">
+    <link rel="stylesheet" href="styles.css?v=2026.11.18.1" />
+    <script src="sponsors.js?v=2026.11.18.1" defer></script>
+    <script
+      src="vendor/adapter-9.0.1.min.js"
+      onload="console.info('[CrossDesk] Loaded WebRTC adapter from local: vendor/adapter-9.0.1.min.js');"
+      onerror="console.warn('[CrossDesk] Failed to load local WebRTC adapter. Falling back to pinned CDN version.');(function(){var s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/webrtc-adapter@9.0.1/out/adapter.min.js';s.onload=function(){console.warn('[CrossDesk] Loaded WebRTC adapter from CDN fallback: https://cdn.jsdelivr.net/npm/webrtc-adapter@9.0.1/out/adapter.min.js');};s.onerror=function(){console.error('[CrossDesk] Failed to load WebRTC adapter from both local and CDN fallback.');};document.head.appendChild(s);}());"
+    ></script>
+  </head>
+  <body>
+    <div class="app-container" data-nosnippet>
+      <!-- Connection settings overlay (shown when not connected) -->
+      <div id="connection-overlay" class="connection-overlay">
+        <main class="connection-layout" aria-labelledby="connection-title">
+          <div class="connection-intro">
+            <h1 id="connection-title">面向未来的<span>远程桌面。</span></h1>
+            <p>CrossDesk 是一款免费开源的跨平台远程桌面软件。通过 MCP，你可以用自然语言让 AI 操作远程设备。</p>
+          </div>
+          <section class="connection-panel" aria-label="连接设备">
+            <div
+              class="status-indicator"
+              id="connection-status-indicator"
+              style="display: none"
+            >
+              <div
+                id="connection-status-led"
+                class="status-led status-led-off"
+              ></div>
+            </div>
+            <form id="connection-form" novalidate>
+              <div class="option">
+                <label for="transmission-id">远程设备 ID</label>
+                <input
+                  id="transmission-id"
+                  type="text"
+                  value=""
+                  placeholder="输入远程设备 ID"
+                  autocomplete="off"
+                  aria-describedby="connection-feedback"
+                  required
+                />
+              </div>
+              <div class="option">
+                <label for="transmission-pwd">密码</label>
+                <input
+                  id="transmission-pwd"
+                  type="password"
+                  value=""
+                  placeholder="输入 6 位密码"
+                  autocomplete="current-password"
+                  aria-describedby="connection-feedback"
+                  minlength="6"
+                  maxlength="6"
+                  required
+                />
+              </div>
+              <p
+                id="connection-feedback"
+                class="connection-feedback"
+                role="status"
+                aria-live="polite"
+              ></p>
+              <div class="actions">
+                <button id="connect" type="submit" disabled>连接</button>
+                <button id="retry-signaling" type="button" class="secondary-btn" style="display: none">
+                  重连服务器
+                </button>
+                <button id="disconnect" type="button" style="display: none">断开连接</button>
+              </div>
+            </form>
+            <p id="client-version" class="client-version" aria-label="Web 客户端版本" hidden></p>
+          </section>
+          <nav class="connection-resources" aria-label="CrossDesk 资源">
+            <div class="resource-actions">
+              <a href="https://www.crossdesk.cn/download/">下载 CrossDesk</a>
+              <a href="#transmission-id">打开 Web 客户端</a>
+            </div>
+            <div class="resource-links">
+              <a href="https://github.com/kunkundi/crossdesk-web-client">查看源代码</a>
+              <a href="https://www.crossdesk.cn/self-hosting/">自托管指南</a>
+              <a href="https://www.crossdesk.cn/#sponsor">赞助支持</a>
+            </div>
+          </nav>
+          <aside class="connection-sponsors" aria-labelledby="connection-sponsors-title">
+            <h2 id="connection-sponsors-title">特别赞助</h2>
+            <div class="sponsor-viewport">
+              <div class="sponsor-brands">
+                <a href="https://crossdesk.hualong-ai.com/" target="_blank" rel="sponsored noopener noreferrer">
+                  <img src="icons/hualongai.webp" width="48" height="48" alt="" />
+                  <span>HuaLongAI 华龙算力&nbsp;<span aria-hidden="true">↗</span></span>
+                </a>
+              </div>
+            </div>
+          </aside>
+        </main>
+      </div>
+
+      <!-- Video display -->
+      <div id="media" style="display: none">
+        <!-- Video container, including draggable virtual mouse -->
+        <div id="video-container" class="video-container">
+          <video
+            id="video"
+            playsinline
+            webkit-playsinline
+            x5-video-player-type="h5"
+            x5-video-player-fullscreen="true"
+            muted
+          ></video>
+          <audio id="audio" autoplay playsinline></audio>
+
+          <!-- Connecting overlay -->
+          <div id="connecting-overlay" class="connecting-overlay" style="display: none">
+            <div class="connecting-message">
+              <div class="connecting-spinner"></div>
+              <span id="connecting-message-text">连接中...</span>
+            </div>
+          </div>
+
+          <!-- Shared Android/iOS interaction: independent orb, dismissible menu. -->
+          <div id="connected-overlay" class="connected-overlay" style="display: none">
+            <button id="session-menu-shield" type="button" aria-label="关闭控制菜单" hidden></button>
+            <div id="virtual-mouse" role="group" aria-label="虚拟鼠标" style="display: none">
+              <button type="button" id="virtual-mouse-grip" aria-label="拖动虚拟鼠标" title="拖动或使用方向键移动虚拟鼠标"></button>
+              <div class="virtual-mouse-row">
+                <button type="button" id="virtual-left-btn" aria-label="鼠标左键"></button>
+                <button type="button" id="virtual-wheel" aria-label="鼠标滚轮" title="上下滑动或使用上下方向键滚动"></button>
+                <button type="button" id="virtual-right-btn" aria-label="鼠标右键"></button>
+              </div>
+            </div>
+            <button id="panel-collapsed-bar" class="panel-collapsed-bar" type="button"
+              aria-label="远程控制菜单" aria-expanded="false" aria-controls="connected-panel">
+              <img src="icons/crossdesk-180-circle.png" alt="" class="collapsed-bar-icon" draggable="false" />
+            </button>
+            <section class="connected-panel" id="connected-panel" role="dialog" aria-labelledby="session-menu-title" hidden>
+              <header class="session-menu-header">
+                <button id="session-menu-back" class="session-icon-button" type="button" aria-label="返回" hidden>‹</button>
+                <div class="session-menu-heading">
+                  <strong id="session-menu-title">远程控制</strong>
+                  <p id="connection-quality" hidden></p>
+                </div>
+                <span id="connected-status-led" class="status-led status-led-off" aria-label="连接状态"></span>
+                <button id="session-menu-close" class="session-icon-button" type="button" aria-label="关闭">×</button>
+              </header>
+              <div class="session-menu-body">
+                <div id="session-page-main" class="session-grid" data-session-page="main">
+                  <button type="button" id="session-keyboard" class="session-tile" data-needs-connection><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h1m3 0h1m3 0h1m3 0h1M6 12h1m3 0h1m3 0h1m3 0h1M7 16h10"/></svg><span id="session-keyboard-label">键盘</span></button>
+                  <button type="button" id="session-mouse-mode" class="session-tile" ><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="6"/><path d="M12 2v7M6 10h12"/></svg><span id="session-mouse-mode-label">相对鼠标</span></button>
+                  <button type="button" id="session-mouse" class="session-tile" data-needs-connection><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="6"/><path d="M12 2v7M6 10h12"/></svg><span id="session-mouse-label">虚拟鼠标</span></button>
+                  <button type="button" id="session-display" class="session-tile" data-page="display"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8m-4-4v4"/></svg><span id="session-display-label">显示器</span></button>
+                  <button type="button" id="session-video" class="session-tile" data-page="video"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h16"/><circle cx="8" cy="5" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="19" r="2"/></svg><span id="session-video-label">画面设置</span></button>
+                  <button type="button" id="audio-toggle" class="session-tile" disabled aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h4l5 4V6l-5 4H4Z"/><path class="audio-icon-volume" d="M16 9a4 4 0 0 1 0 6m3-9a8 8 0 0 1 0 12"/><path class="audio-icon-mute" d="m17 9 5 6m0-6-5 6"/></svg><span id="audio-toggle-label">静音</span></button>
+                  <button type="button" id="session-network" class="session-tile" data-page="network"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3v18h17M8 16v-4m5 4V8m5 8V5"/></svg><span id="session-network-label">网络状态</span></button>
+                  <button type="button" id="session-files" class="session-tile" data-page="files"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H5v20h14V7Z M14 2v5h5 M8 12h8m-3-3 3 3-3 3 M16 18H8m3-3-3 3 3 3"/></svg><span id="session-files-label">文件传输</span></button>
+                  <button type="button" id="session-clipboard" class="session-tile" data-page="clipboard"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="4" width="14" height="18" rx="2"/><rect x="9" y="2" width="6" height="4" rx="1"/><path d="M9 11h6m-6 4h6"/></svg><span>剪贴板</span></button>
+                </div>
+                <div data-session-page="clipboard" hidden>
+                  <p id="clipboard-state" class="session-detail" role="status" aria-live="polite">正在连接…</p>
+                  <div class="clipboard-sync">
+                    <div>
+                      <span id="clipboard-automatic-label" class="clipboard-sync-label">自动同步</span>
+                      <p id="clipboard-permissions" class="session-detail">开启后，在此页面同步复制的文本</p>
+                    </div>
+                    <button id="clipboard-automatic" class="clipboard-switch" type="button" role="switch" aria-checked="false" aria-labelledby="clipboard-automatic-label" aria-describedby="clipboard-permissions" disabled><span aria-hidden="true"></span></button>
+                  </div>
+                  <p id="clipboard-feedback" class="session-feedback clipboard-feedback" role="status" aria-live="polite"></p>
+                  <details id="clipboard-manual" class="clipboard-manual">
+                    <summary>手动传递文本</summary>
+                    <div class="clipboard-manual-fields">
+                      <div class="clipboard-actions">
+                        <button id="clipboard-send-local" type="button" disabled>发送到远端</button>
+                        <button id="clipboard-copy-remote" type="button" disabled>复制到本机</button>
+                      </div>
+                      <label class="session-field-label" for="clipboard-local">发送文本</label>
+                      <textarea id="clipboard-local" class="clipboard-text" rows="3" placeholder="粘贴或输入文本" spellcheck="false" autocomplete="off"></textarea>
+                      <button id="clipboard-send-text" type="button" disabled>发送</button>
+                      <label class="session-field-label" for="clipboard-remote">远端文本</label>
+                      <textarea id="clipboard-remote" class="clipboard-text" rows="3" readonly placeholder="暂无远端文本" spellcheck="false"></textarea>
+                      <p class="session-detail">仅纯文本 · 最多 128 KiB · 断开后清除会话内容</p>
+                    </div>
+                  </details>
+                </div>
+                <div data-session-page="video" hidden>
+                  <div class="resolution-setting">
+                    <label class="session-field-label" for="display-resolution">被控端分辨率</label>
+                    <select id="display-resolution" aria-describedby="display-resolution-feedback" disabled><option value="">等待被控端信息…</option></select>
+                    <p id="display-resolution-feedback" class="session-feedback" role="status" aria-live="polite"></p>
+                  </div>
+                  <fieldset><legend>画面质量</legend><div class="session-segments"><button type="button" data-setting="quality" data-value="0" aria-pressed="false" disabled>低</button><button type="button" data-setting="quality" data-value="1" aria-pressed="false" disabled>中</button><button type="button" data-setting="quality" data-value="2" aria-pressed="false" disabled>高</button></div></fieldset>
+<fieldset><legend>帧率上限</legend><div class="session-segments"><button type="button" data-setting="frame_rate" data-value="30" aria-pressed="false" disabled>30 fps</button><button type="button" data-setting="frame_rate" data-value="60" aria-pressed="false" disabled>60 fps</button></div></fieldset>
+<fieldset><legend>画面偏好</legend><div class="session-segments"><button type="button" data-setting="preference" data-value="0" aria-pressed="false" disabled>帧率优先</button><button type="button" data-setting="preference" data-value="1" aria-pressed="false" disabled>画质优先</button><button type="button" data-setting="preference" data-value="2" aria-pressed="false" disabled>平衡</button></div></fieldset>
+
+                  <p id="video-settings-feedback" class="session-feedback" role="status" aria-live="polite"></p>
+                  <button id="video-settings-retry" type="button" hidden>重试</button>
+                </div>
+                <div data-session-page="display" hidden>
+                  <label class="session-field-label" for="display-id">当前显示器</label>
+                  <select id="display-id" disabled><option value="" selected>等待远端画面…</option></select>
+                </div>
+                <div data-session-page="network" hidden>
+                  <dl class="session-network"><div><dt>分辨率</dt><dd id="network-resolution">—</dd></div><div><dt>帧率</dt><dd id="network-fps">—</dd></div><div><dt>视频接收速率</dt><dd id="network-bitrate">—</dd></div><div><dt>视频丢包率</dt><dd id="network-loss">—</dd></div><div><dt>往返延迟</dt><dd id="network-rtt">—</dd></div><div><dt>画面缓冲</dt><dd id="network-buffer">—</dd></div><div><dt>解码耗时</dt><dd id="network-decode">—</dd></div><div><dt>连接方式</dt><dd id="network-route">—</dd></div></dl>
+                  <p id="connected-client-version" class="client-version" aria-label="Web 客户端版本" hidden></p>
+                </div>
+                <div data-session-page="files" hidden>
+                  <p id="file-transfer-status" class="session-detail" role="status" aria-live="polite">等待文件通道连接…</p>
+                  <button id="file-transfer-select" type="button" disabled>选择文件并发送</button>
+                  <input id="file-transfer-input" type="file" multiple hidden>
+                  <p id="file-transfer-storage" class="session-detail">接收文件边传输边保存到浏览器下载目录。</p>
+                  <p id="file-transfer-feedback" class="session-feedback" role="status" aria-live="polite"></p>
+                  <ul id="file-transfer-list" aria-label="文件传输记录"></ul>
+                  <p id="file-transfer-empty" class="session-detail">暂无传输记录</p>
+                </div>
+                <div data-session-page="disconnect" hidden>
+                  <p class="session-confirm-title">确定断开当前远程连接？</p>
+                  <p class="session-confirm-detail">进行中的传输和下载将停止。<br>已下载完成的文件会保留。</p>
+                  <div class="session-confirm-actions">
+                    <button id="session-disconnect-cancel" type="button">取消</button>
+                    <button id="session-disconnect-confirm" class="session-danger" type="button">断开连接</button>
+                  </div>
+                </div>
+              </div>
+              <button id="disconnect-connected" class="session-disconnect session-danger" type="button">断开连接</button>
+            </section>
+          </div>
+          <!-- Virtual keyboard -->
+          <div id="virtual-keyboard" class="virtual-keyboard" style="display: none">
+            <div id="keyboard-header" class="keyboard-header">
+              <span>键盘</span><span class="keyboard-grip" aria-hidden="true">⠿</span>
+              <button id="keyboard-close" class="keyboard-close-btn">×</button>
+            </div>
+            <div class="keyboard-layout">
+              <!-- Number row -->
+              <div class="keyboard-row">
+                <button class="keyboard-key" data-keycode="192">`</button>
+                <button class="keyboard-key" data-keycode="49">1</button>
+                <button class="keyboard-key" data-keycode="50">2</button>
+                <button class="keyboard-key" data-keycode="51">3</button>
+                <button class="keyboard-key" data-keycode="52">4</button>
+                <button class="keyboard-key" data-keycode="53">5</button>
+                <button class="keyboard-key" data-keycode="54">6</button>
+                <button class="keyboard-key" data-keycode="55">7</button>
+                <button class="keyboard-key" data-keycode="56">8</button>
+                <button class="keyboard-key" data-keycode="57">9</button>
+                <button class="keyboard-key" data-keycode="48">0</button>
+                <button class="keyboard-key" data-keycode="189">-</button>
+                <button class="keyboard-key" data-keycode="187">=</button>
+                <button class="keyboard-key keyboard-key-wide" data-keycode="8">⌫</button>
+              </div>
+              <!-- Letter row 1 -->
+              <div class="keyboard-row">
+                <button class="keyboard-key" data-keycode="81">Q</button>
+                <button class="keyboard-key" data-keycode="87">W</button>
+                <button class="keyboard-key" data-keycode="69">E</button>
+                <button class="keyboard-key" data-keycode="82">R</button>
+                <button class="keyboard-key" data-keycode="84">T</button>
+                <button class="keyboard-key" data-keycode="89">Y</button>
+                <button class="keyboard-key" data-keycode="85">U</button>
+                <button class="keyboard-key" data-keycode="73">I</button>
+                <button class="keyboard-key" data-keycode="79">O</button>
+                <button class="keyboard-key" data-keycode="80">P</button>
+                <button class="keyboard-key" data-keycode="219">[</button>
+                <button class="keyboard-key" data-keycode="221">]</button>
+                <button class="keyboard-key" data-keycode="220">\</button>
+              </div>
+              <!-- Letter row 2 -->
+              <div class="keyboard-row">
+                <button class="keyboard-key keyboard-key-wide" data-keycode="20">Caps</button>
+                <button class="keyboard-key" data-keycode="65">A</button>
+                <button class="keyboard-key" data-keycode="83">S</button>
+                <button class="keyboard-key" data-keycode="68">D</button>
+                <button class="keyboard-key" data-keycode="70">F</button>
+                <button class="keyboard-key" data-keycode="71">G</button>
+                <button class="keyboard-key" data-keycode="72">H</button>
+                <button class="keyboard-key" data-keycode="74">J</button>
+                <button class="keyboard-key" data-keycode="75">K</button>
+                <button class="keyboard-key" data-keycode="76">L</button>
+                <button class="keyboard-key" data-keycode="186">;</button>
+                <button class="keyboard-key" data-keycode="222">'</button>
+                <button class="keyboard-key keyboard-key-wide" data-keycode="13">↵</button>
+              </div>
+              <!-- Letter row 3 -->
+              <div class="keyboard-row">
+                <button class="keyboard-key keyboard-key-wide" data-keycode="16">Shift</button>
+                <button class="keyboard-key" data-keycode="90">Z</button>
+                <button class="keyboard-key" data-keycode="88">X</button>
+                <button class="keyboard-key" data-keycode="67">C</button>
+                <button class="keyboard-key" data-keycode="86">V</button>
+                <button class="keyboard-key" data-keycode="66">B</button>
+                <button class="keyboard-key" data-keycode="78">N</button>
+                <button class="keyboard-key" data-keycode="77">M</button>
+                <button class="keyboard-key" data-keycode="188">,</button>
+                <button class="keyboard-key" data-keycode="190">.</button>
+                <button class="keyboard-key" data-keycode="191">/</button>
+                <button class="keyboard-key keyboard-key-wide" data-keycode="16">Shift</button>
+              </div>
+              <!-- Function row -->
+              <div class="keyboard-row">
+                <button class="keyboard-key" data-keycode="17">Ctrl</button>
+                <button class="keyboard-key" data-keycode="18">Alt</button>
+                <button class="keyboard-key keyboard-key-space" data-keycode="32">Space</button>
+                <button class="keyboard-key" data-keycode="18">Alt</button>
+                <button class="keyboard-key" data-keycode="17">Ctrl</button>
+                <button class="keyboard-key" data-keycode="37">←</button>
+                <button class="keyboard-key" data-keycode="38">↑</button>
+                <button class="keyboard-key" data-keycode="40">↓</button>
+                <button class="keyboard-key" data-keycode="39">→</button>
+          </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+
+    <script src="control.js?v=2026.11.18.1"></script>
+    <script src="turn_credentials.js?v=2026.11.18.1"></script>
+    <script src="file_download.js?v=2026.11.18.1"></script>
+    <script src="file_browser.js?v=2026.11.18.1"></script>
+    <script src="file_transfer.js?v=2026.11.18.1"></script>
+    <script src="file_manager.js?v=2026.11.18.1"></script>
+    <script src="clipboard.js?v=2026.11.18.1"></script>
+    <script src="display_resolutions.js?v=2026.11.18.1"></script>
+    <script src="web_client.js?v=2026.11.18.1"></script>
+    <script src="session_controls.js?v=2026.11.18.1"></script>
+  </body>
+</html>

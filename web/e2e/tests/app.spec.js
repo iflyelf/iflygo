@@ -208,7 +208,7 @@ test('远程桌面：CrossDesk 集成页', async ({ page }) => {
   await expect(page.locator('.crossdesk-feature')).toHaveCount(7);
   await expect(page.getByRole('heading', { name: '原生信令设备与会话' })).toBeVisible();
   await page.getByRole('button', { name: '在页面内打开', exact: true }).click();
-  await expect(page.locator('.crossdesk-frame')).toHaveAttribute('src', 'https://web.crossdesk.cn');
+  await expect(page.locator('.crossdesk-frame')).toHaveAttribute('src', '/crossdesk/web/');
 });
 
 test('隧道管理：五个子页可切换', async ({ page }) => {
