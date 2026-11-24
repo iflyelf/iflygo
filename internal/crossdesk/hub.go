@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -23,6 +24,12 @@ type Hub struct {
 	mu            sync.Mutex
 	clients       map[string]*client
 	transmissions map[string]*transmission
+	attempts      map[string]*attemptWindow
+}
+
+type attemptWindow struct {
+	start time.Time
+	count int
 }
 
 type transmission struct {
@@ -33,6 +40,7 @@ type transmission struct {
 type client struct {
 	hub    *Hub
 	ws     *websocket.Conn
+	remote string
 	userID string
 	send   chan []byte
 	done   chan struct{}
@@ -46,6 +54,7 @@ func NewHub(store DeviceStore, turn TurnConfig, enabled func() bool, logger *log
 	return &Hub{
 		store: store, turn: turn, enabled: enabled, log: logger,
 		clients: map[string]*client{}, transmissions: map[string]*transmission{},
+		attempts: map[string]*attemptWindow{},
 	}
 }
 
@@ -65,7 +74,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	}
 	conn.SetReadLimit(1 << 20)
 	c := &client{
-		hub: h, ws: conn, send: make(chan []byte, 64), done: make(chan struct{}),
+		hub: h, ws: conn, remote: remoteIP(r), send: make(chan []byte, 64), done: make(chan struct{}),
 	}
 	go c.writeLoop()
 	c.readLoop()
@@ -208,6 +217,12 @@ func (h *Hub) dispatch(c *client, msg map[string]any) {
 }
 
 func (h *Hub) handleLogin(c *client, msg map[string]any) {
+	if !h.allowAttempt(c.remote) {
+		c.sendJSON(map[string]any{
+			"type": "login", "user_id": "", "status": "fail", "reason": "Too many authentication attempts",
+		})
+		return
+	}
 	id, _ := msg["user_id"].(string)
 	id = strings.TrimSpace(id)
 	dev, ret, pwd, ok := h.resolveLogin(id)
@@ -450,6 +465,54 @@ func (h *Hub) handlePresence(c *client, msg map[string]any) {
 	h.mu.Unlock()
 	resp["devices"] = list
 	c.sendJSON(resp)
+}
+
+func remoteIP(r *http.Request) string {
+	if r == nil {
+		return "unknown"
+	}
+	// 反向代理场景优先使用真实客户端 IP；生产环境应由代理覆盖这些头。
+	for _, h := range []string{"X-Real-IP", "X-Forwarded-For"} {
+		v := strings.TrimSpace(r.Header.Get(h))
+		if v == "" {
+			continue
+		}
+		if i := strings.Index(v, ","); i >= 0 {
+			v = strings.TrimSpace(v[:i])
+		}
+		if net.ParseIP(v) != nil {
+			return v
+		}
+	}
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err == nil && host != "" {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+// allowAttempt 每个来源每分钟最多 60 次登录/注册尝试，避免设备 ID 暴力枚举与批量注册。
+func (h *Hub) allowAttempt(ip string) bool {
+	now := time.Now()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.attempts) > 20000 {
+		for k, v := range h.attempts {
+			if now.Sub(v.start) > 2*time.Minute {
+				delete(h.attempts, k)
+			}
+		}
+	}
+	w := h.attempts[ip]
+	if w == nil || now.Sub(w.start) > time.Minute {
+		h.attempts[ip] = &attemptWindow{start: now, count: 1}
+		return true
+	}
+	if w.count >= 60 {
+		return false
+	}
+	w.count++
+	return true
 }
 
 func splitIDPassword(raw string) (string, string) {
