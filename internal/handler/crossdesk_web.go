@@ -78,6 +78,20 @@ func serveCrossDeskIndex(w http.ResponseWriter, r *http.Request, sc *svc.Service
 		"clientTag":    "web",
 	})
 	script := "<script>window.CROSSDESK_CONFIG=" + string(conf) + ";</script>\n"
+	script += `<script>
+(function(){
+  try {
+    var id = new URLSearchParams(location.search).get('device_id');
+    if (id) {
+      var el = document.getElementById('transmission-id');
+      if (el) { el.value = id; el.dispatchEvent(new Event('input', {bubbles:true})); }
+      var pwd = document.getElementById('transmission-pwd');
+      if (pwd) pwd.focus();
+    }
+  } catch (e) {}
+})();
+</script>
+`
 	html := strings.Replace(string(raw), `<script src="control.js`, script+`<script src="control.js`, 1)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")

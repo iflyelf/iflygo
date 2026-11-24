@@ -159,6 +159,14 @@ func TestSignalingRelay(t *testing.T) {
 	if join["type"] != "user_join_transmission" || join["user_id"] != guestID {
 		t.Fatalf("host 未收到 join: %v", join)
 	}
+	hostTicket := host.read(t)
+	if hostTicket["type"] != "session_ticket" {
+		t.Fatalf("host 未收到 session_ticket: %v", hostTicket)
+	}
+	if ticket := guest.read(t); ticket["type"] != "session_ticket" {
+		t.Fatalf("guest 未收到 session_ticket: %v", ticket)
+	}
+	ticketToken, _ := hostTicket["token"].(string)
 
 	host.send(t, map[string]any{
 		"type": "offer", "transmission_id": hostID, "user_id": hostID,
@@ -185,6 +193,19 @@ func TestSignalingRelay(t *testing.T) {
 	candidate := host.read(t)
 	if candidate["type"] != "new_candidate_mid" || candidate["candidate"] != "candidate:1" {
 		t.Fatalf("host 未收到 candidate: %v", candidate)
+	}
+
+	report := map[string]any{
+		"type": "session_report", "transmission_id": hostID,
+		"guest_id": guestID, "token": ticketToken, "alive": true,
+	}
+	host.send(t, report)
+	guest.send(t, report)
+	if resumed := host.read(t); resumed["type"] != "session_resumed" {
+		t.Fatalf("host 未收到 session_resumed: %v", resumed)
+	}
+	if resumed := guest.read(t); resumed["type"] != "session_resumed" {
+		t.Fatalf("guest 未收到 session_resumed: %v", resumed)
 	}
 
 	guest.send(t, map[string]any{"type": "ping"})

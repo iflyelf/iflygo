@@ -223,7 +223,8 @@ test('CrossDesk：内置 Web 客户端连接原生信令', async ({ page }) => {
       }),
     });
   });
-  await page.goto('/crossdesk/web/');
+  await page.goto('/crossdesk/web/?device_id=123456789');
+  await expect(page.locator('#transmission-id')).toHaveValue('123456789');
   await expect(page.locator('#connection-form')).toBeVisible();
   await expect.poll(async () => {
     return page.evaluate(async () => {

@@ -1141,6 +1141,7 @@ CROSSDESK_JS = r'''
   state.crossdeskDevices = [];
   state.crossdeskSessions = [];
   state.crossdeskAdminLoaded = false;
+  state.crossdeskConnectDevice = '';
 
   function loadCrossDesk() {
     if (state.crossdeskLoading) return Promise.resolve();
@@ -1191,7 +1192,7 @@ CROSSDESK_JS = r'''
     var d = state.crossdesk || {};
     var enabled = !!d.enabled;
     var native = !!d.native_signaling;
-    var web = native ? '/crossdesk/web/' : (d.web_url || 'https://web.crossdesk.cn');
+    var web = native ? ('/crossdesk/web/' + (state.crossdeskConnectDevice ? '?device_id=' + encodeURIComponent(state.crossdeskConnectDevice) : '')) : (d.web_url || 'https://web.crossdesk.cn');
     if (enabled && native && !state.crossdeskAdminLoaded) {
       state.crossdeskAdminLoaded = true;
       loadCrossDeskAdmin().then(render);
@@ -1257,7 +1258,14 @@ CROSSDESK_JS = r'''
                 h('td', {}, [x.kind || '']),
                 h('td', {}, [x.online ? '是' : '否']),
                 h('td', { class: 'tunnel-wrap' }, [x.last_seen || '—']),
-                h('td', {}, [h('button', { class: 'btn sm danger', onclick: function () { crossdeskDeleteDevice(x.device_id); } }, ['删除'])])
+                h('td', {}, [h('div', { class: 'tunnel-actions' }, [
+                  (x.kind === 'desktop' ? h('button', { class: 'btn sm primary', onclick: function () {
+                    state.crossdeskConnectDevice = x.device_id;
+                    state.crossdeskShowWeb = true;
+                    render();
+                  } }, ['连接']) : null),
+                  h('button', { class: 'btn sm danger', onclick: function () { crossdeskDeleteDevice(x.device_id); } }, ['删除'])
+                ])])
               ]);
             }).concat((state.crossdeskDevices || []).length ? [] : [h('tr', {}, [h('td', { colspan: 5, class: 'muted' }, ['暂无原生设备'])])]))
           ])

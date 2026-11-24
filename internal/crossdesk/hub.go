@@ -31,6 +31,16 @@ type Hub struct {
 	// passwordResults 记录 change_password 的 request_id -> 新密码，保证重试幂等。
 	passwordResults map[string]string
 	challenges      map[*client]*loginChallenge
+	tickets         map[string]*sessionTicket
+}
+
+type sessionTicket struct {
+	transmissionID string
+	host           string
+	guest          string
+	token          string
+	hostReady      bool
+	guestReady     bool
 }
 
 type loginChallenge struct {
@@ -69,6 +79,7 @@ func NewHub(store DeviceStore, turn TurnConfig, enabled func() bool, logger *log
 		clients: map[string]*client{}, transmissions: map[string]*transmission{},
 		attempts: map[string]*attemptWindow{}, passwordResults: map[string]string{},
 		challenges: map[*client]*loginChallenge{},
+		tickets:    map[string]*sessionTicket{},
 	}
 }
 
@@ -187,6 +198,11 @@ func (h *Hub) unregister(c *client) {
 				}
 			}
 		}
+		for k, t := range h.tickets {
+			if t.host == c.userID || t.guest == c.userID {
+				delete(h.tickets, k)
+			}
+		}
 	}
 	h.mu.Unlock()
 	if current {
@@ -220,7 +236,7 @@ func (h *Hub) dispatch(c *client, msg map[string]any) {
 	case "recent_connections_presence":
 		h.handlePresence(c, msg)
 	case "session_report":
-		// 会话状态由客户端自行维护；Phase 1 不持久化。
+		h.handleSessionReport(c, msg)
 	case "client_info":
 		// 客户端版本/平台仅用于统计，Phase 1 不持久化。
 	case "disconnect_peer":
@@ -569,6 +585,7 @@ func (h *Hub) handleJoin(c *client, msg map[string]any) {
 		"type": "user_join_transmission", "transmission_id": target,
 		"user_id": c.userID, "status": "success",
 	})
+	h.issueSessionTicket(target, c.userID, host, c)
 }
 
 func (h *Hub) handleUserList(c *client, msg map[string]any) {
@@ -865,6 +882,70 @@ func authorized(tr *transmission, id string) bool {
 		return false
 	}
 	return tr.host == id || tr.guests[id]
+}
+
+func (h *Hub) issueSessionTicket(tx, guest string, host, guestClient *client) {
+	token, err := newNonce()
+	if err != nil {
+		return
+	}
+	key := tx + "\n" + guest
+	h.mu.Lock()
+	h.tickets[key] = &sessionTicket{transmissionID: tx, host: host.userID, guest: guest, token: token}
+	h.mu.Unlock()
+	msg := map[string]any{
+		"type": "session_ticket", "transmission_id": tx,
+		"host_id": host.userID, "guest_id": guest, "token": token,
+	}
+	host.sendJSON(msg)
+	guestClient.sendJSON(msg)
+}
+
+func (h *Hub) handleSessionReport(c *client, msg map[string]any) {
+	tx, _ := msg["transmission_id"].(string)
+	guest, _ := msg["guest_id"].(string)
+	token, _ := msg["token"].(string)
+	alive, _ := msg["alive"].(bool)
+	if tx == "" || guest == "" || token == "" {
+		return
+	}
+	key := tx + "\n" + guest
+	h.mu.Lock()
+	t := h.tickets[key]
+	if t == nil || t.token != token || (c.userID != t.host && c.userID != t.guest) {
+		h.mu.Unlock()
+		return
+	}
+	if !alive {
+		delete(h.tickets, key)
+		if tr := h.transmissions[tx]; tr != nil {
+			delete(tr.guests, guest)
+		}
+		host := h.clients[t.host]
+		gc := h.clients[t.guest]
+		h.mu.Unlock()
+		if host != nil {
+			host.sendJSON(map[string]any{"type": "user_leave_transmission", "transmission_id": tx, "user_id": guest})
+		}
+		if gc != nil {
+			gc.sendJSON(map[string]any{"type": "user_leave_transmission", "transmission_id": tx, "user_id": t.host})
+		}
+		return
+	}
+	if c.userID == t.host {
+		t.hostReady = true
+	} else {
+		t.guestReady = true
+	}
+	resume := t.hostReady && t.guestReady
+	host := h.clients[t.host]
+	gc := h.clients[t.guest]
+	h.mu.Unlock()
+	if resume && host != nil && gc != nil {
+		ack := map[string]any{"type": "session_resumed", "transmission_id": tx, "guest_id": guest}
+		host.sendJSON(ack)
+		gc.sendJSON(ack)
+	}
 }
 
 // ServeStats 原生 CrossDesk 统计接口。

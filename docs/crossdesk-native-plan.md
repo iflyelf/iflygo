@@ -102,6 +102,7 @@ CrossDesk 不是单一服务，而是完整的跨平台远控产品：
   - `change_password`（6 位、request_id 幂等）；
   - `disconnect_peer`、`revoke_reconnect_credential`；
   - Ed25519 设备密钥登录：`login_challenge` + 签名校验，绑定后禁止密码登录；
+  - `session_ticket` / `session_report` / `session_resumed` 会话恢复；
   - TURN 临时凭据（HMAC-SHA1，兼容 Coturn REST API）；
   - `/crossdesk/stats` 统计；
   - Hub 并发/连接替换/离线清理测试。
@@ -117,6 +118,7 @@ CrossDesk 不是单一服务，而是完整的跨平台远控产品：
   - STUN 使用配置的 TURN 主机/端口；
   - `clientTag=web`；
 - 原生信令页面直接 iframe 内置 Web 客户端；
+- 设备列表「连接」按钮可带 `device_id` 打开并预填 Web 客户端；
 - 资源通过 `go:embed` 打包进服务端二进制；
 - 保留 CrossDesk Web 的 LGPL-3.0 LICENSE。
 
