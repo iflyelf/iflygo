@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/iflyelf/iflygo/internal/auth"
@@ -54,5 +55,54 @@ func TestCrossDeskJoinTicket(t *testing.T) {
 	}
 	if crossdesk.NewSQLStore(sc.Store).ConsumeJoinTicket("123456789", env.Data.JoinTicket, "127.0.0.1") {
 		t.Fatal("票据不应可重复消费")
+	}
+}
+
+func TestCrossDeskDeskHubTickets(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "deskhub.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE crossdesk_devices (device_id TEXT PRIMARY KEY, password_hash TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT 'desktop', online INTEGER NOT NULL DEFAULT 0, last_seen TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT '', login_public_key TEXT NOT NULL DEFAULT '')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE crossdesk_join_tickets (token_hash TEXT PRIMARY KEY, device_id TEXT NOT NULL, expires_at INTEGER NOT NULL DEFAULT 0, used_at INTEGER NOT NULL DEFAULT 0, created_by TEXT NOT NULL DEFAULT '', created_ip TEXT NOT NULL DEFAULT '', used_ip TEXT NOT NULL DEFAULT '')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"111111111", "222222222"} {
+		if _, err := db.Exec(`INSERT INTO crossdesk_devices (device_id,kind) VALUES (?, 'desktop')`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sc := &svc.ServiceContext{Store: &store.Store{DB: db, Dialect: store.SQLite}}
+	body := strings.NewReader(`{"device_ids":["111111111","222222222"]}`)
+	req := httptest.NewRequest("POST", "/api/crossdesk/deskhub/tickets", body)
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.WithUser(req.Context(), &auth.User{Username: "admin", IsAdmin: true}))
+	rec := httptest.NewRecorder()
+	CrossDeskDeskHubTickets(sc).ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var env struct {
+		Data struct {
+			Items []struct {
+				DeviceID   string `json:"device_id"`
+				JoinURL    string `json:"join_url"`
+				JoinTicket string `json:"join_ticket"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	if len(env.Data.Items) != 2 {
+		t.Fatalf("应返回 2 个票据，实际 %+v", env.Data.Items)
+	}
+	for _, it := range env.Data.Items {
+		if len(it.JoinTicket) != 64 || it.JoinURL == "" {
+			t.Fatalf("票据不完整: %+v", it)
+		}
 	}
 }

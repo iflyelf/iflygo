@@ -119,6 +119,7 @@ CrossDesk 不是单一服务，而是完整的跨平台远控产品：
   - `clientTag=web`；
 - 原生信令页面直接 iframe 内置 Web 客户端；
 - 设备列表「连接」按钮可带 `device_id` 打开并预填 Web 客户端；
+- Web 桌面墙：最多 9 台设备 iframe 网格（独立会话，群控待后续）；
 - iFlyGo 管理员「连接」会生成 60 秒一次性 join_ticket，Web 客户端免输设备密码；
 - 设备「授权」可把免密连接权限授予普通 iFlyGo 用户（`crossdesk_device_users`）；
 - 票据记录签发人、来源 IP 与使用 IP；

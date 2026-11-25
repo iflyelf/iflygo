@@ -153,6 +153,7 @@ const (
 	ActionCrossDeskJoinTicket   = "crossdesk.join_ticket"
 	ActionCrossDeskUserGrant    = "crossdesk.user_grant"
 	ActionCrossDeskUserRevoke   = "crossdesk.user_revoke"
+	ActionCrossDeskDeskHub      = "crossdesk.deskhub"
 	ActionCrossDeskDisconnect   = "crossdesk.disconnect"
 	ActionGatewayNATFailed      = "gateway.nat_failed"
 	ActionGatewayNATRecovered   = "gateway.nat_recovered"

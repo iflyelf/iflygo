@@ -166,6 +166,62 @@ func RevokeCrossDeskUser(sc *svc.ServiceContext) http.HandlerFunc {
 	}
 }
 
+// CrossDeskDeskHubTickets 为多台设备生成桌面墙一次性连接票据。
+//
+// 最多 9 台；管理员可连接全部设备，普通用户只能连接已授权设备。
+func CrossDeskDeskHubTickets(sc *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			DeviceIDs []string `json:"device_ids"`
+		}
+		if err := httpx.DecodeJSON(r, &req); err != nil {
+			httpx.Fail(w, http.StatusBadRequest, "请求体非法")
+			return
+		}
+		if len(req.DeviceIDs) == 0 || len(req.DeviceIDs) > 9 {
+			httpx.Fail(w, http.StatusBadRequest, "device_ids 应为 1-9 个")
+			return
+		}
+		u, _ := auth.FromContext(r.Context())
+		if u == nil {
+			httpx.Fail(w, http.StatusUnauthorized, "未认证")
+			return
+		}
+		store := crossdesk.NewSQLStore(sc.Store)
+		items := make([]map[string]any, 0, len(req.DeviceIDs))
+		for _, id := range req.DeviceIDs {
+			id = strings.TrimSpace(id)
+			if id == "" || len(id) > 128 {
+				continue
+			}
+			var kind string
+			if err := sc.Store.DB.QueryRow(sc.Store.Rebind(`SELECT COALESCE(kind,'desktop') FROM crossdesk_devices WHERE device_id = $1`), id).Scan(&kind); err != nil || kind != "desktop" {
+				continue
+			}
+			if !u.IsAdmin {
+				ok, err := store.UserCanAccess(id, u.Username)
+				if err != nil || !ok {
+					continue
+				}
+			}
+			token, expires, err := store.IssueJoinTicket(id, u.Username, clientIP(sc, r))
+			if err != nil {
+				continue
+			}
+			items = append(items, map[string]any{
+				"device_id": id, "join_ticket": token, "expires_at": expires,
+				"join_url": "/crossdesk/web/?device_id=" + url.QueryEscape(id) + "&join_ticket=" + url.QueryEscape(token),
+			})
+		}
+		if len(items) == 0 {
+			httpx.Fail(w, http.StatusForbidden, "没有可打开的设备")
+			return
+		}
+		auditOp(sc, r, audit.ActionCrossDeskDeskHub, "crossdesk_deskhub", "", "", nil)
+		httpx.OK(w, map[string]any{"items": items})
+	}
+}
+
 // ListCrossDeskSessions 原生信令活动会话（管理员）。
 func ListCrossDeskSessions(sc *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

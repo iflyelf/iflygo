@@ -73,6 +73,12 @@ EXTRA_CSS = """
 .crossdesk-features { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 8px; }
 .crossdesk-feature { padding: 8px 10px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--panel-bg); font-size: 13px; overflow-wrap: anywhere; }
 .crossdesk-user-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; max-height: 260px; overflow: auto; }
+.deskhub-modal { max-width: none; width: 100%; height: 92vh; display: flex; flex-direction: column; }
+.deskhub-grid { flex: 1; display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 8px; overflow: auto; }
+.deskhub-cell { border: 1px solid var(--border-color); border-radius: 8px; overflow: hidden; background: var(--panel-bg); min-height: 260px; }
+.deskhub-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; }
+.deskhub-frame { width: 100%; height: 330px; border: 0; background: #fff; }
+@media (max-width: 720px) { .deskhub-grid { grid-template-columns: 1fr; } .deskhub-frame { height: 280px; } }
 @media (max-width: 720px) { .crossdesk-frame { min-height: 360px; height: 70vh; } }
 """
 
@@ -1180,6 +1186,46 @@ CROSSDESK_JS = r'''
       .catch(function (e) { tunnelSetMsg(false, e.message); render(); });
   }
 
+  function tunnelOpenDeskHub() {
+    api('/api/crossdesk/devices').then(function (devices) {
+      var ids = (devices || []).filter(function (x) { return x.kind === 'desktop'; })
+        .slice(0, 9).map(function (x) { return x.device_id; });
+      if (!ids.length) {
+        tunnelSetMsg(false, '没有可用的桌面设备');
+        render();
+        return null;
+      }
+      return api('/api/crossdesk/deskhub/tickets', {
+        method: 'POST', body: JSON.stringify({ device_ids: ids })
+      });
+    }).then(function (res) {
+      if (!res || !res.items || !res.items.length) { return; }
+      var cells = res.items.map(function (it) {
+        return h('div', { class: 'deskhub-cell' }, [
+          h('div', { class: 'deskhub-head' }, [
+            h('strong', {}, [it.device_id]),
+            h('a', { class: 'btn sm ghost', href: it.join_url, target: '_blank', rel: 'noopener noreferrer' }, ['独立窗口'])
+          ]),
+          h('iframe', {
+            class: 'deskhub-frame', src: it.join_url,
+            allow: 'clipboard-read; clipboard-write; fullscreen',
+            allowfullscreen: 'allowfullscreen'
+          })
+        ]);
+      });
+      var close = h('button', { class: 'btn ghost', type: 'button' }, ['关闭桌面墙']);
+      var mask = h('div', { class: 'modal-mask', onclick: function (e) { if (e.target === mask) { tunnelCloseModal(mask); } } }, [
+        h('div', { class: 'modal deskhub-modal' }, [
+          h('div', { class: 'modal-head' }, [h('h3', {}, ['CrossDesk 桌面墙 · ' + cells.length + ' 台设备']), close]),
+          h('div', { class: 'muted' }, ['每台设备为独立 Web 客户端会话；票据一次性，关闭后需重新打开。']),
+          h('div', { class: 'deskhub-grid' }, cells)
+        ])
+      ]);
+      close.onclick = function () { tunnelCloseModal(mask); };
+      document.body.appendChild(mask);
+    }).catch(function (e) { tunnelSetMsg(false, e.message); render(); });
+  }
+
   function tunnelOpenCrossDeskUsers(dev) {
     var base = '/api/crossdesk/devices/' + encodeURIComponent(dev.device_id) + '/users';
     api(base).then(function (users) {
@@ -1269,6 +1315,7 @@ CROSSDESK_JS = r'''
     if (web) actions.push(h('a', { class: 'btn primary', href: web, target: '_blank', rel: 'noopener noreferrer' }, ['打开 Web 客户端']));
     if (dl) actions.push(h('a', { class: 'btn', href: dl, target: '_blank', rel: 'noopener noreferrer' }, ['下载桌面/移动客户端']));
     if (admin) actions.push(h('a', { class: 'btn', href: admin, target: '_blank', rel: 'noopener noreferrer' }, ['服务端管理后台']));
+    if (native) { actions.push(h('button', { class: 'btn', onclick: tunnelOpenDeskHub }, ['桌面墙'])); }
     actions.push(h('button', { class: 'btn ghost', onclick: function () { switchView('settings'); } }, ['前往设置']));
 
     var body = [
