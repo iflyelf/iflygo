@@ -26,8 +26,11 @@ var (
 	cgErr  error
 
 	cgMainDisplayID               func() uint32
+	cgGetActiveDisplayList        func(max uint32, displays *uint32, count *uint32) int32
 	cgDisplayCreateImage          func(display uint32) uintptr
 	cgDisplayBounds               func(display uint32) cgRect
+	cgDisplayPixelsWide           func(display uint32) uint64
+	cgDisplayPixelsHigh           func(display uint32) uint64
 	cgImageGetWidth               func(img uintptr) uint64
 	cgImageGetHeight              func(img uintptr) uint64
 	cgImageGetBytesPerRow         func(img uintptr) uint64
@@ -63,8 +66,14 @@ func loadCoreGraphics() error {
 			name string
 		}{
 			{&cgMainDisplayID, cg, "CGMainDisplayID"},
+			{&cgGetActiveDisplayList, cg, "CGGetActiveDisplayList"},
+			{&cgGetActiveDisplayList, cg, "CGGetActiveDisplayList"},
 			{&cgDisplayCreateImage, cg, "CGDisplayCreateImage"},
 			{&cgDisplayBounds, cg, "CGDisplayBounds"},
+			{&cgDisplayPixelsWide, cg, "CGDisplayPixelsWide"},
+			{&cgDisplayPixelsHigh, cg, "CGDisplayPixelsHigh"},
+			{&cgDisplayPixelsWide, cg, "CGDisplayPixelsWide"},
+			{&cgDisplayPixelsHigh, cg, "CGDisplayPixelsHigh"},
 			{&cgImageGetWidth, cg, "CGImageGetWidth"},
 			{&cgImageGetHeight, cg, "CGImageGetHeight"},
 			{&cgImageGetBytesPerRow, cg, "CGImageGetBytesPerRow"},
@@ -112,7 +121,47 @@ func newScreen() (Screen, error) {
 func (s *darwinScreen) Capture() (image.Image, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	display := cgMainDisplayID()
+	return s.captureDisplayLocked(cgMainDisplayID())
+}
+
+func (s *darwinScreen) Displays() ([]DisplayInfo, error) {
+	var ids [16]uint32
+	var count uint32
+	if ret := cgGetActiveDisplayList(uint32(len(ids)), &ids[0], &count); ret != 0 {
+		return nil, fmt.Errorf("CGGetActiveDisplayList 失败: %d", ret)
+	}
+	main := cgMainDisplayID()
+	out := make([]DisplayInfo, 0, count)
+	for i := 0; i < int(count); i++ {
+		id := ids[i]
+		bounds := cgDisplayBounds(id)
+		out = append(out, DisplayInfo{
+			ID: len(out), Name: fmt.Sprintf("显示器 %d", len(out)+1),
+			X: int(bounds.Origin.X), Y: int(bounds.Origin.Y),
+			Width: int(bounds.Size.Width), Height: int(bounds.Size.Height), Primary: id == main,
+		})
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("未检测到显示器")
+	}
+	return out, nil
+}
+
+func (s *darwinScreen) CaptureDisplay(id int) (image.Image, error) {
+	var ids [16]uint32
+	var count uint32
+	if ret := cgGetActiveDisplayList(uint32(len(ids)), &ids[0], &count); ret != 0 {
+		return nil, fmt.Errorf("CGGetActiveDisplayList 失败: %d", ret)
+	}
+	if id < 0 || id >= int(count) {
+		return nil, fmt.Errorf("未知显示器: %d", id)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.captureDisplayLocked(ids[id])
+}
+
+func (s *darwinScreen) captureDisplayLocked(display uint32) (image.Image, error) {
 	ref := cgDisplayCreateImage(display)
 	if ref == 0 {
 		return nil, fmt.Errorf("CGDisplayCreateImage 失败；请在“系统设置 → 隐私与安全性 → 屏幕录制”中授权")
@@ -156,7 +205,9 @@ func (s *darwinScreen) Capture() (image.Image, error) {
 
 func (s *darwinScreen) Close() error { return nil }
 
-type darwinInput struct{}
+type darwinInput struct {
+	x, y, w, h float64
+}
 
 func newInput() (Input, error) {
 	if err := loadCoreGraphics(); err != nil {
@@ -165,10 +216,19 @@ func newInput() (Input, error) {
 	return &darwinInput{}, nil
 }
 
+// SetDisplay 输入坐标映射到当前显示器区域（CoreGraphics 点坐标）。
+func (i *darwinInput) SetDisplay(x, y, w, h int) {
+	i.x, i.y, i.w, i.h = float64(x), float64(y), float64(w), float64(h)
+}
+
 func (i *darwinInput) Mouse(x, y float64, flag, scroll int) error {
-	bounds := cgDisplayBounds(cgMainDisplayID())
-	px := bounds.Origin.X + clamp01(x)*bounds.Size.Width
-	py := bounds.Origin.Y + clamp01(y)*bounds.Size.Height
+	regionX, regionY, regionW, regionH := i.x, i.y, i.w, i.h
+	if regionW <= 0 || regionH <= 0 {
+		bounds := cgDisplayBounds(cgMainDisplayID())
+		regionX, regionY, regionW, regionH = bounds.Origin.X, bounds.Origin.Y, bounds.Size.Width, bounds.Size.Height
+	}
+	px := regionX + clamp01(x)*regionW
+	py := regionY + clamp01(y)*regionH
 	pt := cgPoint{X: px, Y: py}
 
 	switch flag {

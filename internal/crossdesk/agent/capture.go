@@ -15,6 +15,28 @@ type Screen interface {
 	Close() error
 }
 
+// DisplayInfo 描述一个可单独采集的显示器。
+type DisplayInfo struct {
+	ID      int    `json:"id"`
+	Name    string `json:"name"`
+	X       int    `json:"x"`
+	Y       int    `json:"y"`
+	Width   int    `json:"width"`
+	Height  int    `json:"height"`
+	Primary bool   `json:"primary"`
+}
+
+// DisplayProvider 由支持多显示器的平台实现。
+type DisplayProvider interface {
+	Displays() ([]DisplayInfo, error)
+	CaptureDisplay(id int) (image.Image, error)
+}
+
+// DisplayInput 由输入实现可选支持：把归一化坐标映射到指定显示器区域。
+type DisplayInput interface {
+	SetDisplay(x, y, w, h int)
+}
+
 // Input 是平台输入注入实现。x/y 为 0..1 的归一化坐标。
 type Input interface {
 	// Mouse flag 与 Web 客户端 MouseFlag 一致：

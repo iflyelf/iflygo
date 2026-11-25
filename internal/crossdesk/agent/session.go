@@ -55,6 +55,7 @@ type controlMessage struct {
 	Mouse         *mouseMessage         `json:"mouse"`
 	Keyboard      *keyboardMessage      `json:"keyboard"`
 	VideoSettings *videoSettingsMessage `json:"video_settings"`
+	DisplayID     *int                  `json:"display_id"`
 }
 
 func newSession(a *Agent, guest string) (*session, error) {
@@ -84,11 +85,13 @@ func newSession(a *Agent, guest string) (*session, error) {
 	s.control, s.motion = control, motion
 	control.OnOpen(func() {
 		a.log.Printf("📺 画面通道已建立: %s", guest)
+		displays, active := a.displaySnapshot()
 		hostInfo, _ := json.Marshal(map[string]any{
 			"type": 3,
 			"host_info": map[string]any{
 				"agent": "iflygo-go", "platform": runtime.GOOS,
 				"supports_video_settings": true, "supports_clipboard": a.clipboard != nil,
+				"displays": displays, "active_display": active,
 			},
 		})
 		_ = control.SendText(string(hostInfo))
@@ -236,6 +239,10 @@ func (s *session) onMessage(msg webrtc.DataChannelMessage) {
 		}
 	case 11:
 		s.applyVideoSettings(action.VideoSettings)
+	case 4:
+		if action.DisplayID != nil {
+			s.agent.setDisplay(*action.DisplayID)
+		}
 	}
 }
 

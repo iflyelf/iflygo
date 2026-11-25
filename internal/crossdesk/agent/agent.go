@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"log"
 	"net/http"
 	"os"
@@ -80,6 +81,10 @@ type Agent struct {
 	videoQuality atomic.Int32
 	videoFPS     atomic.Int32
 	videoPref    atomic.Int32
+
+	displayMu     sync.Mutex
+	displays      []DisplayInfo
+	activeDisplay atomic.Int32
 
 	deviceID   string
 	password   string
@@ -198,7 +203,92 @@ func (a *Agent) prepare() error {
 	} else {
 		a.clipboard = clipboard
 	}
+	a.refreshDisplays()
 	return nil
+}
+
+// refreshDisplays 刷新显示器列表；仅在屏幕实现支持多显示器时生效。
+func (a *Agent) refreshDisplays() {
+	provider, ok := a.screen.(DisplayProvider)
+	if !ok {
+		return
+	}
+	list, err := provider.Displays()
+	if err != nil || len(list) == 0 {
+		return
+	}
+	a.displayMu.Lock()
+	a.displays = list
+	a.displayMu.Unlock()
+	current := int(a.activeDisplay.Load())
+	valid := false
+	for _, d := range list {
+		if d.ID == current {
+			valid = true
+			break
+		}
+	}
+	if !valid {
+		next := list[0].ID
+		for _, d := range list {
+			if d.Primary {
+				next = d.ID
+				break
+			}
+		}
+		a.activeDisplay.Store(int32(next))
+	}
+	a.syncInputRegion()
+}
+
+func (a *Agent) syncInputRegion() {
+	input, ok := a.input.(DisplayInput)
+	if !ok {
+		return
+	}
+	displays, active := a.displaySnapshot()
+	for _, d := range displays {
+		if d.ID == active {
+			input.SetDisplay(d.X, d.Y, d.Width, d.Height)
+			return
+		}
+	}
+}
+
+func (a *Agent) displaySnapshot() ([]DisplayInfo, int) {
+	a.displayMu.Lock()
+	defer a.displayMu.Unlock()
+	return append([]DisplayInfo(nil), a.displays...), int(a.activeDisplay.Load())
+}
+
+func (a *Agent) setDisplay(id int) {
+	a.displayMu.Lock()
+	valid := false
+	for _, d := range a.displays {
+		if d.ID == id {
+			valid = true
+			break
+		}
+	}
+	a.displayMu.Unlock()
+	if !valid {
+		return
+	}
+	a.activeDisplay.Store(int32(id))
+	a.syncInputRegion()
+	a.log.Printf("🖥️ 切换显示器: %d", id)
+}
+
+func (a *Agent) captureScreen() (image.Image, error) {
+	if provider, ok := a.screen.(DisplayProvider); ok {
+		a.displayMu.Lock()
+		n := len(a.displays)
+		a.displayMu.Unlock()
+		if n > 0 {
+			return provider.CaptureDisplay(int(a.activeDisplay.Load()))
+		}
+	}
+	return a.screen.Capture()
 }
 
 func (a *Agent) closeResources() {
@@ -486,6 +576,7 @@ func (a *Agent) startSession(guest string) {
 		a.log.Printf("⚠️ 创建 %s 的会话失败: %v", guest, err)
 		return
 	}
+	a.refreshDisplays()
 	a.mu.Lock()
 	old := a.sessions[guest]
 	a.sessions[guest] = s
@@ -575,7 +666,7 @@ func (a *Agent) captureLoop(ctx context.Context) {
 			continue
 		}
 		last = time.Now()
-		img, err := a.screen.Capture()
+		img, err := a.captureScreen()
 		if err != nil {
 			if time.Since(lastErrAt) > 5*time.Second {
 				a.log.Printf("⚠️ 屏幕采集失败: %v", err)

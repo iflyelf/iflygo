@@ -105,6 +105,20 @@ func newFakeScreen() *fakeScreen {
 func (f *fakeScreen) Capture() (image.Image, error) { return f.img, nil }
 func (f *fakeScreen) Close() error                  { return nil }
 
+func (f *fakeScreen) Displays() ([]DisplayInfo, error) {
+	return []DisplayInfo{
+		{ID: 0, Name: "主屏", X: 0, Y: 0, Width: 64, Height: 48, Primary: true},
+		{ID: 1, Name: "副屏", X: 64, Y: 0, Width: 64, Height: 48},
+	}, nil
+}
+
+func (f *fakeScreen) CaptureDisplay(id int) (image.Image, error) {
+	if id != 0 && id != 1 {
+		return nil, fmt.Errorf("unknown display %d", id)
+	}
+	return f.img, nil
+}
+
 type fakeMouse struct {
 	X, Y   float64
 	Flag   int
@@ -112,9 +126,10 @@ type fakeMouse struct {
 }
 
 type fakeInput struct {
-	mu    sync.Mutex
-	mouse []fakeMouse
-	keys  []int
+	mu     sync.Mutex
+	mouse  []fakeMouse
+	keys   []int
+	region [4]int
 }
 
 func (f *fakeInput) Mouse(x, y float64, flag, scroll int) error {
@@ -132,6 +147,12 @@ func (f *fakeInput) Key(vk int, down bool) error {
 }
 
 func (f *fakeInput) Close() error { return nil }
+
+func (f *fakeInput) SetDisplay(x, y, w, h int) {
+	f.mu.Lock()
+	f.region = [4]int{x, y, w, h}
+	f.mu.Unlock()
+}
 
 type fakeClipboard struct {
 	mu     sync.Mutex
@@ -460,6 +481,34 @@ func TestAgentStreamsFramesAndAcceptsInput(t *testing.T) {
 	_, _, payload := readClip(clipKindText)
 	if string(payload) != "host-update" {
 		t.Fatalf("unexpected clipboard payload: %q", string(payload))
+	}
+
+	// 多显示器：host_info 应包含两台显示器，切换后输入区域随之更新。
+	displays, active := a.displaySnapshot()
+	if len(displays) != 2 || active != 0 {
+		t.Fatalf("unexpected displays: %+v active=%d", displays, active)
+	}
+	input.mu.Lock()
+	initialRegion := input.region
+	input.mu.Unlock()
+	if initialRegion != [4]int{0, 0, 64, 48} {
+		t.Fatalf("initial input region: %v", initialRegion)
+	}
+	if err := dc.SendText(`{"type":4,"display_id":1}`); err != nil {
+		t.Fatalf("send display switch: %v", err)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		input.mu.Lock()
+		region := input.region
+		input.mu.Unlock()
+		if a.activeDisplay.Load() == 1 && region == [4]int{64, 0, 64, 48} {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("display switch not applied: active=%d region=%v", a.activeDisplay.Load(), region)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 
 	// 画质/帧率协商：type 11 -> type 12，并更新编码参数。

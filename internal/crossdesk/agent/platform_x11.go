@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"image"
 	"os"
+	"sync"
 
 	"github.com/BurntSushi/xgb"
+	"github.com/BurntSushi/xgb/randr"
 	"github.com/BurntSushi/xgb/xproto"
 	"github.com/BurntSushi/xgb/xtest"
 )
@@ -21,6 +23,9 @@ type x11Screen struct {
 	lastW    int
 	lastH    int
 	cacheImg *image.RGBA
+
+	displayMu sync.Mutex
+	displays  []DisplayInfo
 }
 
 func newScreen() (Screen, error) {
@@ -52,12 +57,96 @@ func (s *x11Screen) Capture() (image.Image, error) {
 	if err != nil {
 		return nil, err
 	}
-	w, h := int(geom.Width), int(geom.Height)
-	if w == 0 || h == 0 {
-		return nil, fmt.Errorf("X11 根窗口尺寸为空")
+	return s.captureArea(0, 0, int(geom.Width), int(geom.Height))
+}
+
+// Displays 通过 RandR 枚举独立显示器；失败时退化为整个根窗口。
+func (s *x11Screen) Displays() ([]DisplayInfo, error) {
+	list := s.queryDisplays()
+	s.displayMu.Lock()
+	s.displays = list
+	s.displayMu.Unlock()
+	return append([]DisplayInfo(nil), list...), nil
+}
+
+func (s *x11Screen) queryDisplays() []DisplayInfo {
+	geom, err := xproto.GetGeometry(s.conn, xproto.Drawable(s.root)).Reply()
+	if err != nil {
+		return nil
+	}
+	fallback := []DisplayInfo{{
+		ID: 0, Name: "显示器 1", Width: int(geom.Width), Height: int(geom.Height), Primary: true,
+	}}
+	if err := randr.Init(s.conn); err != nil {
+		return fallback
+	}
+	res, err := randr.GetScreenResources(s.conn, s.root).Reply()
+	if err != nil {
+		return fallback
+	}
+	var out []DisplayInfo
+	for _, crtc := range res.Crtcs {
+		info, err := randr.GetCrtcInfo(s.conn, crtc, res.ConfigTimestamp).Reply()
+		if err != nil || info.Width == 0 || info.Height == 0 {
+			continue
+		}
+		name := ""
+		if len(info.Outputs) > 0 {
+			if oi, err := randr.GetOutputInfo(s.conn, info.Outputs[0], res.ConfigTimestamp).Reply(); err == nil {
+				name = string(oi.Name)
+			}
+		}
+		id := len(out)
+		if name == "" {
+			name = fmt.Sprintf("显示器 %d", id+1)
+		}
+		out = append(out, DisplayInfo{
+			ID: id, Name: name, X: int(info.X), Y: int(info.Y),
+			Width: int(info.Width), Height: int(info.Height),
+		})
+	}
+	if len(out) == 0 {
+		return fallback
+	}
+	for i := range out {
+		d := out[i]
+		if d.X <= 0 && d.Y <= 0 && d.X+d.Width > 0 && d.Y+d.Height > 0 {
+			out[i].Primary = true
+			break
+		}
+	}
+	return out
+}
+
+func (s *x11Screen) CaptureDisplay(id int) (image.Image, error) {
+	s.displayMu.Lock()
+	displays := append([]DisplayInfo(nil), s.displays...)
+	s.displayMu.Unlock()
+	if len(displays) == 0 {
+		var err error
+		if displays, err = s.Displays(); err != nil {
+			return nil, err
+		}
+	}
+	for _, d := range displays {
+		if d.ID != id {
+			continue
+		}
+		img, err := s.captureArea(d.X, d.Y, d.Width, d.Height)
+		if err != nil {
+			return nil, err
+		}
+		return img, nil
+	}
+	return nil, fmt.Errorf("未知显示器: %d", id)
+}
+
+func (s *x11Screen) captureArea(x, y, w, h int) (image.Image, error) {
+	if w <= 0 || h <= 0 {
+		return nil, fmt.Errorf("X11 采集区域无效: %dx%d", w, h)
 	}
 	reply, err := xproto.GetImage(s.conn, xproto.ImageFormatZPixmap, xproto.Drawable(s.root),
-		0, 0, geom.Width, geom.Height, ^uint32(0)).Reply()
+		int16(x), int16(y), uint16(w), uint16(h), ^uint32(0)).Reply()
 	if err != nil {
 		return nil, err
 	}
@@ -72,40 +161,40 @@ func (s *x11Screen) Capture() (image.Image, error) {
 	dst := s.cacheImg.Pix
 	switch s.bpp {
 	case 32:
-		for y := 0; y < h; y++ {
-			src := reply.Data[y*stride:]
-			row := dst[y*s.cacheImg.Stride:]
-			for x := 0; x < w; x++ {
-				row[x*4+0] = src[x*4+2]
-				row[x*4+1] = src[x*4+1]
-				row[x*4+2] = src[x*4+0]
-				row[x*4+3] = 0xff
+		for yy := 0; yy < h; yy++ {
+			src := reply.Data[yy*stride:]
+			row := dst[yy*s.cacheImg.Stride:]
+			for xx := 0; xx < w; xx++ {
+				row[xx*4+0] = src[xx*4+2]
+				row[xx*4+1] = src[xx*4+1]
+				row[xx*4+2] = src[xx*4+0]
+				row[xx*4+3] = 0xff
 			}
 		}
 	case 24:
-		for y := 0; y < h; y++ {
-			src := reply.Data[y*stride:]
-			row := dst[y*s.cacheImg.Stride:]
-			for x := 0; x < w; x++ {
-				row[x*4+0] = src[x*3+2]
-				row[x*4+1] = src[x*3+1]
-				row[x*4+2] = src[x*3+0]
-				row[x*4+3] = 0xff
+		for yy := 0; yy < h; yy++ {
+			src := reply.Data[yy*stride:]
+			row := dst[yy*s.cacheImg.Stride:]
+			for xx := 0; xx < w; xx++ {
+				row[xx*4+0] = src[xx*3+2]
+				row[xx*4+1] = src[xx*3+1]
+				row[xx*4+2] = src[xx*3+0]
+				row[xx*4+3] = 0xff
 			}
 		}
 	case 16:
-		for y := 0; y < h; y++ {
-			src := reply.Data[y*stride:]
-			row := dst[y*s.cacheImg.Stride:]
-			for x := 0; x < w; x++ {
-				v := uint16(src[x*2]) | uint16(src[x*2+1])<<8
+		for yy := 0; yy < h; yy++ {
+			src := reply.Data[yy*stride:]
+			row := dst[yy*s.cacheImg.Stride:]
+			for xx := 0; xx < w; xx++ {
+				v := uint16(src[xx*2]) | uint16(src[xx*2+1])<<8
 				r := uint8((v >> 11) & 0x1f)
 				g := uint8((v >> 5) & 0x3f)
 				b := uint8(v & 0x1f)
-				row[x*4+0] = r<<3 | r>>2
-				row[x*4+1] = g<<2 | g>>4
-				row[x*4+2] = b<<3 | b>>2
-				row[x*4+3] = 0xff
+				row[xx*4+0] = r<<3 | r>>2
+				row[xx*4+1] = g<<2 | g>>4
+				row[xx*4+2] = b<<3 | b>>2
+				row[xx*4+3] = 0xff
 			}
 		}
 	default:
@@ -128,7 +217,14 @@ type x11Input struct {
 	root   xproto.Window
 	width  int
 	height int
-	keymap map[uint32]xproto.Keycode
+	// 当前采集区域（根窗口绝对坐标）；为零时使用整个根窗口。
+	regionX, regionY, regionW, regionH int
+	keymap                             map[uint32]xproto.Keycode
+}
+
+// SetDisplay 输入坐标映射到当前显示器区域。
+func (i *x11Input) SetDisplay(x, y, w, h int) {
+	i.regionX, i.regionY, i.regionW, i.regionH = x, y, w, h
 }
 
 func newInput() (Input, error) {
@@ -155,6 +251,9 @@ func (i *x11Input) refreshGeometry() error {
 		return err
 	}
 	i.width, i.height = int(geom.Width), int(geom.Height)
+	if i.regionW <= 0 || i.regionH <= 0 {
+		i.regionX, i.regionY, i.regionW, i.regionH = 0, 0, i.width, i.height
+	}
 	return nil
 }
 
@@ -162,8 +261,8 @@ func (i *x11Input) Mouse(x, y float64, flag, scroll int) error {
 	if err := i.refreshGeometry(); err != nil {
 		return err
 	}
-	px := int16(clamp01(x) * float64(i.width-1))
-	py := int16(clamp01(y) * float64(i.height-1))
+	px := int16(i.regionX) + int16(clamp01(x)*float64(i.regionW-1))
+	py := int16(i.regionY) + int16(clamp01(y)*float64(i.regionH-1))
 	switch flag {
 	case MouseMove:
 		return xtest.FakeInputChecked(i.conn, xproto.MotionNotify, 0, 0, i.root, px, py, 0).Check()

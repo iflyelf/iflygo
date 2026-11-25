@@ -31,6 +31,15 @@ test.describe('CrossDesk 纯 Go Agent', () => {
     expect(canvas.height).toBeGreaterThan(0);
     expect(canvas.display).toBe('block');
 
+    // 多显示器：host_info 填充 Web 客户端的显示选择器。
+    await expect.poll(
+      () => page.evaluate(() => window.CrossDeskNativeDisplays?.length || 0),
+      { timeout: 10000 },
+    ).toBeGreaterThan(0);
+    const displayOptions = await page.evaluate(() =>
+      Array.from(document.getElementById('display-id').options).map(o => o.value));
+    expect(displayOptions.length).toBeGreaterThan(0);
+
     // 剪贴板：主机 -> 浏览器。
     await expect.poll(
       () => page.evaluate(() => window.CrossDeskClipboard?.state),

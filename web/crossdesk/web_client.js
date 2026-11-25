@@ -91,6 +91,7 @@ const CONNECT_BUTTON_DEFAULT_TEXT = elements.connectBtn
   : "连接";
 let trackIndex = 0; // Track index for display_id (0, 1, 2, ...)
 const trackMap = new Map(); // Map<index, track> - stores tracks by their display_id index
+let nativeDisplays = null; // 纯 Go Agent 上报的显示器列表
 
 // Pin routing to the connection attempt, not to editable form fields. Older
 // signaling servers may omit routing fields; validate every field they supply.
@@ -1198,6 +1199,7 @@ function handleOffer(offer) {
     teardownPeerConnection();
     trackIndex = 0;
     trackMap.clear();
+    resetNativeDisplays();
     if (elements.displaySelect) {
       elements.displaySelect.innerHTML = '<option value="" selected>候选画面 ID...</option>';
     }
@@ -1489,7 +1491,13 @@ function bindDataChannel(channel, peer) {
   // 原生 Go Agent 通过二进制 DataChannel 发送分片 JPEG 画面。
   channel.binaryType = "arraybuffer";
   channel.addEventListener("message", (event) => {
-    if (typeof event.data === "string") return;
+    if (typeof event.data === "string") {
+      try {
+        const message = JSON.parse(event.data);
+        if (message?.type === 3) applyNativeDisplays(message.host_info);
+      } catch (err) {}
+      return;
+    }
     window.CrossDeskFrameView?.render(event.data);
   });
 }
@@ -1655,6 +1663,7 @@ function disconnect() {
   // Reset track index and clear display select options
   trackIndex = 0;
   trackMap.clear();
+  resetNativeDisplays();
   if (elements.displaySelect) {
     elements.displaySelect.innerHTML = '<option value="" selected>候选画面 ID...</option>';
   }
@@ -1766,6 +1775,34 @@ function enableDataChannelUi(enabled) {
   if (elements.displaySelect) {
     elements.displaySelect.disabled = !enabled;
   }
+}
+
+function resetNativeDisplays() {
+  nativeDisplays = null;
+  window.CrossDeskNativeDisplays = null;
+}
+
+// 纯 Go Agent 在 host_info 中上报显示器列表；官方客户端仍使用视频轨道。
+function applyNativeDisplays(hostInfo) {
+  if (!hostInfo || hostInfo.agent !== "iflygo-go" ||
+      !Array.isArray(hostInfo.displays) || !elements.displaySelect) return;
+  const displays = hostInfo.displays.filter(d => d && Number.isInteger(d.id));
+  if (!displays.length || trackMap.size > 0) return;
+  nativeDisplays = displays;
+  window.CrossDeskNativeDisplays = displays;
+  elements.displaySelect.innerHTML = "";
+  let primary = displays[0].id;
+  for (const display of displays) {
+    const option = document.createElement("option");
+    option.value = String(display.id);
+    const size = display.width && display.height ? ` · ${display.width}×${display.height}` : "";
+    option.textContent = `${display.name || `显示器 ${display.id + 1}`}${size}${display.primary ? "（主）" : ""}`;
+    elements.displaySelect.appendChild(option);
+    if (display.primary) primary = display.id;
+  }
+  const active = Number.isInteger(hostInfo.active_display) ? hostInfo.active_display : primary;
+  elements.displaySelect.value = String(active);
+  elements.displaySelect.disabled = !control.isChannelOpen();
 }
 
 function setDisplayId() {
