@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"runtime"
 	"sync"
 	"time"
 
@@ -16,8 +17,10 @@ type session struct {
 	guest string
 	pc    *webrtc.PeerConnection
 
-	control *webrtc.DataChannel
-	motion  *webrtc.DataChannel
+	control          *webrtc.DataChannel
+	motion           *webrtc.DataChannel
+	clipboardChannel *webrtc.DataChannel
+	clipState        clipboardSessionState
 
 	mu        sync.Mutex
 	pending   []webrtc.ICECandidateInit
@@ -40,10 +43,18 @@ type keyboardMessage struct {
 	Flag     int `json:"flag"`
 }
 
+type videoSettingsMessage struct {
+	Quality    int    `json:"quality"`
+	FrameRate  int    `json:"frame_rate"`
+	Preference int    `json:"preference"`
+	RequestID  uint32 `json:"request_id"`
+}
+
 type controlMessage struct {
-	Type     int              `json:"type"`
-	Mouse    *mouseMessage    `json:"mouse"`
-	Keyboard *keyboardMessage `json:"keyboard"`
+	Type          int                   `json:"type"`
+	Mouse         *mouseMessage         `json:"mouse"`
+	Keyboard      *keyboardMessage      `json:"keyboard"`
+	VideoSettings *videoSettingsMessage `json:"video_settings"`
 }
 
 func newSession(a *Agent, guest string) (*session, error) {
@@ -71,9 +82,31 @@ func newSession(a *Agent, guest string) (*session, error) {
 		return nil, err
 	}
 	s.control, s.motion = control, motion
-	control.OnOpen(func() { a.log.Printf("📺 画面通道已建立: %s", guest) })
+	control.OnOpen(func() {
+		a.log.Printf("📺 画面通道已建立: %s", guest)
+		hostInfo, _ := json.Marshal(map[string]any{
+			"type": 3,
+			"host_info": map[string]any{
+				"agent": "iflygo-go", "platform": runtime.GOOS,
+				"supports_video_settings": true, "supports_clipboard": a.clipboard != nil,
+			},
+		})
+		_ = control.SendText(string(hostInfo))
+	})
 	control.OnMessage(s.onMessage)
 	motion.OnMessage(s.onMessage)
+	if a.clipboard != nil {
+		clip, err := pc.CreateDataChannel("web-clipboard", &webrtc.DataChannelInit{Ordered: &ordered})
+		if err == nil {
+			s.clipboardChannel = clip
+			clip.OnMessage(func(m webrtc.DataChannelMessage) {
+				if !m.IsString {
+					s.onClipboardMessage(m.Data)
+				}
+			})
+			clip.OnClose(func() { s.closeClipboard() })
+		}
+	}
 
 	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
 		if c == nil {
@@ -201,7 +234,34 @@ func (s *session) onMessage(msg webrtc.DataChannelMessage) {
 		if err := s.agent.input.Key(action.Keyboard.KeyValue, action.Keyboard.Flag == 0); err != nil {
 			s.logError("注入键盘事件失败: %v", err)
 		}
+	case 11:
+		s.applyVideoSettings(action.VideoSettings)
 	}
+}
+
+// applyVideoSettings 处理 Web 客户端的画质/帧率协商（type 11 -> type 12）。
+func (s *session) applyVideoSettings(req *videoSettingsMessage) {
+	if req == nil || req.Quality < 0 || req.Quality > 2 ||
+		(req.FrameRate != 30 && req.FrameRate != 60) ||
+		req.Preference < 0 || req.Preference > 2 {
+		return
+	}
+	quality := [...]int32{45, 62, 78}[req.Quality]
+	s.agent.videoQuality.Store(quality)
+	s.agent.videoFPS.Store(int32(req.FrameRate))
+	s.agent.videoPref.Store(int32(req.Preference))
+	s.agent.log.Printf("🎛️ 画面设置: 质量=%d 帧率=%d 偏好=%d", req.Quality, req.FrameRate, req.Preference)
+	reply, err := json.Marshal(map[string]any{
+		"type": 12,
+		"video_settings": map[string]any{
+			"accepted": true, "quality": req.Quality, "frame_rate": req.FrameRate,
+			"preference": req.Preference, "request_id": req.RequestID,
+		},
+	})
+	if err != nil || s.control == nil {
+		return
+	}
+	_ = s.control.SendText(string(reply))
 }
 
 func (s *session) send(chunks [][]byte) {
@@ -234,6 +294,7 @@ func (s *session) logError(format string, args ...any) {
 
 func (s *session) close() {
 	s.closeOnce.Do(func() {
+		s.closeClipboard()
 		_ = s.pc.Close()
 		s.agent.dropSession(s)
 	})

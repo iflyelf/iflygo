@@ -40,9 +40,10 @@ type Config struct {
 	CredentialsPath string
 	// Logger 为空时输出到 stdout。
 	Logger *log.Logger
-	// Screen / Input 可注入测试实现；为空时使用平台原生实现。
-	Screen Screen
-	Input  Input
+	// Screen / Input / Clipboard 可注入测试实现；为空时使用平台原生实现。
+	Screen    Screen
+	Input     Input
+	Clipboard Clipboard
 }
 
 type credentials struct {
@@ -70,6 +71,15 @@ type Agent struct {
 	sessions map[string]*session
 	viewers  int
 	capStop  context.CancelFunc
+
+	clipboard    Clipboard
+	clipSessions int
+	clipMu       sync.Mutex
+	clipText     string
+
+	videoQuality atomic.Int32
+	videoFPS     atomic.Int32
+	videoPref    atomic.Int32
 
 	deviceID   string
 	password   string
@@ -100,6 +110,9 @@ func (a *Agent) Run(ctx context.Context) error {
 		return err
 	}
 	defer a.closeResources()
+	clipCtx, stopClip := context.WithCancel(ctx)
+	defer stopClip()
+	go a.clipboardLoop(clipCtx)
 
 	var failures int
 	for {
@@ -147,6 +160,9 @@ func (a *Agent) prepare() error {
 		a.cfg.MaxWidth = 1600
 	}
 	a.sessions = map[string]*session{}
+	a.videoQuality.Store(int32(a.cfg.Quality))
+	a.videoFPS.Store(int32(a.cfg.FPS))
+	a.videoPref.Store(1)
 	a.deviceID = strings.TrimSpace(a.cfg.DeviceID)
 	a.password = a.cfg.Password
 	a.loadCredentials()
@@ -175,6 +191,13 @@ func (a *Agent) prepare() error {
 	} else {
 		a.input = a.cfg.Input
 	}
+	if a.cfg.Clipboard != nil {
+		a.clipboard = a.cfg.Clipboard
+	} else if clipboard, err := newClipboard(); err != nil {
+		a.log.Printf("⚠️ 剪贴板不可用（远程桌面仍可使用）: %v", err)
+	} else {
+		a.clipboard = clipboard
+	}
 	return nil
 }
 
@@ -199,6 +222,9 @@ func (a *Agent) closeResources() {
 	}
 	if a.input != nil {
 		_ = a.input.Close()
+	}
+	if a.clipboard != nil {
+		_ = a.clipboard.Close()
 	}
 }
 
@@ -404,8 +430,8 @@ func (a *Agent) handleLogin(msg map[string]any) error {
 	if t, ok := msg["turn"].(map[string]any); ok {
 		a.applyTurn(t)
 	}
-	a.log.Printf("✅ 已登录 CrossDesk 设备 %s，等待连接（%d fps / %d 质量 / 最大宽 %d）",
-		a.deviceID, a.cfg.FPS, a.cfg.Quality, a.cfg.MaxWidth)
+	a.log.Printf("✅ 已登录 CrossDesk 设备 %s，等待连接（%d fps / JPEG %d / 最大宽 %d）",
+		a.deviceID, a.videoFPS.Load(), a.videoQuality.Load(), a.cfg.MaxWidth)
 	return nil
 }
 
@@ -527,9 +553,10 @@ func (a *Agent) dropSession(s *session) {
 }
 
 func (a *Agent) captureLoop(ctx context.Context) {
-	interval := time.Second / time.Duration(a.cfg.FPS)
-	ticker := time.NewTicker(interval)
+	// 以 60 Hz 轮询，按客户端协商的帧率跳帧；质量同样实时调整。
+	ticker := time.NewTicker(time.Second / 60)
 	defer ticker.Stop()
+	var last time.Time
 	var lastErrAt time.Time
 	for {
 		select {
@@ -537,6 +564,17 @@ func (a *Agent) captureLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 		}
+		fps := int(a.videoFPS.Load())
+		if fps < 1 {
+			fps = 10
+		}
+		if fps > 60 {
+			fps = 60
+		}
+		if !last.IsZero() && time.Since(last) < time.Second/time.Duration(fps) {
+			continue
+		}
+		last = time.Now()
 		img, err := a.screen.Capture()
 		if err != nil {
 			if time.Since(lastErrAt) > 5*time.Second {
@@ -545,7 +583,8 @@ func (a *Agent) captureLoop(ctx context.Context) {
 			}
 			continue
 		}
-		jpeg, w, h, err := encodeJPEG(img, a.cfg.MaxWidth, a.cfg.Quality)
+		quality := int(a.videoQuality.Load())
+		jpeg, w, h, err := encodeJPEG(img, a.cfg.MaxWidth, quality)
 		if err != nil {
 			if time.Since(lastErrAt) > 5*time.Second {
 				a.log.Printf("⚠️ 画面编码失败: %v", err)

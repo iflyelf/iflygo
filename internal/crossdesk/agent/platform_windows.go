@@ -12,8 +12,9 @@ import (
 )
 
 var (
-	modUser32 = windows.NewLazySystemDLL("user32.dll")
-	modGdi32  = windows.NewLazySystemDLL("gdi32.dll")
+	modUser32   = windows.NewLazySystemDLL("user32.dll")
+	modGdi32    = windows.NewLazySystemDLL("gdi32.dll")
+	modKernel32 = windows.NewLazySystemDLL("kernel32.dll")
 
 	procSetProcessDPIAware = modUser32.NewProc("SetProcessDPIAware")
 	procGetDC              = modUser32.NewProc("GetDC")

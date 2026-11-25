@@ -133,6 +133,28 @@ func (f *fakeInput) Key(vk int, down bool) error {
 
 func (f *fakeInput) Close() error { return nil }
 
+type fakeClipboard struct {
+	mu     sync.Mutex
+	text   string
+	writes []string
+}
+
+func (f *fakeClipboard) ReadText() (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.text, nil
+}
+
+func (f *fakeClipboard) WriteText(text string) error {
+	f.mu.Lock()
+	f.text = text
+	f.writes = append(f.writes, text)
+	f.mu.Unlock()
+	return nil
+}
+
+func (f *fakeClipboard) Close() error { return nil }
+
 func TestAgentStreamsFramesAndAcceptsInput(t *testing.T) {
 	store := newFakeStore()
 	hub := crossdesk.NewHub(store, crossdesk.TurnConfig{}, func() bool { return true }, log.New(io.Discard, "", 0))
@@ -140,11 +162,12 @@ func TestAgentStreamsFramesAndAcceptsInput(t *testing.T) {
 	defer srv.Close()
 
 	input := &fakeInput{}
+	clip := &fakeClipboard{text: "hello-from-host"}
 	a := New(Config{
 		ServerURL: srv.URL, FPS: 30, Quality: 55, MaxWidth: 0,
 		CredentialsPath: t.TempDir() + "/device.json",
 		Logger:          log.New(io.Discard, "", 0),
-		Screen:          newFakeScreen(), Input: input,
+		Screen:          newFakeScreen(), Input: input, Clipboard: clip,
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -215,10 +238,29 @@ func TestAgentStreamsFramesAndAcceptsInput(t *testing.T) {
 	defer pc.Close()
 
 	frames := make(chan []byte, 8)
+	controlText := make(chan []byte, 16)
 	controlReady := make(chan *webrtc.DataChannel, 1)
 	motionReady := make(chan *webrtc.DataChannel, 1)
+	clipReady := make(chan *webrtc.DataChannel, 1)
+	clipMessages := make(chan []byte, 16)
 	pc.OnDataChannel(func(dc *webrtc.DataChannel) {
 		switch dc.Label() {
+		case "web-clipboard":
+			dc.OnOpen(func() {
+				select {
+				case clipReady <- dc:
+				default:
+				}
+			})
+			dc.OnMessage(func(m webrtc.DataChannelMessage) {
+				if m.IsString {
+					return
+				}
+				select {
+				case clipMessages <- append([]byte(nil), m.Data...):
+				default:
+				}
+			})
 		case "data-stream":
 			dc.OnOpen(func() {
 				select {
@@ -227,10 +269,14 @@ func TestAgentStreamsFramesAndAcceptsInput(t *testing.T) {
 				}
 			})
 			dc.OnMessage(func(m webrtc.DataChannelMessage) {
+				data := append([]byte(nil), m.Data...)
 				if m.IsString {
+					select {
+					case controlText <- data:
+					default:
+					}
 					return
 				}
-				data := append([]byte(nil), m.Data...)
 				select {
 				case frames <- data:
 				default:
@@ -365,6 +411,92 @@ func TestAgentStreamsFramesAndAcceptsInput(t *testing.T) {
 	if err := dc.SendText(string(data)); err != nil {
 		t.Fatalf("send key: %v", err)
 	}
+
+	// 剪贴板通道：HELLO -> READY，主机推送文本，客户端写入文本。
+	var clipDC *webrtc.DataChannel
+	select {
+	case clipDC = <-clipReady:
+	case <-time.After(15 * time.Second):
+		t.Fatal("clipboard channel did not open")
+	}
+	if err := clipDC.Send(clipFrame(clipKindHello, 0, clipVersion, 0, nil)); err != nil {
+		t.Fatalf("send clipboard hello: %v", err)
+	}
+	readClip := func(wantKind uint32) (kind, id uint32, payload []byte) {
+		deadline := time.After(10 * time.Second)
+		for {
+			select {
+			case msg := <-clipMessages:
+				k, i, _, _, ok := parseClipFrame(msg)
+				if !ok {
+					continue
+				}
+				if k == wantKind {
+					return k, i, msg[clipHeaderSize:]
+				}
+			case <-deadline:
+				t.Fatalf("clipboard frame kind %d not received", wantKind)
+			}
+		}
+	}
+	readClip(clipKindReady)
+	if err := clipDC.Send(clipFrame(clipKindText, 7, uint32(len("guest-to-host")), 0, []byte("guest-to-host"))); err != nil {
+		t.Fatalf("send clipboard text: %v", err)
+	}
+	_, appliedID, _ := readClip(clipKindApplied)
+	if appliedID != 7 {
+		t.Fatalf("unexpected clipboard ack id: %d", appliedID)
+	}
+	clip.mu.Lock()
+	writes := append([]string(nil), clip.writes...)
+	clip.mu.Unlock()
+	if len(writes) == 0 || writes[len(writes)-1] != "guest-to-host" {
+		t.Fatalf("clipboard write not applied: %v", writes)
+	}
+	// 主机剪贴板变化应推送到 Guest。
+	clip.mu.Lock()
+	clip.text = "host-update"
+	clip.mu.Unlock()
+	_, _, payload := readClip(clipKindText)
+	if string(payload) != "host-update" {
+		t.Fatalf("unexpected clipboard payload: %q", string(payload))
+	}
+
+	// 画质/帧率协商：type 11 -> type 12，并更新编码参数。
+	if err := dc.SendText(`{"type":11,"video_settings":{"quality":1,"frame_rate":60,"preference":2,"request_id":9}}`); err != nil {
+		t.Fatalf("send video settings: %v", err)
+	}
+	settingsDeadline := time.After(5 * time.Second)
+	for {
+		select {
+		case data := <-controlText:
+			var reply struct {
+				Type          int `json:"type"`
+				VideoSettings struct {
+					Accepted   bool   `json:"accepted"`
+					Quality    int    `json:"quality"`
+					FrameRate  int    `json:"frame_rate"`
+					Preference int    `json:"preference"`
+					RequestID  uint32 `json:"request_id"`
+				} `json:"video_settings"`
+			}
+			if json.Unmarshal(data, &reply) != nil || reply.Type != 12 {
+				continue
+			}
+			if !reply.VideoSettings.Accepted || reply.VideoSettings.Quality != 1 ||
+				reply.VideoSettings.FrameRate != 60 || reply.VideoSettings.Preference != 2 ||
+				reply.VideoSettings.RequestID != 9 {
+				t.Fatalf("unexpected video settings reply: %s", string(data))
+			}
+			if a.videoFPS.Load() != 60 || a.videoQuality.Load() != 62 {
+				t.Fatalf("agent settings not updated: fps=%d quality=%d", a.videoFPS.Load(), a.videoQuality.Load())
+			}
+			goto settingsDone
+		case <-settingsDeadline:
+			t.Fatal("video settings reply not received")
+		}
+	}
+settingsDone:
 
 	// 独立验证无序 motion 通道（Web 客户端拖动鼠标时使用）。
 	data, _ = json.Marshal(map[string]any{

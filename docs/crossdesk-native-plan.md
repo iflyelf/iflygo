@@ -75,6 +75,8 @@ CrossDesk 不是单一服务，而是完整的跨平台远控产品：
   - Linux：XTEST；
   - Windows：`SetCursorPos` + `mouse_event` / `keybd_event`；
   - macOS：`CGEventPost`；
+- 文本剪贴板双向同步（`web-clipboard`，16 KiB 分片、128 KiB 上限）；
+- 画质/帧率协商（`type 11/12`，质量 0/1/2 映射 JPEG 45/62/78）；
 - 与原生 iFlyGo 信令登录、Join、Offer/Answer/ICE 全流程对接；
 - 首次运行自动注册设备，生成并保存 Ed25519 设备密钥（`0600`）；
   已有设备首次绑定密钥时要求一次密码，之后仅签名登录；
@@ -85,7 +87,7 @@ CrossDesk 不是单一服务，而是完整的跨平台远控产品：
 
 - 未使用 H.264/AV1（纯 Go 无成熟编码器），采用分片 JPEG；
 - 由 iFlyGo 内置 Web 客户端渲染，官方 CrossDesk 客户端不识别该画面通道；
-- 音频、文件传输、剪贴板、多显示器切换、Wayland 原生截图仍需后续原生层。
+- 音频、文件传输、多显示器切换、Wayland 原生截图仍需后续原生层。
 
 后续可演进：
 
@@ -162,7 +164,7 @@ CrossDesk 不是单一服务，而是完整的跨平台远控产品：
 ### 尚未完成（后续阶段）
 
 - 官方 CrossDesk 客户端与本 Agent 的视频互通（需 H.264/VP8 编码）；
-- 音频采集/播放、剪贴板、文件传输；
+- 音频采集/播放、文件传输；
 - 多显示器切换、Wayland 原生截图；
 - Android/iOS/HarmonyOS NEXT 原生控制端；
 - 媒体层的 MCP/CLI 远程操作（当前仅为管理面）。
