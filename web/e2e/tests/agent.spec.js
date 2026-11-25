@@ -12,13 +12,6 @@ test.describe('CrossDesk 纯 Go Agent', () => {
   test.skip(!deviceID || !password, '未提供 AGENT_DEVICE_ID / AGENT_PASSWORD');
 
   test('接收 JPEG 画面并完成键鼠交互', async ({ page }) => {
-    if (hostClipboard && process.platform === 'linux') {
-      // 由测试自身设置主机剪贴板，避免依赖前置步骤的后台进程。
-      execSync('xclip -selection clipboard -in', {
-        input: hostClipboard,
-        env: { ...process.env, DISPLAY: display },
-      });
-    }
     await page.goto(`/crossdesk/web/?device_id=${encodeURIComponent(deviceID)}`);
     await page.fill('#transmission-pwd', password);
     await expect(page.locator('#connect')).toBeEnabled();
