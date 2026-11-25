@@ -257,6 +257,10 @@ func (p *AIToolsProvider) tools() []toolSpec {
 			Description: "预览命中主机数、示例 IP 与分批（不落库）。创建任务前应先调用。参数同 task_create。",
 			Schema:      taskCreateSchema(false),
 			Call:        p.post(TaskPreview, nil)},
+		{Name: "crossdesk_status", Title: "CrossDesk 状态", ReadOnly: true,
+			Description: "查询 CrossDesk 集成状态：是否启用、原生信令、Web 地址、服务探活。",
+			Schema:      objSchema(),
+			Call:        p.get(CrossDeskStatus, nil, false)},
 		{Name: "my_permissions", Title: "我的权限", ReadOnly: true,
 			Description: "当前身份可操作的组件（deploy 等权限）与主机分组范围。",
 			Schema:      objSchema(),
@@ -277,6 +281,18 @@ func (p *AIToolsProvider) tools() []toolSpec {
 				Description: "Agent 目标版本、可用二进制与最近自升级记录（管理员）。",
 				Schema:      objSchema(),
 				Call:        p.get(AgentSelfUpdateStatus, nil, false)},
+			toolSpec{Name: "crossdesk_devices_list", Title: "CrossDesk 设备列表", ReadOnly: true,
+				Description: "列出原生 CrossDesk 设备（管理员）。",
+				Schema:      objSchema(),
+				Call:        p.get(ListCrossDeskDevices, nil, false)},
+			toolSpec{Name: "crossdesk_sessions_list", Title: "CrossDesk 会话列表", ReadOnly: true,
+				Description: "列出原生 CrossDesk 活动传输与 Guest（管理员）。",
+				Schema:      objSchema(),
+				Call:        p.get(ListCrossDeskSessions, nil, false)},
+			toolSpec{Name: "crossdesk_native_stats", Title: "CrossDesk 原生统计", ReadOnly: true,
+				Description: "原生信令连接/传输/设备统计（管理员）。",
+				Schema:      objSchema(),
+				Call:        p.get(CrossDeskNativeStats, nil, false)},
 		)
 	}
 
@@ -284,6 +300,22 @@ func (p *AIToolsProvider) tools() []toolSpec {
 		return specs
 	}
 	specs = append(specs,
+		toolSpec{Name: "crossdesk_join_ticket", Title: "CrossDesk 免密连接票据",
+			Description: "为已授权设备生成 60 秒一次性 Web 连接票据，返回可直接打开的 join_url。",
+			Schema:      objSchema(reqProp("id", "string", "CrossDesk 设备 ID")),
+			Call: p.post(CrossDeskJoinTicket, func(a map[string]any) map[string]string {
+				return map[string]string{"id": getString(a, "id")}
+			})},
+		toolSpec{Name: "crossdesk_deskhub", Title: "CrossDesk 桌面墙票据",
+			Description: "为多台设备生成桌面墙票据；device_ids 为逗号分隔的设备 ID（最多 9 台）。",
+			Schema:      objSchema(reqProp("device_ids", "string", "逗号分隔设备 ID")),
+			Call: p.postBody(CrossDeskDeskHubTickets, nil, func(a map[string]any) map[string]any {
+				return map[string]any{"device_ids": splitList(getString(a, "device_ids"))}
+			})},
+		toolSpec{Name: "crossdesk_disconnect", Title: "断开 CrossDesk 会话", Destructive: true,
+			Description: "管理员断开指定 Host/Guest 的原生 CrossDesk 会话。",
+			Schema:      objSchema(reqProp("transmission_id", "string", "传输 ID"), reqProp("user_id", "string", "用户 ID")),
+			Call:        p.post(DisconnectCrossDeskSession, nil)},
 		toolSpec{Name: "task_create", Title: "创建任务", Destructive: true,
 			Description: "创建灰度升级（kind=upgrade）或命令任务（kind=command）。任务一律为草稿（draft），不会执行；需再调用 task_start。",
 			Schema:      taskCreateSchema(true),
