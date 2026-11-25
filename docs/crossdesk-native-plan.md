@@ -103,6 +103,7 @@ CrossDesk 不是单一服务，而是完整的跨平台远控产品：
   - `disconnect_peer`、`revoke_reconnect_credential`；
   - Ed25519 设备密钥登录：`login_challenge` + 签名校验，绑定后禁止密码登录；
   - `session_ticket` / `session_report` / `session_resumed` 会话恢复；
+  - 会话开始/结束写入审计（`crossdesk.session_start/end`）；
   - TURN 临时凭据（HMAC-SHA1，兼容 Coturn REST API）；
   - `/crossdesk/stats` 统计；
   - Hub 并发/连接替换/离线清理测试。

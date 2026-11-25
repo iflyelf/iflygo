@@ -154,6 +154,8 @@ const (
 	ActionCrossDeskUserGrant    = "crossdesk.user_grant"
 	ActionCrossDeskUserRevoke   = "crossdesk.user_revoke"
 	ActionCrossDeskDeskHub      = "crossdesk.deskhub"
+	ActionCrossDeskSessionStart = "crossdesk.session_start"
+	ActionCrossDeskSessionEnd   = "crossdesk.session_end"
 	ActionCrossDeskDisconnect   = "crossdesk.disconnect"
 	ActionGatewayNATFailed      = "gateway.nat_failed"
 	ActionGatewayNATRecovered   = "gateway.nat_recovered"

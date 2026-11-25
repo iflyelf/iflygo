@@ -491,6 +491,7 @@ func registerCrossDeskRoutes(mux *http.ServeMux, sc *svc.ServiceContext) {
 		return c.Enabled && c.NativeSignaling
 	}, log.Default())
 	sc.CrossDesk = hub
+	hub.SetAudit(sc.Audit)
 	mux.HandleFunc(path, hub.ServeWS)
 	mux.HandleFunc("/crossdesk/stats", hub.ServeStats)
 	mux.Handle("/crossdesk/web/", handler.CrossDeskWeb(sc))

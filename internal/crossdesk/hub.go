@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"nhooyr.io/websocket"
+
+	"github.com/iflyelf/iflygo/internal/pkg/audit"
 )
 
 // Hub 原生 CrossDesk 信令服务。
@@ -23,6 +25,7 @@ type Hub struct {
 	log   *log.Logger
 	// enabled 在请求时读取设置，支持页面开关而无需重启路由。
 	enabled func() bool
+	audit   *audit.Logger
 
 	mu            sync.Mutex
 	clients       map[string]*client
@@ -81,6 +84,20 @@ func NewHub(store DeviceStore, turn TurnConfig, enabled func() bool, logger *log
 		challenges: map[*client]*loginChallenge{},
 		tickets:    map[string]*sessionTicket{},
 	}
+}
+
+// SetAudit 注入审计日志（可选）。
+func (h *Hub) SetAudit(l *audit.Logger) { h.audit = l }
+
+func (h *Hub) logSession(action, tx, host, guest string) {
+	if h.audit == nil || tx == "" {
+		return
+	}
+	h.audit.Log(context.Background(), audit.Event{
+		Action: action, Username: "system", TenantID: 1,
+		ResourceType: "crossdesk_session", ResourceID: tx, ResourceName: host,
+		Success: true, Details: map[string]any{"host": host, "guest": guest},
+	})
 }
 
 // ServeWS 处理 CrossDesk WSS 信令连接。
@@ -597,6 +614,7 @@ func (h *Hub) handleJoin(c *client, msg map[string]any) {
 		"user_id": c.userID, "status": "success",
 	})
 	h.issueSessionTicket(target, c.userID, host, c)
+	h.logSession(audit.ActionCrossDeskSessionStart, target, target, c.userID)
 }
 
 func (h *Hub) handleUserList(c *client, msg map[string]any) {
@@ -698,6 +716,7 @@ func (h *Hub) handleLeave(c *client, msg map[string]any) {
 			if gc := h.clients[g]; gc != nil {
 				gc.sendJSON(map[string]any{"type": "user_leave_transmission", "transmission_id": tid, "user_id": c.userID})
 			}
+			h.logSession(audit.ActionCrossDeskSessionEnd, tid, c.userID, g)
 		}
 		delete(h.transmissions, tid)
 		h.mu.Unlock()
@@ -706,6 +725,7 @@ func (h *Hub) handleLeave(c *client, msg map[string]any) {
 	delete(tr.guests, c.userID)
 	host := h.clients[tr.host]
 	h.mu.Unlock()
+	h.logSession(audit.ActionCrossDeskSessionEnd, tid, tr.host, c.userID)
 	if host != nil {
 		host.sendJSON(map[string]any{"type": "user_leave_transmission", "transmission_id": tid, "user_id": c.userID})
 	}
@@ -723,6 +743,7 @@ func (h *Hub) handleDisconnectPeer(c *client, msg map[string]any) {
 	delete(tr.guests, remote)
 	guest := h.clients[remote]
 	h.mu.Unlock()
+	h.logSession(audit.ActionCrossDeskSessionEnd, tid, tr.host, remote)
 	if guest != nil {
 		guest.sendJSON(map[string]any{"type": "user_leave_transmission", "transmission_id": tid, "user_id": c.userID})
 	}
@@ -935,6 +956,7 @@ func (h *Hub) handleSessionReport(c *client, msg map[string]any) {
 		host := h.clients[t.host]
 		gc := h.clients[t.guest]
 		h.mu.Unlock()
+		h.logSession(audit.ActionCrossDeskSessionEnd, tx, t.host, guest)
 		if host != nil {
 			host.sendJSON(map[string]any{"type": "user_leave_transmission", "transmission_id": tx, "user_id": guest})
 		}
