@@ -624,6 +624,14 @@ docker compose up -d
 > 「桌面墙」支持最多 9 台设备 iframe 网格（独立会话；跨会话群控仍待媒体层）。
 > MCP 已提供 CrossDesk 状态、设备/会话列表、免密票据、桌面墙与断开工具。
 >
+> CLI 管理（无需另装工具）：
+> ```bash
+> iflygo-client crossdesk status  --server https://iflygo.example.com --username admin --password '***'
+> iflygo-client crossdesk devices --server https://iflygo.example.com --username admin --password '***'
+> iflygo-client crossdesk connect --device 123456789 --server ... --username ... --password ...
+> iflygo-client crossdesk deskhub --devices 123456789,987654321 --server ... --username ... --password ...
+> ```
+>
 > 若要把 CrossDesk 全部能力原生并入 iFlyGo，实施阶段、许可证与验收标准见
 > `docs/crossdesk-native-plan.md`。
 

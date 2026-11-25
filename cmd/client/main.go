@@ -40,6 +40,8 @@ func main() {
 		cmdStatus(os.Args[2:])
 	case "service":
 		cmdService(os.Args[2:])
+	case "crossdesk":
+		cmdCrossDesk(os.Args[2:])
 	case "version", "-version", "--version":
 		fmt.Printf("iflygo-client %s (build %s, commit %s)\n", version.Version, version.Build, version.Commit)
 	default:
