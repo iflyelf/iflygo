@@ -20,6 +20,14 @@ import (
 	"github.com/iflyelf/iflygo/internal/crossdesk/agent"
 )
 
+type stringList []string
+
+func (s *stringList) String() string { return strings.Join(*s, ",") }
+func (s *stringList) Set(value string) error {
+	*s = append(*s, value)
+	return nil
+}
+
 type crossDeskCLI struct {
 	base   string
 	client *http.Client
@@ -104,10 +112,12 @@ func cmdCrossDesk(args []string) {
 	maxWidth := fs.Int("max-width", 1600, "画面最大宽度，0 表示原始尺寸（host）")
 	stun := fs.String("stun", "", "额外 STUN 服务器，逗号分隔（host）")
 	credentials := fs.String("credentials", "", "设备凭据保存路径（host，默认 ~/.config/iflygo/crossdesk-device.json）")
+	fileRoots := &stringList{}
+	fs.Var(fileRoots, "file-root", "允许文件浏览/传输的目录（可重复，host）")
 	fs.Parse(args[1:])
 
 	if action == "host" {
-		cmdCrossDeskHost(*server, *device, *pass, *insecure, *fps, *quality, *maxWidth, *stun, *credentials)
+		cmdCrossDeskHost(*server, *device, *pass, *insecure, *fps, *quality, *maxWidth, *stun, *credentials, *fileRoots)
 		return
 	}
 
@@ -145,7 +155,7 @@ func cmdCrossDesk(args []string) {
 	}
 }
 
-func cmdCrossDeskHost(server, device, password string, insecure bool, fps, quality, maxWidth int, stun, credentials string) {
+func cmdCrossDeskHost(server, device, password string, insecure bool, fps, quality, maxWidth int, stun, credentials string, fileRoots []string) {
 	if strings.TrimSpace(server) == "" {
 		fmt.Fprintln(os.Stderr, "❌ --server 必填")
 		os.Exit(2)
@@ -156,7 +166,7 @@ func cmdCrossDeskHost(server, device, password string, insecure bool, fps, quali
 	a := agent.New(agent.Config{
 		ServerURL: strings.TrimSpace(server), DeviceID: strings.TrimSpace(device), Password: password,
 		FPS: fps, Quality: quality, MaxWidth: maxWidth, STUN: splitComma(stun),
-		Insecure: insecure, CredentialsPath: credentials,
+		Insecure: insecure, CredentialsPath: credentials, FileRoots: fileRoots,
 		Logger: log.New(os.Stdout, "", log.LstdFlags),
 	})
 	if err := a.Run(ctx); err != nil {

@@ -1,5 +1,7 @@
 const { test, expect } = require('@playwright/test');
 const { execSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 
 // 纯 Go Agent 端到端回归：需要外部启动 Xvfb + iflygo-client crossdesk host。
 // 常规 Web E2E 未设置环境变量时自动跳过。
@@ -7,6 +9,7 @@ const deviceID = process.env.AGENT_DEVICE_ID || '';
 const password = process.env.AGENT_PASSWORD || '';
 const hostClipboard = process.env.AGENT_CLIPBOARD_TEXT || '';
 const display = process.env.AGENT_DISPLAY || ':99';
+const fileRoot = process.env.AGENT_FILE_ROOT || '';
 
 test.describe('CrossDesk 纯 Go Agent', () => {
   test.skip(!deviceID || !password, '未提供 AGENT_DEVICE_ID / AGENT_PASSWORD');
@@ -72,6 +75,49 @@ test.describe('CrossDesk 纯 Go Agent', () => {
     await page.keyboard.press('a');
     await page.keyboard.press('Enter');
     await page.waitForTimeout(300);
+
+    // 文件浏览 / 下载 / 上传（Agent 通过 --file-root 提供目录）。
+    if (fileRoot) {
+      const realRoot = fs.realpathSync(fileRoot);
+      const listing = await page.evaluate(async () => {
+        const browser = window.CrossDeskFiles.browser;
+        const roots = await browser.listRemote('@roots');
+        const entries = await browser.listRemote(roots.entries[0].path);
+        return {
+          roots: roots.entries.map(entry => entry.path),
+          names: entries.entries.map(entry => entry.name),
+        };
+      });
+      expect(listing.roots).toContain(realRoot);
+      expect(listing.names).toContain('report.txt');
+
+      const downloadPromise = page.waitForEvent('download', { timeout: 20000 });
+      await page.evaluate(async () => {
+        const browser = window.CrossDeskFiles.browser;
+        const roots = await browser.listRemote('@roots');
+        const entries = await browser.listRemote(roots.entries[0].path);
+        const file = entries.entries.find(entry => !entry.directory && entry.name === 'report.txt');
+        await browser.download([file], '');
+      });
+      const download = await downloadPromise;
+      const downloaded = await download.path();
+      expect(fs.readFileSync(downloaded, 'utf8')).toBe('agent-file-e2e');
+
+      fs.rmSync(path.join(realRoot, 'agent-upload.txt'), { force: true });
+      await page.evaluate(async () => {
+        const browser = window.CrossDeskFiles.browser;
+        const roots = await browser.listRemote('@roots');
+        const root = roots.entries[0].path;
+        const file = new File(['agent-upload-e2e'], 'agent-upload.txt', { type: 'text/plain' });
+        const local = new window.CrossDeskLocalDirectory(null, [file]);
+        browser.selectLocal(local);
+        await browser.upload([local.base + '/agent-upload.txt'], root);
+      });
+      await expect.poll(() => {
+        const target = path.join(realRoot, 'agent-upload.txt');
+        return fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : '';
+      }, { timeout: 15000 }).toBe('agent-upload-e2e');
+    }
 
     // 浏览器 -> 主机剪贴板（仅 Linux CI 的 Xvfb 环境验证）。
     if (hostClipboard && process.platform === 'linux') {

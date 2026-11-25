@@ -22,6 +22,16 @@ type session struct {
 	clipboardChannel *webrtc.DataChannel
 	clipState        clipboardSessionState
 
+	fileChannel     *webrtc.DataChannel
+	feedbackChannel *webrtc.DataChannel
+	fileMu          sync.Mutex
+	uploads         map[uint32]string
+	incoming        map[uint32]*incomingUpload
+	cancelled       map[uint32]bool
+	nextFileID      uint32
+	fileDone        chan struct{}
+	fileCloseOnce   sync.Once
+
 	mu        sync.Mutex
 	pending   []webrtc.ICECandidateInit
 	remoteSet bool
@@ -63,7 +73,11 @@ func newSession(a *Agent, guest string) (*session, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &session{agent: a, guest: guest, pc: pc}
+	s := &session{
+		agent: a, guest: guest, pc: pc,
+		uploads: map[uint32]string{}, incoming: map[uint32]*incomingUpload{},
+		cancelled: map[uint32]bool{}, fileDone: make(chan struct{}),
+	}
 
 	ordered, unordered := true, false
 	zeroRetransmits := uint16(0)
@@ -91,6 +105,13 @@ func newSession(a *Agent, guest string) (*session, error) {
 			"host_info": map[string]any{
 				"agent": "iflygo-go", "platform": runtime.GOOS,
 				"supports_video_settings": true, "supports_clipboard": a.clipboard != nil,
+				"supports_file_browser": a.files != nil, "supports_web_file_browser": a.files != nil,
+				"host_name": func() string {
+					if a.files != nil {
+						return a.files.hostname
+					}
+					return ""
+				}(),
 				"displays": displays, "active_display": active,
 			},
 		})
@@ -108,6 +129,27 @@ func newSession(a *Agent, guest string) (*session, error) {
 				}
 			})
 			clip.OnClose(func() { s.closeClipboard() })
+		}
+	}
+	if a.files != nil {
+		proto := fileProtocol
+		file, err := pc.CreateDataChannel("file", &webrtc.DataChannelInit{Ordered: &ordered, Protocol: &proto})
+		if err == nil {
+			s.fileChannel = file
+			file.OnMessage(func(m webrtc.DataChannelMessage) {
+				if !m.IsString {
+					s.onFileChunk(m.Data)
+				}
+			})
+		}
+		feedback, err := pc.CreateDataChannel("file_feedback", &webrtc.DataChannelInit{Ordered: &ordered, Protocol: &proto})
+		if err == nil {
+			s.feedbackChannel = feedback
+			feedback.OnMessage(func(m webrtc.DataChannelMessage) {
+				if !m.IsString {
+					s.onFileAck(m.Data)
+				}
+			})
 		}
 	}
 
@@ -216,6 +258,15 @@ func (s *session) onMessage(msg webrtc.DataChannelMessage) {
 	if !msg.IsString {
 		return
 	}
+	var probe struct {
+		Type json.RawMessage `json:"type"`
+	}
+	if json.Unmarshal(msg.Data, &probe) == nil && string(probe.Type) == `"file_browser"` {
+		if s.agent.files != nil {
+			s.agent.files.handleRPC(s, msg.Data)
+		}
+		return
+	}
 	var action controlMessage
 	if json.Unmarshal(msg.Data, &action) != nil {
 		return
@@ -299,9 +350,22 @@ func (s *session) logError(format string, args ...any) {
 	}
 }
 
+func (s *session) sendControlJSON(v any) bool {
+	if s.control == nil {
+		return false
+	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		return false
+	}
+	return s.control.SendText(string(data)) == nil
+}
+
 func (s *session) close() {
 	s.closeOnce.Do(func() {
 		s.closeClipboard()
+		s.fileCloseOnce.Do(func() { close(s.fileDone) })
+		s.closeFiles()
 		_ = s.pc.Close()
 		s.agent.dropSession(s)
 	})

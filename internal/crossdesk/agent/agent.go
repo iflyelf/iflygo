@@ -45,6 +45,8 @@ type Config struct {
 	Screen    Screen
 	Input     Input
 	Clipboard Clipboard
+	// FileRoots 允许浏览/传输的目录；为空时禁用文件传输。
+	FileRoots []string
 }
 
 type credentials struct {
@@ -72,6 +74,8 @@ type Agent struct {
 	sessions map[string]*session
 	viewers  int
 	capStop  context.CancelFunc
+
+	files *fileBrowser
 
 	clipboard    Clipboard
 	clipSessions int
@@ -202,6 +206,10 @@ func (a *Agent) prepare() error {
 		a.log.Printf("⚠️ 剪贴板不可用（远程桌面仍可使用）: %v", err)
 	} else {
 		a.clipboard = clipboard
+	}
+	a.files = newFileBrowser(a.cfg.FileRoots)
+	if len(a.cfg.FileRoots) > 0 && a.files == nil {
+		a.log.Printf("⚠️ 文件传输已禁用：没有可用的 --file-root 目录")
 	}
 	a.refreshDisplays()
 	return nil

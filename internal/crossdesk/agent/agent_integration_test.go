@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -10,6 +11,8 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -182,6 +185,15 @@ func TestAgentStreamsFramesAndAcceptsInput(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(hub.ServeWS))
 	defer srv.Close()
 
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "hello.txt"), []byte("hello-file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	input := &fakeInput{}
 	clip := &fakeClipboard{text: "hello-from-host"}
 	a := New(Config{
@@ -189,6 +201,7 @@ func TestAgentStreamsFramesAndAcceptsInput(t *testing.T) {
 		CredentialsPath: t.TempDir() + "/device.json",
 		Logger:          log.New(io.Discard, "", 0),
 		Screen:          newFakeScreen(), Input: input, Clipboard: clip,
+		FileRoots: []string{root},
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -264,8 +277,42 @@ func TestAgentStreamsFramesAndAcceptsInput(t *testing.T) {
 	motionReady := make(chan *webrtc.DataChannel, 1)
 	clipReady := make(chan *webrtc.DataChannel, 1)
 	clipMessages := make(chan []byte, 16)
+	fileReady := make(chan *webrtc.DataChannel, 1)
+	feedbackReady := make(chan *webrtc.DataChannel, 1)
+	filePackets := make(chan []byte, 64)
+	feedbackPackets := make(chan []byte, 64)
 	pc.OnDataChannel(func(dc *webrtc.DataChannel) {
 		switch dc.Label() {
+		case "file":
+			dc.OnOpen(func() {
+				select {
+				case fileReady <- dc:
+				default:
+				}
+			})
+			dc.OnMessage(func(m webrtc.DataChannelMessage) {
+				if !m.IsString {
+					select {
+					case filePackets <- append([]byte(nil), m.Data...):
+					default:
+					}
+				}
+			})
+		case "file_feedback":
+			dc.OnOpen(func() {
+				select {
+				case feedbackReady <- dc:
+				default:
+				}
+			})
+			dc.OnMessage(func(m webrtc.DataChannelMessage) {
+				if !m.IsString {
+					select {
+					case feedbackPackets <- append([]byte(nil), m.Data...):
+					default:
+					}
+				}
+			})
 		case "web-clipboard":
 			dc.OnOpen(func() {
 				select {
@@ -574,6 +621,156 @@ settingsDone:
 			t.Fatalf("input not injected: mice=%d keys=%d motion=%v", mice, keys, foundMotion)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+
+	// --- 文件浏览与传输 ---
+	var fileDC, feedbackDC *webrtc.DataChannel
+	select {
+	case fileDC = <-fileReady:
+	case <-time.After(10 * time.Second):
+		t.Fatal("file channel did not open")
+	}
+	select {
+	case feedbackDC = <-feedbackReady:
+	case <-time.After(10 * time.Second):
+		t.Fatal("file feedback channel did not open")
+	}
+	_ = feedbackDC
+
+	sendRPC := func(id int64, payload map[string]any) {
+		payload["type"] = "file_browser"
+		payload["version"] = 1
+		payload["id"] = id
+		data, _ := json.Marshal(payload)
+		if err := dc.SendText(string(data)); err != nil {
+			t.Fatalf("send file rpc %d: %v", id, err)
+		}
+	}
+	readReply := func(id int64) map[string]any {
+		timeout := time.After(5 * time.Second)
+		for {
+			select {
+			case data := <-controlText:
+				var msg map[string]any
+				if json.Unmarshal(data, &msg) != nil || msg["type"] != "file_browser" || msg["op"] != "reply" {
+					continue
+				}
+				if v, ok := msg["id"].(float64); !ok || int64(v) != id {
+					continue
+				}
+				return msg
+			case <-timeout:
+				t.Fatalf("file reply %d not received", id)
+			}
+		}
+	}
+
+	sendRPC(101, map[string]any{"op": "list", "path": "@roots", "pagination": 1})
+	roots := readReply(101)
+	if roots["ok"] != true {
+		t.Fatalf("roots list failed: %v", roots)
+	}
+	foundRoot := false
+	for _, raw := range roots["entries"].([]any) {
+		entry, _ := raw.(map[string]any)
+		if entry["path"] == realRoot {
+			foundRoot = true
+		}
+	}
+	if !foundRoot {
+		t.Fatalf("root %s missing from %v", realRoot, roots["entries"])
+	}
+
+	sendRPC(102, map[string]any{"op": "list", "path": root, "pagination": 1})
+	listing := readReply(102)
+	if listing["ok"] != true {
+		t.Fatalf("directory list failed: %v", listing)
+	}
+	foundFile := false
+	for _, raw := range listing["entries"].([]any) {
+		entry, _ := raw.(map[string]any)
+		if entry["name"] == "hello.txt" && entry["directory"] == false &&
+			entry["size"] == float64(len("hello-file")) {
+			foundFile = true
+		}
+	}
+	if !foundFile {
+		t.Fatalf("hello.txt missing from %v", listing["entries"])
+	}
+	sendRPC(103, map[string]any{"op": "list", "path": "/etc", "pagination": 1})
+	if readReply(103)["ok"] == true {
+		t.Fatal("path outside roots should be rejected")
+	}
+
+	// 下载：Agent -> Guest。
+	sendRPC(104, map[string]any{
+		"op": "copy", "paths": []string{filepath.Join(root, "hello.txt")}, "transfer_id": "download-1",
+	})
+	if readReply(104)["ok"] != true {
+		t.Fatal("copy request rejected")
+	}
+	var packet []byte
+	select {
+	case packet = <-filePackets:
+	case <-time.After(10 * time.Second):
+		t.Fatal("download packet not received")
+	}
+	if len(packet) < fileHeaderSize || binary.LittleEndian.Uint32(packet[0:4]) != fileChunkMagic {
+		t.Fatalf("bad download packet: %d bytes", len(packet))
+	}
+	if binary.LittleEndian.Uint32(packet[4:8]) == 0 {
+		t.Fatal("missing download id")
+	}
+	if binary.LittleEndian.Uint64(packet[8:16]) != 0 ||
+		binary.LittleEndian.Uint64(packet[16:24]) != uint64(len("hello-file")) {
+		t.Fatal("bad download offset/total")
+	}
+	nameSize := int(binary.LittleEndian.Uint16(packet[28:30]))
+	downloadPayload := packet[fileHeaderSize+nameSize:]
+	if packet[30]&3 != 3 || string(packet[fileHeaderSize:fileHeaderSize+nameSize]) != "hello.txt" ||
+		string(downloadPayload) != "hello-file" {
+		t.Fatalf("bad download payload: flags=%d name=%q payload=%q", packet[30],
+			string(packet[fileHeaderSize:fileHeaderSize+nameSize]), string(downloadPayload))
+	}
+
+	// 上传：Guest -> Agent。
+	sendRPC(105, map[string]any{
+		"op": "prepare", "destination": root,
+		"items": []map[string]any{
+			{"file_id": 0, "directory": "uploads"},
+			{"file_id": 77, "directory": "uploads"},
+		},
+	})
+	if readReply(105)["ok"] != true {
+		t.Fatal("prepare request rejected")
+	}
+	uploadName := []byte("uploaded.txt")
+	uploadData := []byte("from-browser")
+	upload := make([]byte, fileHeaderSize+len(uploadName)+len(uploadData))
+	binary.LittleEndian.PutUint32(upload[0:4], fileChunkMagic)
+	binary.LittleEndian.PutUint32(upload[4:8], 77)
+	binary.LittleEndian.PutUint64(upload[8:16], 0)
+	binary.LittleEndian.PutUint64(upload[16:24], uint64(len(uploadData)))
+	binary.LittleEndian.PutUint32(upload[24:28], uint32(len(uploadData)))
+	binary.LittleEndian.PutUint16(upload[28:30], uint16(len(uploadName)))
+	upload[30] = 3
+	copy(upload[fileHeaderSize:], uploadName)
+	copy(upload[fileHeaderSize+len(uploadName):], uploadData)
+	if err := fileDC.Send(upload); err != nil {
+		t.Fatalf("send upload: %v", err)
+	}
+	select {
+	case ack := <-feedbackPackets:
+		if len(ack) != fileAckSize || binary.LittleEndian.Uint32(ack[0:4]) != fileAckMagic ||
+			binary.LittleEndian.Uint32(ack[4:8]) != 77 || binary.LittleEndian.Uint32(ack[24:28])&1 == 0 {
+			t.Fatalf("bad upload ack: %v", ack)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("upload ack not received")
+	}
+	got, err := os.ReadFile(filepath.Join(root, "uploads", "uploaded.txt"))
+	if err != nil || string(got) != "from-browser" {
+		t.Fatalf("uploaded file mismatch: %q err=%v", string(got), err)
 	}
 
 	cancel()
