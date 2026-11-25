@@ -205,7 +205,7 @@ test('远程桌面：CrossDesk 集成页', async ({ page }) => {
   await page.locator('.main-nav .nav-link', { hasText: '远程管理' }).click();
   await page.locator('.main-nav .nav-menu-item', { hasText: '远程桌面（CrossDesk）' }).click();
   await expect(page.getByRole('heading', { name: 'CrossDesk 服务状态' })).toBeVisible();
-  await expect(page.locator('.crossdesk-feature')).toHaveCount(7);
+  await expect(page.locator('.crossdesk-feature')).toHaveCount(8);
   await expect(page.getByRole('heading', { name: '原生信令设备与会话' })).toBeVisible();
   await page.getByRole('button', { name: '在页面内打开', exact: true }).click();
   await expect(page.locator('.crossdesk-frame')).toHaveAttribute('src', '/crossdesk/web/');
