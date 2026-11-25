@@ -1486,6 +1486,12 @@ function bindDataChannel(channel, peer) {
     control.setDataChannel(null);
   });
 
+  // 原生 Go Agent 通过二进制 DataChannel 发送分片 JPEG 画面。
+  channel.binaryType = "arraybuffer";
+  channel.addEventListener("message", (event) => {
+    if (typeof event.data === "string") return;
+    window.CrossDeskFrameView?.render(event.data);
+  });
 }
 
 async function sendAnswer(peer) {
@@ -1699,6 +1705,7 @@ function hideConnectingOverlayOnFirstFrame() {
 }
 
 function teardownPeerConnection() {
+  window.CrossDeskFrameView?.reset();
   if (!pc) return;
 
   pc.crossdeskIceDiagnostics?.event("closed");

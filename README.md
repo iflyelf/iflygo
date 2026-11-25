@@ -594,6 +594,8 @@ iFlyGo 通过独立服务集成 [CrossDesk](https://github.com/kunkundi/crossdes
 - **CrossDesk Server + Coturn**：WSS 信令、设备身份/密码、在线状态、TURN 中继；
 - **Web 客户端**：浏览器远控；
 - **官方桌面/移动/CLI/MCP 客户端**：桌面墙、文件传输、音频、多显示器、可信设备等；
+- **纯 Go 静态主机端 Agent**：`iflygo-client crossdesk host`，`CGO_ENABLED=0`
+  交叉编译，内置屏幕采集与键鼠注入，无需安装 CrossDesk 桌面客户端；
 - **iFlyGo 页面**：服务状态探活、Web 客户端嵌入、下载入口、自托管配置提示。
 
 部署（独立 Docker Compose，host 网络）：
@@ -631,6 +633,26 @@ docker compose up -d
 > iflygo-client crossdesk connect --device 123456789 --server ... --username ... --password ...
 > iflygo-client crossdesk deskhub --devices 123456789,987654321 --server ... --username ... --password ...
 > ```
+>
+> **Phase 3 纯 Go 静态 Agent**：`iflygo-client crossdesk host` 可直接作为主机端，
+> 使用 X11（Linux）、GDI（Windows）、CoreGraphics（macOS）采集屏幕，通过 Pion
+> DataChannel 发送分片 JPEG，并注入键鼠事件。二进制保持 `CGO_ENABLED=0`，可交叉编译：
+> ```bash
+> # 首次运行自动注册设备并保存凭据；也可显式指定 --device/--password
+> iflygo-client crossdesk host --server https://iflygo.example.com
+> # 指定设备与画质
+> iflygo-client crossdesk host --server https://iflygo.example.com \
+>   --device 123456789 --password '******' --fps 15 --quality 70 --max-width 1920
+> ```
+> 首次运行会自动注册设备，并生成 Ed25519 设备密钥（保存于
+> `~/.config/iflygo/crossdesk-device.json`，权限 0600）；已有设备首次绑定密钥时
+> 需要一次 `--password`，绑定后仅用密钥签名登录。
+>
+> 平台支持：Linux 需 X11 会话（XWayland 只能捕获 X11 窗口，无法捕获原生 Wayland 桌面）；
+> Windows 使用 GDI + SendInput；macOS 需授予“屏幕录制/辅助功能”权限。
+> Wayland 原生会话、音频、文件传输、剪贴板与多显示器切换仍需平台原生层；
+> 官方 CrossDesk 客户端使用 WebRTC 视频，与本 Agent 的 JPEG 画面通道不互通
+> （iFlyGo 内置 Web 客户端已适配）。
 >
 > 若要把 CrossDesk 全部能力原生并入 iFlyGo，实施阶段、许可证与验收标准见
 > `docs/crossdesk-native-plan.md`。

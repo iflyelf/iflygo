@@ -8,6 +8,8 @@ on:
     branches: [main]
     paths:
       - 'web/dist/**'
+      - 'web/crossdesk/**'
+      - 'internal/crossdesk/**'
       - 'web/e2e/**'
       - 'cmd/server/**'
       - 'internal/handler/**'
@@ -16,6 +18,8 @@ on:
     branches: [main]
     paths:
       - 'web/dist/**'
+      - 'web/crossdesk/**'
+      - 'internal/crossdesk/**'
       - 'web/e2e/**'
       - 'cmd/server/**'
       - 'internal/handler/**'
@@ -122,3 +126,105 @@ jobs:
           path: |
             web/e2e/playwright-report
             web/e2e/test-results
+
+  # 纯 Go CrossDesk Agent：Xvfb 真实屏幕 + Pion + 浏览器画面渲染。
+  agent-e2e:
+    name: 纯 Go Agent（Xvfb + Chromium）
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7.0.1
+        with:
+          submodules: recursive
+
+      - name: 安装 Go
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: 安装 Node
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '20'
+
+      - name: 安装 X11 依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb x11-utils x11-xserver-utils
+
+      - name: grdp 子模块补丁
+        run: |
+          python3 scripts/patch_grdp.py third_party/grdp
+          python3 scripts/patch_nebula.py third_party/nebula
+
+      - name: 前端合并注入
+        run: python3 scripts/inject_tunnel_frontend.py
+
+      - name: 安装 Playwright
+        working-directory: web/e2e
+        run: |
+          npm ci
+          npx playwright install chromium
+
+      - name: 编译控制台与 Agent
+        env:
+          CGO_ENABLED: 0
+        run: |
+          go build -o /tmp/iflygo-server ./cmd/server
+          go build -o /tmp/iflygo-client ./cmd/client
+
+      - name: 启动 Xvfb 与桌面内容
+        run: |
+          nohup Xvfb :99 -screen 0 1280x720x24 -nolisten tcp > /tmp/xvfb.log 2>&1 &
+          sleep 2
+          export DISPLAY=:99
+          xsetroot -solid '#1e3a5f'
+          nohup xmessage -geometry 700x300+60+60 -title "iFlyGo Agent" "CrossDesk pure-Go agent" > /tmp/xmessage.log 2>&1 &
+
+      - name: 启动控制台与 Agent
+        run: |
+          export DATABASE_DRIVER=sqlite
+          export SQLITE_PATH=/tmp/iflygo-agent-e2e.db
+          export SERVER_HOST=127.0.0.1
+          export SERVER_PORT=18090
+          export ADMIN_USERNAME=admin
+          export ADMIN_PASSWORD=admin123
+          export SESSION_SECRET=agent-e2e-secret-0123456789
+          export CROSSDESK_ENABLED=true
+          export CROSSDESK_NATIVE_SIGNALING=true
+          nohup /tmp/iflygo-server > /tmp/server.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18090/ready >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:18090/ready
+
+          DISPLAY=:99 nohup /tmp/iflygo-client crossdesk host \
+            --server http://127.0.0.1:18090 \
+            --credentials /tmp/agent-device.json \
+            --fps 10 --quality 65 > /tmp/agent.log 2>&1 &
+          for i in $(seq 1 60); do
+            if [ -s /tmp/agent-device.json ]; then break; fi
+            sleep 1
+          done
+          cat /tmp/agent-device.json
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import json
+          with open('/tmp/agent-device.json') as f:
+              d = json.load(f)
+          print('AGENT_DEVICE_ID=' + d['device_id'])
+          print('AGENT_PASSWORD=' + d['password'])
+          PY
+
+      - name: 运行 Agent E2E
+        working-directory: web/e2e
+        env:
+          BASE_URL: http://127.0.0.1:18090
+        run: npx playwright test tests/agent.spec.js
+
+      - name: 失败时输出日志
+        if: failure()
+        run: |
+          tail -200 /tmp/server.log || true
+          tail -200 /tmp/agent.log || true
+          tail -100 /tmp/xvfb.log || true

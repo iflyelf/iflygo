@@ -1879,7 +1879,8 @@
           'H.264/AV1、硬件编解码、远端音频、多显示器、剪贴板、文本/文件传输',
           'CLI 终端主控（ANSI/Kitty/Sixel）与 Agent/MCP 远程操作',
           '可信设备配对、自托管信令 + TURN、SRTP 媒体加密',
-          'Windows 登录前远控、Linux 无头运行'
+          'Windows 登录前远控、Linux 无头运行',
+          '纯 Go 静态主机端 Agent：屏幕采集 + 键鼠注入（JPEG DataChannel，内置 Web 客户端渲染）'
         ].map(function (x) { return h('div', { class: 'crossdesk-feature' }, ['• ' + x]); }))
       ]),
       h('div', { class: 'card' }, [
@@ -1890,6 +1891,9 @@
             'Signaling URL: ' + (signal || 'wss://<iflygo-host>/crossdesk/signal') + '\n' +
             'TURN: 由「设置 → 远程桌面（CrossDesk）」下发\n' +
             'Web: ' + web + '\n' +
+            '主机端（纯 Go，CGO_ENABLED=0）:\n' +
+            'iflygo-client crossdesk host --server ' + location.origin + '\n' +
+            '首次运行自动注册并保存设备密钥；Linux 需 X11 会话，Windows/macOS 需屏幕录制/辅助功能权限。\n' +
             '注意：官方 Web 客户端需用 crossdesk-web-client 配置该 signalingUrl。')
           : ('# 外部 CrossDesk Server + Coturn\n' +
             'cd deploy/docker/crossdesk && cp .env.example .env && docker compose up -d\n\n' +

@@ -51,7 +51,9 @@ func main() {
 }
 
 func usage() {
-	fmt.Println("用法: iflygo-client <enroll|run|config|status|service|version> [选项]")
+	fmt.Println("用法: iflygo-client <enroll|run|config|status|service|version|crossdesk> [选项]")
+	fmt.Println("  crossdesk status|devices|connect|deskhub  CrossDesk 管理面")
+	fmt.Println("  crossdesk host --server <url>           启动 CrossDesk 主机端（纯 Go 采集/输入）")
 }
 
 func stateDir(fs *flag.FlagSet) string {

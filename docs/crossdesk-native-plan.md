@@ -11,7 +11,7 @@ CrossDesk 不是单一服务，而是完整的跨平台远控产品：
 |---|---|---|
 | 信令/设备/在线状态/TURN 凭据 | C++ + SQLite | 可用 Go 重写，工作量中等 |
 | Web 客户端 | 静态 HTML/JS + WebRTC | 可内置 iFlyGo 静态资源 |
-| 桌面采集/编码/解码/音频 | C++ / Slint / 平台 API | 需原生 C++/Rust + 各平台权限 |
+| 桌面采集/编码/解码/音频 | C++ / Slint / 平台 API | 采集/输入可用纯 Go；H.264/音频需原生编码器 |
 | 媒体传输 | MiniRTC / ICE / DTLS / SRTP | 可用现有 WebRTC 库，工作量大 |
 | 文件传输 / 剪贴板 / 多显示器 | C++ 客户端 | 需与媒体层一起重写 |
 | DeskHub 桌面墙 / 群控 | C++ GUI | 可改为 iFlyGo Web + 客户端 Agent |
@@ -61,16 +61,38 @@ CrossDesk 不是单一服务，而是完整的跨平台远控产品：
 - iFlyGo 登录后免二次输入设备密码（可选 SSO 绑定）；
 - Web 端文件传输/剪贴板/多显示器与官方 Web 对齐。
 
-### Phase 3：原生桌面 Agent / 媒体层
+### Phase 3：纯 Go 静态 Agent（已实现初始版）
 
-- 独立原生 Agent（C++/Rust）负责：
-  - 屏幕采集、H.264/AV1 编解码、硬件加速；
-  - 音频采集/播放；
-  - 键鼠注入、剪贴板、多显示器；
-  - 文件传输、隐私屏、登录前远控。
-- 与 iFlyGo 原生信令对接；
-- 优先 Windows/Linux，再 macOS；
-- Agent 可由 iFlyGo 安装/升级/配置下发。
+在不引入 CGO 的前提下，`iflygo-client crossdesk host` 提供主机端：
+
+- 平台屏幕采集：
+  - Linux：X11 `GetImage`（需 X11 会话；XWayland 仅能捕获 X11 窗口）；
+  - Windows：GDI `BitBlt` + `GetDIBits`（虚拟桌面）；
+  - macOS：CoreGraphics（purego 动态调用，无需 CGO）；
+- 画面编码：`image/jpeg` + `x/image/draw` 缩放，分片后经
+  `data-stream` DataChannel 发送（自定义 `CDS1` 分片协议）；
+- 键鼠注入：
+  - Linux：XTEST；
+  - Windows：`SetCursorPos` + `mouse_event` / `keybd_event`；
+  - macOS：`CGEventPost`；
+- 与原生 iFlyGo 信令登录、Join、Offer/Answer/ICE 全流程对接；
+- 首次运行自动注册设备，生成并保存 Ed25519 设备密钥（`0600`）；
+  已有设备首次绑定密钥时要求一次密码，之后仅签名登录；
+- 一个 Agent 可同时服务多个 Guest（桌面墙）；
+- 内置 Web 客户端新增 canvas 画面渲染，自动适配 JPEG 帧通道。
+
+当前取舍：
+
+- 未使用 H.264/AV1（纯 Go 无成熟编码器），采用分片 JPEG；
+- 由 iFlyGo 内置 Web 客户端渲染，官方 CrossDesk 客户端不识别该画面通道；
+- 音频、文件传输、剪贴板、多显示器切换、Wayland 原生截图仍需后续原生层。
+
+后续可演进：
+
+- 接入 WebRTC 视频轨道（需 CGO/原生编码器或硬件编码 SDK）；
+- 平台音频采集与 Opus；
+- 剪贴板/文件传输/多显示器；
+- 隐私屏、登录前远控、服务安装与自动升级。
 
 ### Phase 4：DeskHub / 群控 / 移动端 / CLI / MCP
 
@@ -83,7 +105,8 @@ CrossDesk 不是单一服务，而是完整的跨平台远控产品：
 
 - **信令/设备/管理**：Go（iFlyGo 原生）。
 - **Web 客户端**：内置静态资源 + WebRTC。
-- **媒体/采集**：C++/Rust 原生 Agent，不做 Go 重写。
+- **媒体/采集**：纯 Go 静态 Agent（已实现屏幕/输入/JPEG 通道）；
+  需要 H.264/AV1/音频/硬件加速时再引入 C++/Rust 编码层。
 - **移动端**：复用 CrossDesk 原生客户端或单独 HAP/APK。
 - **许可证**：原生 Agent/客户端独立分发，iFlyGo 保持 MIT；
   或整体采用 GPL/LGPL 兼容许可。
@@ -133,22 +156,32 @@ CrossDesk 不是单一服务，而是完整的跨平台远控产品：
 
 - 更细粒度的角色/分组授权（当前按用户名授权设备）；
 - 官方 Web 客户端完整功能回归；
-- 文件传输/剪贴板/多显示器与原生信令的端到端验证。
+- 文件传输/剪贴板/多显示器与原生信令的端到端验证；
+- 纯 Go Agent 的音频、Wayland 原生截图与官方客户端视频兼容。
 
 ### 尚未完成（后续阶段）
 
-- 官方客户端真实兼容性回归；
-- 完整管理后台（设备/会话查询、断开、清理）；
-- 官方客户端兼容性回归（需真机/客户端联调）；
-- Web 客户端内置与 SSO；
-- 桌面采集/媒体/文件传输/DeskHub/移动端/CLI/MCP。
+- 官方 CrossDesk 客户端与本 Agent 的视频互通（需 H.264/VP8 编码）；
+- 音频采集/播放、剪贴板、文件传输；
+- 多显示器切换、Wayland 原生截图；
+- Android/iOS/HarmonyOS NEXT 原生控制端；
+- 媒体层的 MCP/CLI 远程操作（当前仅为管理面）。
+
+### 已完成（Phase 3 初始）
+
+- `internal/crossdesk/agent`：纯 Go 主机端（信令、Pion DataChannel、采集/输入）；
+- `cmd/client crossdesk host`：静态二进制内建 Agent；
+- 平台实现：Linux X11 / Windows GDI+SendInput / macOS CoreGraphics；
+- Web 客户端 `frame_view.js`：分片 JPEG 重组与 canvas 渲染；
+- 单元测试：分片协议、缩放编码、URL 规范化、键位映射；
+- 集成测试：真实 Hub + Pion Guest，验证 Offer/Answer、画面帧与键鼠注入。
 
 ## 6. 近期可交付
 
 1. 用官方桌面/Web 客户端做 Phase 1 协议兼容性回归；
-2. 补齐设备密钥/重连/改密；
-3. 内置 Web 客户端；
-4. 再进入媒体层。
+2. 补齐官方客户端与纯 Go Agent 的视频互通（H.264/VP8）；
+3. 音频、剪贴板、文件传输；
+4. 移动端/CLI/MCP 的媒体操作。
 
-> 在 Phase 3 完成前，CrossDesk 官方客户端仍负责桌面采集与媒体，
-> iFlyGo 负责信令、设备、入口、状态与管理。
+> 当前 CrossDesk 官方客户端仍使用 WebRTC 视频；纯 Go Agent 提供 JPEG 画面通道，
+> 由 iFlyGo 内置 Web 客户端渲染。两者信令兼容，媒体层暂不互通。

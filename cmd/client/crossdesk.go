@@ -1,17 +1,23 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
+
+	"github.com/iflyelf/iflygo/internal/crossdesk/agent"
 )
 
 type crossDeskCLI struct {
@@ -82,7 +88,7 @@ func (c *crossDeskCLI) do(req *http.Request) (any, error) {
 
 func cmdCrossDesk(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "用法: iflygo-client crossdesk <status|devices|connect|deskhub> [flags]")
+		fmt.Fprintln(os.Stderr, "用法: iflygo-client crossdesk <status|devices|connect|deskhub|host> [flags]")
 		os.Exit(2)
 	}
 	action := args[0]
@@ -91,9 +97,19 @@ func cmdCrossDesk(args []string) {
 	user := fs.String("username", "", "登录用户名（管理员/授权用户）")
 	pass := fs.String("password", "", "登录密码")
 	insecure := fs.Bool("insecure", false, "跳过 TLS 证书校验（仅测试）")
-	device := fs.String("device", "", "CrossDesk 设备 ID（connect）")
+	device := fs.String("device", "", "CrossDesk 设备 ID（connect/host）")
 	devices := fs.String("devices", "", "逗号分隔设备 ID（deskhub）")
+	fps := fs.Int("fps", 10, "画面帧率（host）")
+	quality := fs.Int("quality", 65, "JPEG 质量 1-100（host）")
+	maxWidth := fs.Int("max-width", 1600, "画面最大宽度，0 表示原始尺寸（host）")
+	stun := fs.String("stun", "", "额外 STUN 服务器，逗号分隔（host）")
+	credentials := fs.String("credentials", "", "设备凭据保存路径（host，默认 ~/.config/iflygo/crossdesk-device.json）")
 	fs.Parse(args[1:])
+
+	if action == "host" {
+		cmdCrossDeskHost(*server, *device, *pass, *insecure, *fps, *quality, *maxWidth, *stun, *credentials)
+		return
+	}
 
 	cli, err := newCrossDeskCLI(*server, *user, *pass, *insecure)
 	if err != nil {
@@ -127,6 +143,27 @@ func cmdCrossDesk(args []string) {
 		fmt.Fprintf(os.Stderr, "❌ 未知子命令 %s\n", action)
 		os.Exit(2)
 	}
+}
+
+func cmdCrossDeskHost(server, device, password string, insecure bool, fps, quality, maxWidth int, stun, credentials string) {
+	if strings.TrimSpace(server) == "" {
+		fmt.Fprintln(os.Stderr, "❌ --server 必填")
+		os.Exit(2)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	a := agent.New(agent.Config{
+		ServerURL: strings.TrimSpace(server), DeviceID: strings.TrimSpace(device), Password: password,
+		FPS: fps, Quality: quality, MaxWidth: maxWidth, STUN: splitComma(stun),
+		Insecure: insecure, CredentialsPath: credentials,
+		Logger: log.New(os.Stdout, "", log.LstdFlags),
+	})
+	if err := a.Run(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("👋 CrossDesk Agent 已退出")
 }
 
 func printResult(data any, err error) {
