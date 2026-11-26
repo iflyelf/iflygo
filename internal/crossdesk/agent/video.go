@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,11 +32,13 @@ type videoPipeline struct {
 	baseFPS     int
 	baseBitrate int
 
-	width   int
-	height  int
-	fps     int
-	bitrate int
-	command string
+	width       int
+	height      int
+	fps         int
+	bitrate     int
+	command     string
+	hwaccel     string
+	vaapiDevice string
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -99,8 +102,18 @@ func newVideoPipeline(cfg Config, logger *log.Logger) (*videoPipeline, error) {
 		track: track, codec: codec, log: logger,
 		baseWidth: width, baseHeight: height, baseFPS: fps, baseBitrate: bitrate,
 		width: width, height: height, fps: fps, bitrate: bitrate,
-		command: cfg.VideoEncoder,
-		ctx:     ctx, cancel: cancel,
+		command: cfg.VideoEncoder, vaapiDevice: cfg.VAAPIDevice,
+		ctx: ctx, cancel: cancel,
+	}
+	p.hwaccel = "none"
+	if codec == "h264" && p.command == "" {
+		p.hwaccel = resolveHWAccel(cfg.VideoHWAccel)
+		if p.hwaccel != "none" {
+			logger.Printf("🎞️ 使用硬件编码: %s", p.hwaccel)
+		}
+	}
+	if p.vaapiDevice == "" {
+		p.vaapiDevice = "/dev/dri/renderD128"
 	}
 	p.resetBuffers()
 	return p, nil
@@ -133,7 +146,7 @@ func (p *videoPipeline) startLocked() error {
 	width, height := p.width, p.height
 	gen := p.gen.Add(1)
 
-	shell, args := videoCommand(p.command, p.codec, width, height, fps, p.bitrate)
+	shell, args := videoCommand(p.command, p.codec, width, height, fps, p.bitrate, p.hwaccel, p.vaapiDevice)
 	cmd := exec.CommandContext(ctx, shell, args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -163,7 +176,7 @@ func (p *videoPipeline) startLocked() error {
 	return nil
 }
 
-func videoCommand(custom, codec string, width, height, fps, bitrate int) (string, []string) {
+func videoCommand(custom, codec string, width, height, fps, bitrate int, hwaccel, vaapiDevice string) (string, []string) {
 	if custom != "" {
 		return audioShell(custom)
 	}
@@ -175,12 +188,40 @@ func videoCommand(custom, codec string, width, height, fps, bitrate int) (string
 		"-i", "-",
 	}
 	if codec == "h264" {
-		args = append(args,
-			"-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
-			"-pix_fmt", "yuv420p", "-g", strconv.Itoa(fps),
-			"-b:v", fmt.Sprintf("%dk", bitrate), "-x264-params", "aud=1",
-			"-f", "h264", "-",
-		)
+		switch hwaccel {
+		case "nvenc":
+			args = append(args,
+				"-c:v", "h264_nvenc", "-preset", "p4", "-tune", "ll",
+				"-g", strconv.Itoa(fps), "-b:v", fmt.Sprintf("%dk", bitrate),
+				"-pix_fmt", "yuv420p", "-f", "h264", "-",
+			)
+		case "qsv":
+			args = append(args,
+				"-c:v", "h264_qsv", "-preset", "veryfast",
+				"-g", strconv.Itoa(fps), "-b:v", fmt.Sprintf("%dk", bitrate),
+				"-pix_fmt", "nv12", "-f", "h264", "-",
+			)
+		case "vaapi":
+			args = append(args,
+				"-vaapi_device", vaapiDevice,
+				"-vf", "format=nv12,hwupload",
+				"-c:v", "h264_vaapi", "-g", strconv.Itoa(fps),
+				"-b:v", fmt.Sprintf("%dk", bitrate), "-f", "h264", "-",
+			)
+		case "videotoolbox":
+			args = append(args,
+				"-c:v", "h264_videotoolbox",
+				"-g", strconv.Itoa(fps), "-b:v", fmt.Sprintf("%dk", bitrate),
+				"-pix_fmt", "yuv420p", "-f", "h264", "-",
+			)
+		default:
+			args = append(args,
+				"-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
+				"-pix_fmt", "yuv420p", "-g", strconv.Itoa(fps),
+				"-b:v", fmt.Sprintf("%dk", bitrate), "-x264-params", "aud=1",
+				"-f", "h264", "-",
+			)
+		}
 	} else {
 		args = append(args,
 			"-c:v", "libvpx", "-deadline", "realtime", "-cpu-used", "8",
@@ -189,6 +230,60 @@ func videoCommand(custom, codec string, width, height, fps, bitrate int) (string
 		)
 	}
 	return "ffmpeg", args
+}
+
+var (
+	hwOnce     sync.Once
+	hwEncoders map[string]bool
+)
+
+func detectedHWEncoders() map[string]bool {
+	hwOnce.Do(func() {
+		hwEncoders = map[string]bool{}
+		out, err := exec.Command("ffmpeg", "-hide_banner", "-encoders").Output()
+		if err != nil {
+			return
+		}
+		for _, line := range strings.Split(string(out), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				hwEncoders[fields[1]] = true
+			}
+		}
+	})
+	return hwEncoders
+}
+
+func resolveHWAccel(requested string) string {
+	requested = strings.ToLower(strings.TrimSpace(requested))
+	if requested == "" || requested == "none" {
+		return "none"
+	}
+	return pickHWAccel(requested, detectedHWEncoders(), runtime.GOOS)
+}
+
+func pickHWAccel(requested string, available map[string]bool, goos string) string {
+	candidates := []string{"h264_nvenc", "h264_qsv"}
+	if goos == "darwin" {
+		candidates = []string{"h264_videotoolbox", "h264_nvenc"}
+	} else if goos == "linux" {
+		candidates = append(candidates, "h264_vaapi")
+	}
+	switch requested {
+	case "auto":
+		for _, name := range candidates {
+			if available[name] {
+				return strings.TrimPrefix(name, "h264_")
+			}
+		}
+		return "none"
+	case "nvenc", "qsv", "vaapi", "videotoolbox":
+		if available["h264_"+requested] {
+			return requested
+		}
+		return "none"
+	}
+	return "none"
 }
 
 func (p *videoPipeline) ready() bool {

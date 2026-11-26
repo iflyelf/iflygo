@@ -1675,7 +1675,7 @@
           ]),
           h('iframe', {
             class: 'deskhub-frame', src: it.join_url,
-            allow: 'clipboard-read; clipboard-write; fullscreen',
+            allow: 'clipboard-read; clipboard-write; microphone; fullscreen',
             allowfullscreen: 'allowfullscreen'
           })
         ]);
@@ -1805,7 +1805,7 @@
         ]),
         h('div', { class: 'muted' }, ['Web 客户端需要浏览器信任 CrossDesk Server 的 WSS 证书；自签证书请先导入根证书。']),
         state.crossdeskShowWeb ? h('iframe', {
-          class: 'crossdesk-frame', src: web, allow: 'clipboard-read; clipboard-write; fullscreen',
+          class: 'crossdesk-frame', src: web, allow: 'clipboard-read; clipboard-write; microphone; fullscreen',
           allowfullscreen: 'allowfullscreen', referrerpolicy: 'no-referrer'
         }) : null
       ]),
@@ -1880,7 +1880,7 @@
           'CLI 终端主控（ANSI/Kitty/Sixel）与 Agent/MCP 远程操作',
           '可信设备配对、自托管信令 + TURN、SRTP 媒体加密',
           'Windows 登录前远控、Linux 无头运行',
-          '纯 Go 静态主机端 Agent：屏幕采集 + 键鼠注入 + 文本剪贴板 + 画质协商 + 多显示器 + 受限文件传输 + ADPCM/PCM 音频 + WebRTC VP8/H.264 视频'
+          '纯 Go 静态主机端 Agent：屏幕采集 + 键鼠注入 + 文本剪贴板 + 画质协商 + 多显示器 + 受限文件传输 + ADPCM/PCM 音频 + WebRTC VP8/H.264 视频 + 麦克风回传 + Wayland 抓屏命令'
         ].map(function (x) { return h('div', { class: 'crossdesk-feature' }, ['• ' + x]); }))
       ]),
       h('div', { class: 'card' }, [

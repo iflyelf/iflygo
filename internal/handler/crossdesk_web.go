@@ -28,6 +28,8 @@ func CrossDeskWeb(sc *svc.ServiceContext) http.Handler {
 		panic(err)
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 内置 Web 客户端需要麦克风回传；仅允许同源。
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(self), geolocation=()")
 		cfg := sc.ConfigSnapshot().CrossDesk
 		if !cfg.Enabled || !cfg.NativeSignaling {
 			http.NotFound(w, r)

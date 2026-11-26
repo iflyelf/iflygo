@@ -25,6 +25,7 @@ type session struct {
 	fileChannel     *webrtc.DataChannel
 	feedbackChannel *webrtc.DataChannel
 	audioChannel    *webrtc.DataChannel
+	micChannel      *webrtc.DataChannel
 	audioOn         bool
 	rpcMu           sync.Mutex
 	pendingRPC      map[int64]chan map[string]any
@@ -113,7 +114,7 @@ func newSession(a *Agent, guest string) (*session, error) {
 				"agent": "iflygo-go", "platform": runtime.GOOS,
 				"supports_video_settings": true, "supports_clipboard": a.clipboard != nil,
 				"supports_file_browser": a.files != nil, "supports_web_file_browser": a.files != nil,
-				"supports_audio": a.audio != nil,
+				"supports_audio": a.audio != nil, "supports_microphone": a.mic != nil,
 				"host_name": func() string {
 					if a.files != nil {
 						return a.files.hostname
@@ -145,6 +146,17 @@ func newSession(a *Agent, guest string) (*session, error) {
 		})
 		if err == nil {
 			s.audioChannel = audio
+		}
+	}
+	if a.mic != nil {
+		mic, err := pc.CreateDataChannel(micProtocol, &webrtc.DataChannelInit{Ordered: &ordered})
+		if err == nil {
+			s.micChannel = mic
+			mic.OnMessage(func(m webrtc.DataChannelMessage) {
+				if !m.IsString {
+					a.onMicFrame(m.Data)
+				}
+			})
 		}
 	}
 	if a.files != nil {

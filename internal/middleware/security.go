@@ -20,7 +20,7 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		h.Set("X-XSS-Protection", "1; mode=block")
 		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		// 关闭不需要的浏览器能力，降低被恶意页面利用（摄像头/麦克风/定位）的风险。
-		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		h.Set("Permissions-Policy", "camera=(), microphone=(self), geolocation=()")
 		// CSP: 允许同源脚本/样式（SPA 常含 inline style）；img/font 允许 data: 与 self。
 		// object-src/base-uri/form-action 收紧到最小集合，减少 XSS/注入后的攻击面。
 		// 生产环境建议进一步收紧 unsafe-inline，改为 nonce 或 hash。

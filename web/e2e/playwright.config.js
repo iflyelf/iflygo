@@ -11,6 +11,9 @@ module.exports = defineConfig({
     headless: true,
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
-    permissions: ['clipboard-read', 'clipboard-write']
+    permissions: ['clipboard-read', 'clipboard-write', 'microphone'],
+    launchOptions: {
+      args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream']
+    }
   }
 });

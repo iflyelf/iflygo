@@ -17,6 +17,7 @@ const elements = {
   video: document.getElementById("video"),
   audio: document.getElementById("audio"),
   audioToggleBtn: document.getElementById("audio-toggle"),
+  microphoneToggleBtn: document.getElementById("microphone-toggle"),
   connectionOverlay: document.getElementById("connection-overlay"),
   connectedOverlay: document.getElementById("connected-overlay"),
   connectingOverlay: document.getElementById("connecting-overlay"),
@@ -626,6 +627,37 @@ function setAudioToggleVisible(visible) {
 
 function pcmAudio() {
   return window.CrossDeskPCMAudio;
+}
+
+function micAudio() {
+  return window.CrossDeskMic;
+}
+
+function updateMicToggleState() {
+  const button = elements.microphoneToggleBtn;
+  if (!button) return;
+  const mic = micAudio();
+  const available = mic?.available === true;
+  button.hidden = !available;
+  button.disabled = !available;
+  if (!available) return;
+  const active = !!mic.active;
+  button.classList.toggle("audio-is-playing", active);
+  button.setAttribute("aria-pressed", active ? "true" : "false");
+  const label = document.getElementById("microphone-toggle-label");
+  if (label) label.textContent = active ? "关闭麦克风" : "麦克风";
+  button.setAttribute("aria-label", active ? "关闭麦克风" : "打开麦克风");
+}
+
+async function toggleMicrophone() {
+  const mic = micAudio();
+  if (!mic?.available) return;
+  if (mic.active) {
+    mic.disable();
+  } else {
+    await mic.enable();
+  }
+  updateMicToggleState();
 }
 
 function hasPcmAudio() {
@@ -1435,6 +1467,11 @@ function createPeerConnection() {
       updateAudioToggleState();
       return;
     }
+    if (channel.label === "iflygo-mic-v1") {
+      window.CrossDeskMic?.attach(channel);
+      updateMicToggleState();
+      return;
+    }
     if (peer.crossdeskFiles?.attach(channel)) return;
     if (peer.crossdeskClipboard?.attach(channel)) return;
     if (channel.label === "crossdesk-qos-v1") {
@@ -1746,6 +1783,9 @@ function hideConnectingOverlayOnFirstFrame() {
 
 function teardownPeerConnection() {
   window.CrossDeskFrameView?.reset();
+  window.CrossDeskPCMAudio?.reset();
+  window.CrossDeskMic?.reset();
+  updateMicToggleState();
   if (!pc) return;
 
   pc.crossdeskIceDiagnostics?.event("closed");
@@ -1921,7 +1961,13 @@ if (elements.audioToggleBtn) {
     void toggleRemoteAudio();
   });
 }
+if (elements.microphoneToggleBtn) {
+  elements.microphoneToggleBtn.addEventListener("click", () => {
+    void toggleMicrophone();
+  });
+}
 window.addEventListener("crossdesk-pcm-audio", () => updateAudioToggleState());
+window.addEventListener("crossdesk-mic-audio", () => updateMicToggleState());
 
 if (elements.retrySignalingBtn) {
   elements.retrySignalingBtn.addEventListener("click", retrySignalingNow);

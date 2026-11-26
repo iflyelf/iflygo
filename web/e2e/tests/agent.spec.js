@@ -186,6 +186,25 @@ test.describe('CrossDesk 纯 Go Agent', () => {
       () => page.evaluate(() => window.CrossDeskPCMAudio?.enabled),
     ).toBe(false);
 
+    // 浏览器麦克风 -> 主机。
+    await expect.poll(
+      () => page.evaluate(() => !!window.CrossDeskMic?.available &&
+        !document.getElementById('microphone-toggle').hidden),
+      { timeout: 10000 },
+    ).toBe(true);
+    await page.evaluate(() => document.getElementById('microphone-toggle').click());
+    await expect.poll(
+      () => page.evaluate(() => window.CrossDeskMic?.sentBytes || 0),
+      { timeout: 15000 },
+    ).toBeGreaterThan(0);
+    await expect.poll(
+      () => page.evaluate(() => window.CrossDeskMic?.active),
+    ).toBe(true);
+    await page.evaluate(() => document.getElementById('microphone-toggle').click());
+    await expect.poll(
+      () => page.evaluate(() => window.CrossDeskMic?.active),
+    ).toBe(false);
+
     // 浏览器 -> 主机剪贴板（仅 Linux CI 的 Xvfb 环境验证）。
     if (hostClipboard && process.platform === 'linux') {
       await page.evaluate(() => navigator.clipboard.writeText('browser-to-agent'));

@@ -233,6 +233,7 @@
                   <button type="button" id="session-display" class="session-tile" data-page="display"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8m-4-4v4"/></svg><span id="session-display-label">显示器</span></button>
                   <button type="button" id="session-video" class="session-tile" data-page="video"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h16"/><circle cx="8" cy="5" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="19" r="2"/></svg><span id="session-video-label">画面设置</span></button>
                   <button type="button" id="audio-toggle" class="session-tile" disabled aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h4l5 4V6l-5 4H4Z"/><path class="audio-icon-volume" d="M16 9a4 4 0 0 1 0 6m3-9a8 8 0 0 1 0 12"/><path class="audio-icon-mute" d="m17 9 5 6m0-6-5 6"/></svg><span id="audio-toggle-label">静音</span></button>
+                  <button type="button" id="microphone-toggle" class="session-tile" disabled aria-pressed="false" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3Z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><span id="microphone-toggle-label">麦克风</span></button>
                   <button type="button" id="session-network" class="session-tile" data-page="network"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3v18h17M8 16v-4m5 4V8m5 8V5"/></svg><span id="session-network-label">网络状态</span></button>
                   <button type="button" id="session-files" class="session-tile" data-page="files"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H5v20h14V7Z M14 2v5h5 M8 12h8m-3-3 3 3-3 3 M16 18H8m3-3-3 3 3 3"/></svg><span id="session-files-label">文件传输</span></button>
                   <button type="button" id="session-clipboard" class="session-tile" data-page="clipboard"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="4" width="14" height="18" rx="2"/><rect x="9" y="2" width="6" height="4" rx="1"/><path d="M9 11h6m-6 4h6"/></svg><span>剪贴板</span></button>
@@ -403,6 +404,7 @@
     <script src="clipboard.js?v=2026.11.18.1"></script>
     <script src="display_resolutions.js?v=2026.11.18.1"></script>
     <script src="audio_pcm.js?v=2026.11.18.1"></script>
+    <script src="mic_pcm.js?v=2026.11.18.1"></script>
     <script src="frame_view.js?v=2026.11.18.1"></script>
     <script src="web_client.js?v=2026.11.18.1"></script>
     <script src="session_controls.js?v=2026.11.18.1"></script>

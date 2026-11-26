@@ -653,6 +653,14 @@ docker compose up -d
 > # 可选 WebRTC 视频轨道（需要 ffmpeg；默认仍为 JPEG 帧通道）
 > iflygo-client crossdesk host --server https://iflygo.example.com \
 >   --video-codec vp8 --video-size 1280x720 --video-bitrate 2500
+> # 硬件编码（仅 H.264，auto 自动探测；VP8 仍用软件编码）
+> iflygo-client crossdesk host --server https://iflygo.example.com \
+>   --video-codec h264 --video-hwaccel auto
+> # 浏览器麦克风回传（显式开启）
+> iflygo-client crossdesk host --server https://iflygo.example.com --mic
+> # Wayland 抓屏（命令需向 stdout 输出 PNG/JPEG）
+> iflygo-client crossdesk host --server https://iflygo.example.com \
+>   --capture-cmd "grim -t png -"
 > ```
 >
 > 文件传输仅限 `--file-root` 指定目录：路径穿越与符号链接被拒绝，
@@ -666,12 +674,16 @@ docker compose up -d
 > Windows 使用 GDI + SendInput；macOS 需授予“屏幕录制/辅助功能”权限。
 > 音频在 Linux 上默认使用 `parec`/`ffmpeg` 采集系统声音，其他平台可用
 > `--audio-cmd` 指定输出 48kHz 双声道 s16le PCM 的采集命令。
+> 麦克风回传默认关闭；开启后浏览器麦克风以 16kHz 单声道 PCM 发送到主机播放，
+> Linux 默认使用 `pacat`/`aplay`/`ffplay`，其他平台用 `--mic-play-cmd` 指定播放命令。
 > 默认使用 IMA ADPCM（约 384 kbps），可用 `--audio-codec pcm` 切回 1.5 Mbps PCM。
 >
 > 视频轨道：`--video-codec vp8` 或 `h264` 时，Agent 通过 ffmpeg 编码并发送标准
 > WebRTC 视频轨道，浏览器原生解码，带宽显著低于 JPEG；未启用时继续使用 JPEG 帧通道。
 > Web 端的画质/帧率设置会按质量映射码率，并重启编码器使 30/60fps 立即生效。
+> H.264 支持 `--video-hwaccel auto|nvenc|qsv|vaapi|videotoolbox` 硬件编码。
 > H.264 模式为官方 CrossDesk 客户端互通预留，仍需真机兼容性回归。
+> Wayland 可通过 `--capture-cmd "grim -t png -"` 等外部抓屏命令运行。
 > Wayland 原生会话、Windows/macOS 原生音频采集仍需平台原生层；
 > 官方 CrossDesk 客户端使用 WebRTC 视频，与本 Agent 的 JPEG 画面通道不互通
 > （iFlyGo 内置 Web 客户端已适配）。

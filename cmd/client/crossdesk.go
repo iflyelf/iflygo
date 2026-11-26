@@ -122,11 +122,17 @@ func cmdCrossDesk(args []string) {
 	videoFPS := fs.Int("video-fps", 30, "视频轨道帧率")
 	videoBitrate := fs.Int("video-bitrate", 2500, "视频轨道码率（kbps）")
 	videoEncoder := fs.String("video-encoder", "", "自定义编码命令（stdin=RGBA，stdout=IVF/H264）")
+	captureCmd := fs.String("capture-cmd", "", "外部抓屏命令，输出 PNG/JPEG（如 Wayland: grim -t png -）")
+	videoHW := fs.String("video-hwaccel", "auto", "视频硬件编码：auto/none/nvenc/qsv/vaapi/videotoolbox（仅 H.264）")
+	mic := fs.Bool("mic", false, "允许浏览器麦克风回传到本机播放（host）")
+	micPlay := fs.String("mic-play-cmd", "", "麦克风播放命令，stdin=16kHz 单声道 s16le（host）")
+	vaapiDevice := fs.String("vaapi-device", "/dev/dri/renderD128", "VAAPI 设备路径")
 	fs.Parse(args[1:])
 
 	if action == "host" {
 		cmdCrossDeskHost(*server, *device, *pass, *insecure, *fps, *quality, *maxWidth, *stun, *credentials, *fileRoots, *audio, *audioCmd, *audioCodec,
-			*videoCodec, *videoSize, *videoFPS, *videoBitrate, *videoEncoder)
+			*videoCodec, *videoSize, *videoFPS, *videoBitrate, *videoEncoder, *captureCmd,
+			*videoHW, *vaapiDevice, *mic, *micPlay)
 		return
 	}
 
@@ -165,7 +171,8 @@ func cmdCrossDesk(args []string) {
 }
 
 func cmdCrossDeskHost(server, device, password string, insecure bool, fps, quality, maxWidth int, stun, credentials string, fileRoots []string, audio bool, audioCmd, audioCodec string,
-	videoCodec, videoSize string, videoFPS, videoBitrate int, videoEncoder string) {
+	videoCodec, videoSize string, videoFPS, videoBitrate int, videoEncoder, captureCmd, videoHW, vaapiDevice string,
+	mic bool, micPlay string) {
 	if strings.TrimSpace(server) == "" {
 		fmt.Fprintln(os.Stderr, "❌ --server 必填")
 		os.Exit(2)
@@ -179,7 +186,9 @@ func cmdCrossDeskHost(server, device, password string, insecure bool, fps, quali
 		Insecure: insecure, CredentialsPath: credentials, FileRoots: fileRoots,
 		Audio: audio, AudioCommand: audioCmd, AudioCodec: audioCodec,
 		VideoCodec: videoCodec, VideoSize: videoSize, VideoFPS: videoFPS,
-		VideoBitrate: videoBitrate, VideoEncoder: videoEncoder,
+		VideoBitrate: videoBitrate, VideoEncoder: videoEncoder, CaptureCommand: captureCmd,
+		VideoHWAccel: videoHW, VAAPIDevice: vaapiDevice,
+		Mic: mic, MicPlayCommand: micPlay,
 		Logger: log.New(os.Stdout, "", log.LstdFlags),
 	})
 	if err := a.Run(ctx); err != nil {

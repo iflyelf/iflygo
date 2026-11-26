@@ -209,6 +209,7 @@ jobs:
             --credentials /tmp/agent-device.json \
             --file-root /tmp/agent-files \
             --audio --audio-cmd "python3 scripts/audio_silence.py" \
+            --mic --mic-play-cmd "cat > /dev/null" \
             --video-codec vp8 --video-size 1280x720 --video-bitrate 2000 \
             --fps 10 --quality 65 > /tmp/agent.log 2>&1 &
           for i in $(seq 1 60); do

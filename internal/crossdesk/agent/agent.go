@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -45,6 +46,8 @@ type Config struct {
 	Screen    Screen
 	Input     Input
 	Clipboard Clipboard
+	// CaptureCommand 使用外部命令抓屏（输出 PNG/JPEG），用于 Wayland 等环境。
+	CaptureCommand string
 	// FileRoots 允许浏览/传输的目录；为空时禁用文件传输。
 	FileRoots []string
 	// Audio 启用音频采集；AudioCommand 为空时使用平台默认命令。
@@ -59,6 +62,12 @@ type Config struct {
 	VideoFPS     int
 	VideoBitrate int
 	VideoEncoder string
+	VideoHWAccel string
+	VAAPIDevice  string
+	// Mic 允许浏览器麦克风回传到本机播放；MicPlayCommand 为空时用平台默认。
+	Mic            bool
+	MicPlayCommand string
+	MicSink        MicSink
 }
 
 type credentials struct {
@@ -94,6 +103,12 @@ type Agent struct {
 	audioStop context.CancelFunc
 
 	video *videoPipeline
+
+	mic       MicSink
+	micMu     sync.Mutex
+	micWriter io.WriteCloser
+	micCtx    context.Context
+	micCancel context.CancelFunc
 
 	clipboard    Clipboard
 	clipSessions int
@@ -208,7 +223,13 @@ func (a *Agent) prepare() error {
 		}
 	}
 	if a.cfg.Screen == nil {
-		screen, err := newScreen()
+		var screen Screen
+		var err error
+		if a.cfg.CaptureCommand != "" {
+			screen, err = newCommandScreen(a.cfg.CaptureCommand)
+		} else {
+			screen, err = newScreen()
+		}
 		if err != nil {
 			return fmt.Errorf("初始化屏幕采集失败: %w", err)
 		}
@@ -235,6 +256,18 @@ func (a *Agent) prepare() error {
 	a.files = newFileBrowser(a.cfg.FileRoots)
 	if len(a.cfg.FileRoots) > 0 && a.files == nil {
 		a.log.Printf("⚠️ 文件传输已禁用：没有可用的 --file-root 目录")
+	}
+	if a.cfg.Mic {
+		if a.cfg.MicSink != nil {
+			a.mic = a.cfg.MicSink
+		} else if sink, err := newMicSink(a.cfg.MicPlayCommand); err != nil {
+			a.log.Printf("⚠️ 麦克风回传已禁用: %v", err)
+		} else {
+			a.mic = sink
+		}
+		if a.mic != nil {
+			a.micCtx, a.micCancel = context.WithCancel(context.Background())
+		}
 	}
 	if pipeline, err := newVideoPipeline(a.cfg, a.log); err != nil {
 		a.log.Printf("⚠️ 视频轨道已禁用: %v", err)
@@ -367,6 +400,7 @@ func (a *Agent) closeResources() {
 	if a.video != nil {
 		a.video.close()
 	}
+	a.closeMic()
 }
 
 func (a *Agent) runOnce(ctx context.Context) error {

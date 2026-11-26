@@ -83,13 +83,21 @@ CrossDesk 不是单一服务，而是完整的跨平台远控产品：
   - 目录下载先向浏览器发送 `prepare` 预留子目录；
   - 路径穿越与符号链接拒绝，上传永不覆盖同名文件；
   - FileChunk/ACK 协议兼容内置 Web 客户端；
+- 浏览器麦克风回传：
+  - `--mic` 显式开启，16kHz 单声道 PCM；
+  - Linux 默认 `pacat`/`aplay`/`ffplay` 播放，其他平台用 `--mic-play-cmd`；
+- 外部抓屏命令：
+  - `--capture-cmd` 每帧输出 PNG/JPEG，适用于 Wayland（如 `grim`）等环境；
+- 视频硬件编码：
+  - `--video-hwaccel auto|nvenc|qsv|vaapi|videotoolbox`；
+  - 仅 H.264 生效，VP8 保持 libvpx 软件编码；
 - 可选 WebRTC 视频轨道：
   - `--video-codec vp8|h264`，通过外部 ffmpeg 编码；
   - 固定输出尺寸/码率/关键帧间隔，多 Guest 共享同一轨道；
   - 内置 Web 客户端原生 `<video>` 播放；
   - Web 端画质/帧率设置映射到码率与编码器帧率，按需重启编码器；
   - 编码器不可用时自动回退 JPEG；
-  - H.264 为官方客户端互通预留；
+  - H.264 为官方客户端互通预留，支持硬件编码预设；
 - PCM 音频播放：
   - `iflygo-audio-v1` 可靠 DataChannel，20ms 48kHz 双声道；
   - IMA ADPCM（约 384 kbps）默认开启，每 250ms 重置同步；可切回 PCM；
@@ -117,7 +125,7 @@ CrossDesk 不是单一服务，而是完整的跨平台远控产品：
 
 - 接入 WebRTC 视频轨道（需 CGO/原生编码器或硬件编码 SDK）；
 - 平台音频采集与 Opus；
-- Windows/macOS 原生音频采集、硬件编码；官方客户端视频兼容性回归；
+- Windows/macOS 原生系统音频采集与麦克风播放；官方客户端视频兼容性回归；
 - 隐私屏、登录前远控、服务安装与自动升级。
 
 ### Phase 4：DeskHub / 群控 / 移动端 / CLI / MCP

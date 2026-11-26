@@ -186,6 +186,28 @@ func (f *fakeAudio) Start(ctx context.Context) (io.ReadCloser, error) {
 
 func (f *fakeAudio) Close() error { return nil }
 
+type fakeMicSink struct {
+	mu   sync.Mutex
+	data []byte
+}
+
+func (f *fakeMicSink) Start(ctx context.Context) (io.WriteCloser, error) {
+	return &fakeMicWriter{sink: f}, nil
+}
+
+func (f *fakeMicSink) Close() error { return nil }
+
+type fakeMicWriter struct{ sink *fakeMicSink }
+
+func (w *fakeMicWriter) Write(p []byte) (int, error) {
+	w.sink.mu.Lock()
+	w.sink.data = append(w.sink.data, p...)
+	w.sink.mu.Unlock()
+	return len(p), nil
+}
+
+func (w *fakeMicWriter) Close() error { return nil }
+
 type fakeClipboard struct {
 	mu     sync.Mutex
 	text   string
@@ -231,6 +253,7 @@ func TestAgentStreamsFramesAndAcceptsInput(t *testing.T) {
 		Logger:          log.New(io.Discard, "", 0),
 		Screen:          newFakeScreen(), Input: input, Clipboard: clip,
 		FileRoots: []string{root}, Audio: true, AudioSource: &fakeAudio{},
+		Mic: true, MicSink: &fakeMicSink{},
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -308,12 +331,20 @@ func TestAgentStreamsFramesAndAcceptsInput(t *testing.T) {
 	clipMessages := make(chan []byte, 16)
 	audioReady := make(chan *webrtc.DataChannel, 1)
 	audioPackets := make(chan []byte, 64)
+	micReady := make(chan *webrtc.DataChannel, 1)
 	fileReady := make(chan *webrtc.DataChannel, 1)
 	feedbackReady := make(chan *webrtc.DataChannel, 1)
 	filePackets := make(chan []byte, 64)
 	feedbackPackets := make(chan []byte, 64)
 	pc.OnDataChannel(func(dc *webrtc.DataChannel) {
 		switch dc.Label() {
+		case "iflygo-mic-v1":
+			dc.OnOpen(func() {
+				select {
+				case micReady <- dc:
+				default:
+				}
+			})
 		case "iflygo-audio-v1":
 			dc.OnOpen(func() {
 				select {
@@ -698,6 +729,38 @@ settingsDone:
 		t.Fatalf("disable audio: %v", err)
 	}
 	_ = audioDC
+
+	var micDC *webrtc.DataChannel
+	select {
+	case micDC = <-micReady:
+	case <-time.After(10 * time.Second):
+		t.Fatal("mic channel did not open")
+	}
+	micPayload := []byte("mic-pcm")
+	micFrame := make([]byte, audioHeader+len(micPayload))
+	copy(micFrame[0:4], "CDA1")
+	binary.LittleEndian.PutUint32(micFrame[4:8], 1)
+	binary.LittleEndian.PutUint32(micFrame[8:12], micRate)
+	binary.LittleEndian.PutUint16(micFrame[12:14], micChannels)
+	binary.LittleEndian.PutUint16(micFrame[14:16], audioFormatPCM)
+	copy(micFrame[audioHeader:], micPayload)
+	if err := micDC.Send(micFrame); err != nil {
+		t.Fatalf("send mic frame: %v", err)
+	}
+	micDeadline := time.Now().Add(3 * time.Second)
+	for {
+		sink := a.mic.(*fakeMicSink)
+		sink.mu.Lock()
+		got := append([]byte(nil), sink.data...)
+		sink.mu.Unlock()
+		if string(got) == string(micPayload) {
+			break
+		}
+		if time.Now().After(micDeadline) {
+			t.Fatalf("mic payload not played: %q", got)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 
 	// --- 文件浏览与传输 ---
 	var fileDC, feedbackDC *webrtc.DataChannel
