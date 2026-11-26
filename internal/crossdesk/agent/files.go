@@ -59,6 +59,7 @@ type directorySnapshot struct {
 
 type fileBrowser struct {
 	roots     []string
+	maxUpload int64
 	hostname  string
 	mu        sync.Mutex
 	snapshots map[string]*directorySnapshot
@@ -81,7 +82,7 @@ type fileRPC struct {
 	} `json:"items"`
 }
 
-func newFileBrowser(roots []string) *fileBrowser {
+func newFileBrowser(roots []string, maxUpload int64) *fileBrowser {
 	var resolved []string
 	seen := map[string]bool{}
 	for _, raw := range roots {
@@ -110,7 +111,7 @@ func newFileBrowser(roots []string) *fileBrowser {
 		return nil
 	}
 	host, _ := os.Hostname()
-	return &fileBrowser{roots: resolved, hostname: host, snapshots: map[string]*directorySnapshot{}}
+	return &fileBrowser{roots: resolved, maxUpload: maxUpload, hostname: host, snapshots: map[string]*directorySnapshot{}}
 }
 
 // resolveExisting 解析真实路径并确认位于允许的根目录内（符号链接会被解析）。
@@ -756,6 +757,9 @@ func (s *session) beginUpload(id uint32, name string, total uint64) {
 	}
 	safe := safeUploadName(name)
 	if safe == "" || total > math.MaxInt64 {
+		return
+	}
+	if s.agent.files.maxUpload > 0 && total > uint64(s.agent.files.maxUpload) {
 		return
 	}
 	path, file, err := createUnique(dest, safe)

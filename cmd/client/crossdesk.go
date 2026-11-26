@@ -114,6 +114,7 @@ func cmdCrossDesk(args []string) {
 	credentials := fs.String("credentials", "", "设备凭据保存路径（host，默认 ~/.config/iflygo/crossdesk-device.json）")
 	fileRoots := &stringList{}
 	fs.Var(fileRoots, "file-root", "允许文件浏览/传输的目录（可重复，host）")
+	fileMaxUpload := fs.Int64("file-max-upload", 0, "单文件上传上限（MB，0=不限，host）")
 	audio := fs.Bool("audio", false, "启用音频采集（host）")
 	audioCmd := fs.String("audio-cmd", "", "音频采集命令，输出 48kHz 双声道 s16le PCM（host）")
 	audioCodec := fs.String("audio-codec", "adpcm", "音频编码：adpcm（约 384kbps）或 pcm（1.5Mbps）")
@@ -130,7 +131,7 @@ func cmdCrossDesk(args []string) {
 	fs.Parse(args[1:])
 
 	if action == "host" {
-		cmdCrossDeskHost(*server, *device, *pass, *insecure, *fps, *quality, *maxWidth, *stun, *credentials, *fileRoots, *audio, *audioCmd, *audioCodec,
+		cmdCrossDeskHost(*server, *device, *pass, *insecure, *fps, *quality, *maxWidth, *stun, *credentials, *fileRoots, *fileMaxUpload, *audio, *audioCmd, *audioCodec,
 			*videoCodec, *videoSize, *videoFPS, *videoBitrate, *videoEncoder, *captureCmd,
 			*videoHW, *vaapiDevice, *mic, *micPlay)
 		return
@@ -170,7 +171,7 @@ func cmdCrossDesk(args []string) {
 	}
 }
 
-func cmdCrossDeskHost(server, device, password string, insecure bool, fps, quality, maxWidth int, stun, credentials string, fileRoots []string, audio bool, audioCmd, audioCodec string,
+func cmdCrossDeskHost(server, device, password string, insecure bool, fps, quality, maxWidth int, stun, credentials string, fileRoots []string, fileMaxUpload int64, audio bool, audioCmd, audioCodec string,
 	videoCodec, videoSize string, videoFPS, videoBitrate int, videoEncoder, captureCmd, videoHW, vaapiDevice string,
 	mic bool, micPlay string) {
 	if strings.TrimSpace(server) == "" {
@@ -184,7 +185,8 @@ func cmdCrossDeskHost(server, device, password string, insecure bool, fps, quali
 		ServerURL: strings.TrimSpace(server), DeviceID: strings.TrimSpace(device), Password: password,
 		FPS: fps, Quality: quality, MaxWidth: maxWidth, STUN: splitComma(stun),
 		Insecure: insecure, CredentialsPath: credentials, FileRoots: fileRoots,
-		Audio: audio, AudioCommand: audioCmd, AudioCodec: audioCodec,
+		FileMaxUpload: fileMaxUpload * 1024 * 1024,
+		Audio:         audio, AudioCommand: audioCmd, AudioCodec: audioCodec,
 		VideoCodec: videoCodec, VideoSize: videoSize, VideoFPS: videoFPS,
 		VideoBitrate: videoBitrate, VideoEncoder: videoEncoder, CaptureCommand: captureCmd,
 		VideoHWAccel: videoHW, VAAPIDevice: vaapiDevice,

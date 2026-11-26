@@ -664,7 +664,8 @@ docker compose up -d
 > ```
 >
 > 文件传输仅限 `--file-root` 指定目录：路径穿越与符号链接被拒绝，
-> 上传使用唯一文件名且不覆盖已有文件；支持目录浏览、文件/目录下载、文件/目录上传。
+> 上传使用唯一文件名且不覆盖已有文件；可用 `--file-max-upload <MB>` 限制单文件大小。
+> 支持目录浏览、文件/目录下载、文件/目录上传。
 > 目录下载会先向浏览器预留子目录，需要浏览器选择本机目录（File System Access/OPFS）。
 > 首次运行会自动注册设备，并生成 Ed25519 设备密钥（保存于
 > `~/.config/iflygo/crossdesk-device.json`，权限 0600）；已有设备首次绑定密钥时
@@ -674,8 +675,9 @@ docker compose up -d
 > Windows 使用 GDI + SendInput；macOS 需授予“屏幕录制/辅助功能”权限。
 > 音频在 Linux 上默认使用 `parec`/`ffmpeg` 采集系统声音，其他平台可用
 > `--audio-cmd` 指定输出 48kHz 双声道 s16le PCM 的采集命令。
-> 麦克风回传默认关闭；开启后浏览器麦克风以 16kHz 单声道 PCM 发送到主机播放，
-> Linux 默认使用 `pacat`/`aplay`/`ffplay`，其他平台用 `--mic-play-cmd` 指定播放命令。
+> 麦克风回传默认关闭；开启后浏览器麦克风以 16kHz 单声道 PCM 发送到主机播放。
+> Linux 默认使用 `pacat`/`aplay`；所有平台在安装 ffmpeg 时可回退到 `ffplay`，
+> 或用 `--mic-play-cmd` 指定播放命令。
 > 默认使用 IMA ADPCM（约 384 kbps），可用 `--audio-codec pcm` 切回 1.5 Mbps PCM。
 >
 > 视频轨道：`--video-codec vp8` 或 `h264` 时，Agent 通过 ffmpeg 编码并发送标准

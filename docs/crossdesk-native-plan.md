@@ -85,7 +85,7 @@ CrossDesk 不是单一服务，而是完整的跨平台远控产品：
   - FileChunk/ACK 协议兼容内置 Web 客户端；
 - 浏览器麦克风回传：
   - `--mic` 显式开启，16kHz 单声道 PCM；
-  - Linux 默认 `pacat`/`aplay`/`ffplay` 播放，其他平台用 `--mic-play-cmd`；
+  - Linux 默认 `pacat`/`aplay`，所有平台可用 ffplay 或 `--mic-play-cmd`；
 - 外部抓屏命令：
   - `--capture-cmd` 每帧输出 PNG/JPEG，适用于 Wayland（如 `grim`）等环境；
 - 视频硬件编码：

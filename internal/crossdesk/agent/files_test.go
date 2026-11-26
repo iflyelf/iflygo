@@ -75,7 +75,7 @@ func TestResolveExistingRejectsSymlinkEscape(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
 		t.Skipf("无法创建符号链接: %v", err)
 	}
-	fb := newFileBrowser([]string{root})
+	fb := newFileBrowser([]string{root}, 0)
 	if fb == nil {
 		t.Fatal("nil file browser")
 	}
@@ -87,6 +87,28 @@ func TestResolveExistingRejectsSymlinkEscape(t *testing.T) {
 	}
 }
 
+func TestUploadLimit(t *testing.T) {
+	root := t.TempDir()
+	fb := newFileBrowser([]string{root}, 10)
+	if fb == nil {
+		t.Fatal("nil file browser")
+	}
+	s := &session{
+		agent:    &Agent{files: fb},
+		uploads:  map[uint32]string{1: root, 2: root},
+		incoming: map[uint32]*incomingUpload{},
+	}
+	s.beginUpload(1, "big.bin", 11)
+	if s.incoming[1] != nil {
+		t.Fatal("oversized upload accepted")
+	}
+	s.beginUpload(2, "ok.bin", 5)
+	up := s.incoming[2]
+	if up == nil {
+		t.Fatal("valid upload rejected")
+	}
+	up.file.Close()
+}
 func TestFileBrowserRootsAndPagination(t *testing.T) {
 	root := t.TempDir()
 	for i := 0; i < 20; i++ {
@@ -95,7 +117,7 @@ func TestFileBrowserRootsAndPagination(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	fb := newFileBrowser([]string{root})
+	fb := newFileBrowser([]string{root}, 0)
 	if fb == nil {
 		t.Fatal("nil file browser")
 	}

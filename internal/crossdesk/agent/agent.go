@@ -50,6 +50,8 @@ type Config struct {
 	CaptureCommand string
 	// FileRoots 允许浏览/传输的目录；为空时禁用文件传输。
 	FileRoots []string
+	// FileMaxUpload 单文件上传上限（字节，0=不限）。
+	FileMaxUpload int64
 	// Audio 启用音频采集；AudioCommand 为空时使用平台默认命令。
 	Audio        bool
 	AudioCommand string
@@ -253,7 +255,7 @@ func (a *Agent) prepare() error {
 	} else {
 		a.clipboard = clipboard
 	}
-	a.files = newFileBrowser(a.cfg.FileRoots)
+	a.files = newFileBrowser(a.cfg.FileRoots, a.cfg.FileMaxUpload)
 	if len(a.cfg.FileRoots) > 0 && a.files == nil {
 		a.log.Printf("⚠️ 文件传输已禁用：没有可用的 --file-root 目录")
 	}

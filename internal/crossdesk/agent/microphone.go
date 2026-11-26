@@ -64,20 +64,21 @@ func newMicSink(custom string) (MicSink, error) {
 }
 
 func defaultMicCommand() string {
-	if runtime.GOOS != "linux" {
-		return ""
-	}
-	for _, candidate := range []struct {
-		bin  string
-		args string
-	}{
-		{"pacat", "pacat --playback --format=s16le --rate=16000 --channels=1"},
-		{"aplay", "aplay -q -f S16_LE -r 16000 -c 1"},
-		{"ffplay", "ffplay -hide_banner -loglevel error -f s16le -ar 16000 -ac 1 -nodisp -autoexit -"},
-	} {
-		if _, err := exec.LookPath(candidate.bin); err == nil {
-			return candidate.args
+	if runtime.GOOS == "linux" {
+		for _, candidate := range []struct {
+			bin  string
+			args string
+		}{
+			{"pacat", "pacat --playback --format=s16le --rate=16000 --channels=1"},
+			{"aplay", "aplay -q -f S16_LE -r 16000 -c 1"},
+		} {
+			if _, err := exec.LookPath(candidate.bin); err == nil {
+				return candidate.args
+			}
 		}
+	}
+	if _, err := exec.LookPath("ffplay"); err == nil {
+		return "ffplay -hide_banner -loglevel error -f s16le -ar 16000 -ac 1 -nodisp -autoexit -"
 	}
 	return ""
 }
