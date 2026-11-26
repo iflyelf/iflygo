@@ -141,6 +141,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: 检出代码（构建监控安装器 / 读取版本）
+        uses: actions/checkout@v7.0.1
+        with:
+          submodules: recursive
+
       - name: 下载构建产物
         uses: actions/download-artifact@v7.0.0
         with:
@@ -176,12 +181,6 @@ jobs:
             esac
           done
           ls -lh
-
-      - name: 检出代码（构建监控安装器 / 读取版本）
-        uses: actions/checkout@v7.0.1
-        with:
-          submodules: recursive
-          clean: false
 
       - name: 构建 Windows 监控安装器（可选工具）
         run: |
