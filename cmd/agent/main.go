@@ -59,8 +59,8 @@ func main() {
 	case "diagnose":
 		diagnoseCmd()
 	case "self-update", "upgrade":
-		fmt.Printf("子命令 %s 将在后续版本实现\n", os.Args[1])
-		os.Exit(1)
+		fmt.Println("ℹ️ Agent 自升级由控制台下发的 self_update 指令自动执行；单机组件升级请通过控制台任务。")
+		return
 	default:
 		fmt.Fprintf(os.Stderr, "未知子命令: %s\n\n", os.Args[1])
 		usage()
@@ -70,7 +70,7 @@ func main() {
 
 func runCmd() {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	serverURL := fs.String("server", "http://localhost:8090", "控制台地址；可逗号分隔多个作为备用")
+	serverURL := fs.String("server", os.Getenv("UPGRADE_MGR_SERVER"), "控制台地址（必填）；可逗号分隔多个作为备用")
 	enrollToken := fs.String("enroll-token", "", "注册令牌")
 	statePath := fs.String("state", agentpath.StatePath(), "状态文件路径")
 	// --service 由 Windows 安装器写入服务命令行；Linux 上忽略。
@@ -239,8 +239,8 @@ func usage() {
   status       打印连接地址、备用列表、最近切换原因等排查信息
   logs         查看/实时跟随 Agent 日志（-f 默认开启）
   diagnose     主动拨测服务端链路（DNS/TCP/TLS/HTTP，可选鉴权心跳）
-  self-update  自升级（P3）
-  upgrade      单机升级指定组件（P3）
+  self-update  提示：自升级由控制台自动下发
+  upgrade      提示：单机升级请通过控制台任务
   version      显示版本
 `)
 }

@@ -11,7 +11,7 @@ import (
 )
 
 // installWindowsService 注册并启动 Windows 服务（SCM）。
-func installWindowsService(exe, stateDir, relay, token, configPath string) error {
+func installWindowsService(exe, stateDir, relay, token, configPath string, autoUpdate bool) error {
 	m, err := mgr.Connect()
 	if err != nil {
 		return fmt.Errorf("连接 Windows 服务管理器失败: %w", err)
@@ -27,6 +27,9 @@ func installWindowsService(exe, stateDir, relay, token, configPath string) error
 	}
 	if token != "" {
 		args = append(args, "--tcp-relay-token", token)
+	}
+	if autoUpdate {
+		args = append(args, "--auto-update")
 	}
 
 	// 已存在：先停止并删除，确保启动参数（配置/中继）是最新的。
@@ -48,6 +51,9 @@ func installWindowsService(exe, stateDir, relay, token, configPath string) error
 		return fmt.Errorf("创建 Windows 服务失败: %w", err)
 	}
 	defer s.Close()
+	// 自升级会以退出码 75 结束进程；配置 SCM 恢复动作让服务自动拉起新版本。
+	_ = s.SetRecoveryActions([]mgr.RecoveryAction{{Type: mgr.ServiceRestart, Delay: 5 * time.Second}}, 86400)
+	_ = s.SetRecoveryActionsOnNonCrashFailures(true)
 	if err := s.Start(); err != nil {
 		return fmt.Errorf("启动 Windows 服务失败: %w", err)
 	}

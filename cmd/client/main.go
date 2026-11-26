@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/iflyelf/iflygo/internal/client"
 	"github.com/iflyelf/iflygo/internal/version"
@@ -42,6 +43,8 @@ func main() {
 		cmdService(os.Args[2:])
 	case "crossdesk":
 		cmdCrossDesk(os.Args[2:])
+	case "self-update":
+		cmdSelfUpdate(os.Args[2:])
 	case "version", "-version", "--version":
 		fmt.Printf("iflygo-client %s (build %s, commit %s)\n", version.Version, version.Build, version.Commit)
 	default:
@@ -51,7 +54,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Println("用法: iflygo-client <enroll|run|config|status|service|version|crossdesk> [选项]")
+	fmt.Println("用法: iflygo-client <enroll|run|config|status|service|self-update|version|crossdesk> [选项]")
 	fmt.Println("  crossdesk status|devices|connect|deskhub  CrossDesk 管理面")
 	fmt.Println("  crossdesk host --server <url>           启动 CrossDesk 主机端（纯 Go 采集/输入）")
 }
@@ -119,6 +122,60 @@ func cmdEnroll(args []string) {
 	fmt.Println("下一步: iflygo-client run --state-dir " + *dir)
 }
 
+func cmdSelfUpdate(args []string) {
+	fs := flag.NewFlagSet("self-update", flag.ExitOnError)
+	server := fs.String("server", "", "控制面地址（留空从状态文件读取）")
+	dir := fs.String("state-dir", client.DefaultStateDir(), "状态目录")
+	check := fs.Bool("check", false, "只检查，不下载")
+	force := fs.Bool("force", false, "强制重新下载当前平台版本")
+	fs.Parse(args)
+
+	if *server == "" {
+		if st, err := client.LoadState(*dir); err == nil {
+			*server = st.Server
+		}
+	}
+	if *server == "" {
+		fmt.Fprintln(os.Stderr, "❌ --server 必填（或先 enroll）")
+		os.Exit(2)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
+	defer cancel()
+	var info *client.UpdateInfo
+	var err error
+	if *force {
+		info, err = client.CheckUpdateForce(ctx, *server, version.Version, runtime.GOOS, runtime.GOARCH)
+	} else {
+		info, err = client.CheckUpdate(ctx, *server, version.Version, runtime.GOOS, runtime.GOARCH)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ 检查更新失败: %v\n", err)
+		os.Exit(1)
+	}
+	if !info.Enabled {
+		fmt.Println("ℹ️ 服务端未启用客户端升级")
+		return
+	}
+	if !info.Update {
+		fmt.Printf("✅ 已是最新版本 %s\n", version.Version)
+		return
+	}
+	fmt.Printf("⬆️ 发现新版本 %s（当前 %s）\n", info.Version, version.Version)
+	if *check {
+		return
+	}
+	bin, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ 无法定位当前二进制: %v\n", err)
+		os.Exit(1)
+	}
+	if err := client.ApplyUpdate(ctx, info, bin, *dir); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ 升级失败: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("✅ 已更新到 %s，请重启服务使新版本生效\n", info.Version)
+}
+
 func cmdRun(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	dir := fs.String("state-dir", client.DefaultStateDir(), "状态目录")
@@ -131,15 +188,19 @@ func cmdRun(args []string) {
 		"TCP 中继服务端地址（留空自动发现；off 关闭中继）")
 	tcpRelayToken := fs.String("tcp-relay-token", os.Getenv("IFLYGO_TCP_RELAY_TOKEN"),
 		"TCP 中继共享令牌（留空自动从服务端获取）")
+	autoUpdate := fs.Bool("auto-update", false, "启用客户端自动升级（服务安装默认开启）")
+	updateInterval := fs.Duration("update-interval", 6*time.Hour, "自动升级检查间隔")
 	fs.Parse(args)
 
 	if err := client.Run(client.RunOptions{
-		Dir:           *dir,
-		Interval:      *interval,
-		Mode:          *mode,
-		TCPRelay:      *tcpRelay,
-		TCPRelayToken: *tcpRelayToken,
-		ConfigPath:    *configPath,
+		Dir:            *dir,
+		Interval:       *interval,
+		Mode:           *mode,
+		TCPRelay:       *tcpRelay,
+		TCPRelayToken:  *tcpRelayToken,
+		ConfigPath:     *configPath,
+		AutoUpdate:     *autoUpdate,
+		UpdateInterval: *updateInterval,
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		os.Exit(1)
@@ -183,13 +244,14 @@ func cmdService(args []string) {
 	configPath := fs.String("config", os.Getenv("IFLYGO_CLIENT_CONFIG"), "客户端配置文件（写入服务启动参数）")
 	relay := fs.String("tcp-relay", os.Getenv("IFLYGO_TCP_RELAY"), "TCP 中继服务端地址（写入服务启动参数）")
 	relayToken := fs.String("tcp-relay-token", os.Getenv("IFLYGO_TCP_RELAY_TOKEN"), "TCP 中继共享令牌")
+	autoUpdate := fs.Bool("auto-update", true, "服务启动时启用客户端自动升级")
 	fs.Parse(args[1:])
 
 	switch action {
 	case "install":
 		exe, _ := os.Executable()
 		exe, _ = filepath.Abs(exe)
-		if err := client.InstallService(exe, *dir, *relay, *relayToken, *configPath); err != nil {
+		if err := client.InstallService(exe, *dir, *relay, *relayToken, *configPath, *autoUpdate); err != nil {
 			fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 			os.Exit(1)
 		}

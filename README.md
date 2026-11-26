@@ -402,7 +402,51 @@ iflygo-client config --state-dir /var/lib/iflygo-client
 > Windows 服务以 LocalSystem 运行，需要管理员权限以加载 wintun 驱动。
 > 若使用裸 `.exe`（不下载 zip），需手动补齐 `dist\windows\wintun\bin\<arch>\wintun.dll`。
 
-#### 7. 升级 / 卸载
+#### 7. 自动升级与接入脚本
+
+**一键接入脚本**：
+
+- 页面 **隧道 → 客户端 → 安装命令** 会弹出 Linux / macOS / Windows 脚本；
+- 脚本自动完成：下载当前平台二进制 → `enroll` → 安装服务 → 开启自动升级；
+- 页面 **远程桌面（CrossDesk）→ 生成接入脚本** 可生成主机端脚本，
+  支持 Linux systemd、macOS launchd、Windows 计划任务，并可附带
+  `--file-root`、`--audio`、`--video-codec vp8`。
+
+**自动升级**：
+
+- Release 附带 `iflygo-client-manifest.json`（版本、各平台文件、SHA256）；
+- 在 **设置 → 客户端升级** 配置清单 URL 与制品基础 URL；
+- 手动检查/升级：
+
+```bash
+iflygo-client self-update --server https://iflygo.example.com --check
+iflygo-client self-update --server https://iflygo.example.com
+```
+
+- 服务模式默认开启自动升级（`service install` 写入 `--auto-update`），
+  也可前台运行：
+
+```bash
+sudo iflygo-client run --state-dir /var/lib/iflygo-client --auto-update
+```
+
+- 检查间隔默认 6 小时；Unix 升级后原地 `exec`，Windows 退出 75 由 SCM
+  恢复动作拉起；旧版本备份在状态目录 `backup/`。
+- 公开接口：`GET /api/client/update?os=&arch=&version=`、
+  `GET /api/client/download?os=&arch=&format=raw|package`。
+
+**主机监控接入脚本（升级控制平台）**：
+
+- 主机页 **生成接入脚本（自动化）** 使用永久自动化令牌，Linux 安装
+  `upgrade-agent` + Node Exporter，Windows 使用一体化安装器；
+- 永久令牌接口：`GET /api/agent/install-monitor/token`（纯文本，供脚本读取）、
+  `GET ...?format=json`（页面展示）、`POST`（管理员轮换）；
+- 需在 `server.agent_binary_dir` 放置 `upgrade-agent` 平台二进制；
+  Windows 安装器由 Release 构建并上传；
+- 该脚本/令牌接口与 upgrade_mgr 一致，仅建议内网使用，务必用防火墙限制来源；
+- 一体化安装脚本使用默认租户（tenant 1）；多租户环境请使用「自动化令牌」按租户创建。
+
+#### 8. 升级 / 卸载
 
 ```bash
 # 升级：替换二进制后重启，迁移自动执行

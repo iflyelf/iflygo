@@ -505,6 +505,7 @@ func registerCrossDeskRoutes(mux *http.ServeMux, sc *svc.ServiceContext) {
 	mux.Handle("GET /api/crossdesk/sessions", middleware.RequireAuth(sc.Auth, middleware.RequireAdmin(handler.ListCrossDeskSessions(sc))))
 	mux.Handle("POST /api/crossdesk/sessions/disconnect", middleware.RequireAuth(sc.Auth, middleware.RequireAdmin(handler.DisconnectCrossDeskSession(sc))))
 	mux.Handle("GET /api/crossdesk/native-stats", middleware.RequireAuth(sc.Auth, middleware.RequireAdmin(handler.CrossDeskNativeStats(sc))))
+	mux.Handle("GET /api/crossdesk/agent-script", middleware.RequireAuth(sc.Auth, middleware.RequireAdmin(handler.CrossDeskAgentScript(sc))))
 }
 
 // registerTunnelRoutes 注册隧道服务（iflygo）相关路由，与 upgrade_mgr 业务共存。
@@ -560,6 +561,10 @@ func registerTunnelRoutes(mux *http.ServeMux, sc *svc.ServiceContext) {
 
 	// 隧道 Agent（注册匿名，心跳/配置需 Bearer）——与升级 Agent 的 /api/agent/* 分离
 	mux.HandleFunc("POST /api/tunnel/register", handler.TunnelAgentRegister(sc))
+	mux.HandleFunc("GET /api/client/update", handler.ClientUpdate(sc))
+	mux.HandleFunc("GET /api/agent/install-monitor/token", handler.InstallMonitorTokenGet(sc))
+	mux.Handle("POST /api/agent/install-monitor/token", middleware.RequireAuth(sc.Auth, middleware.RequireAdmin(handler.InstallMonitorTokenCreate(sc))))
+	mux.HandleFunc("GET /api/client/download", handler.ClientDownload(sc))
 	mux.HandleFunc("POST /api/tunnel/heartbeat", handler.TunnelAgentHeartbeat(sc))
 	mux.HandleFunc("GET /api/tunnel/config", handler.TunnelAgentConfig(sc))
 }

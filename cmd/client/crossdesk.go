@@ -13,10 +13,12 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/iflyelf/iflygo/internal/client"
 	"github.com/iflyelf/iflygo/internal/crossdesk/agent"
 )
 
@@ -125,6 +127,8 @@ func cmdCrossDesk(args []string) {
 	videoEncoder := fs.String("video-encoder", "", "自定义编码命令（stdin=RGBA，stdout=IVF/H264）")
 	captureCmd := fs.String("capture-cmd", "", "外部抓屏命令，输出 PNG/JPEG（如 Wayland: grim -t png -）")
 	videoHW := fs.String("video-hwaccel", "auto", "视频硬件编码：auto/none/nvenc/qsv/vaapi/videotoolbox（仅 H.264）")
+	autoUpdate := fs.Bool("auto-update", false, "自动升级 iflygo-client")
+	updateInterval := fs.Duration("update-interval", 6*time.Hour, "自动升级检查间隔")
 	mic := fs.Bool("mic", false, "允许浏览器麦克风回传到本机播放（host）")
 	micPlay := fs.String("mic-play-cmd", "", "麦克风播放命令，stdin=16kHz 单声道 s16le（host）")
 	vaapiDevice := fs.String("vaapi-device", "/dev/dri/renderD128", "VAAPI 设备路径")
@@ -133,7 +137,7 @@ func cmdCrossDesk(args []string) {
 	if action == "host" {
 		cmdCrossDeskHost(*server, *device, *pass, *insecure, *fps, *quality, *maxWidth, *stun, *credentials, *fileRoots, *fileMaxUpload, *audio, *audioCmd, *audioCodec,
 			*videoCodec, *videoSize, *videoFPS, *videoBitrate, *videoEncoder, *captureCmd,
-			*videoHW, *vaapiDevice, *mic, *micPlay)
+			*videoHW, *vaapiDevice, *mic, *micPlay, *autoUpdate, *updateInterval)
 		return
 	}
 
@@ -173,7 +177,7 @@ func cmdCrossDesk(args []string) {
 
 func cmdCrossDeskHost(server, device, password string, insecure bool, fps, quality, maxWidth int, stun, credentials string, fileRoots []string, fileMaxUpload int64, audio bool, audioCmd, audioCodec string,
 	videoCodec, videoSize string, videoFPS, videoBitrate int, videoEncoder, captureCmd, videoHW, vaapiDevice string,
-	mic bool, micPlay string) {
+	mic bool, micPlay string, autoUpdate bool, updateInterval time.Duration) {
 	if strings.TrimSpace(server) == "" {
 		fmt.Fprintln(os.Stderr, "❌ --server 必填")
 		os.Exit(2)
@@ -193,6 +197,17 @@ func cmdCrossDeskHost(server, device, password string, insecure bool, fps, quali
 		Mic: mic, MicPlayCommand: micPlay,
 		Logger: log.New(os.Stdout, "", log.LstdFlags),
 	})
+	if autoUpdate {
+		backupDir := credentials
+		if backupDir == "" {
+			if home, err := os.UserHomeDir(); err == nil {
+				backupDir = filepath.Join(home, ".config", "iflygo")
+			}
+		} else {
+			backupDir = filepath.Dir(backupDir)
+		}
+		go client.AutoUpdateLoop(ctx, strings.TrimSpace(server), backupDir, updateInterval, log.Default())
+	}
 	if err := a.Run(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		os.Exit(1)

@@ -626,6 +626,7 @@ TUNNEL_JS = r'''
           var cmd = (d && d.install_command) || '';
           tunnelSetMsg(true, '客户端已创建' + (cmd ? '，安装命令已复制' : ''));
           if (cmd && navigator.clipboard) { navigator.clipboard.writeText(cmd).catch(function () {}); }
+          tunnelShowScript((d && d.client && d.client.name) || name.value.trim(), d && d.install_scripts);
         });
       },
       after: function () { tunnelLoadAll().then(render); }
@@ -1093,11 +1094,58 @@ TUNNEL_JS = r'''
     ]);
   }
 
+  function tunnelShowScript(name, scripts) {
+    if (!scripts) return;
+    var old = document.getElementById('iflygo-install-script-modal');
+    if (old) old.remove();
+    var overlay = document.createElement('div');
+    overlay.id = 'iflygo-install-script-modal';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:24px';
+    var box = document.createElement('div');
+    box.style.cssText = 'background:var(--panel-bg,#fff);color:var(--text-color,#111);border-radius:12px;max-width:920px;width:100%;max-height:88vh;display:flex;flex-direction:column;padding:16px;gap:10px;box-shadow:0 20px 60px rgba(0,0,0,.35)';
+    var head = document.createElement('div');
+    head.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:8px';
+    var title = document.createElement('strong');
+    title.textContent = name + ' 接入脚本';
+    var close = document.createElement('button');
+    close.className = 'btn sm';
+    close.textContent = '关闭';
+    close.onclick = function () { overlay.remove(); };
+    head.append(title, close);
+    var select = document.createElement('select');
+    select.className = 'input';
+    [['linux', 'Linux'], ['darwin', 'macOS'], ['windows', 'Windows']].forEach(function (item) {
+      var option = document.createElement('option');
+      option.value = item[0];
+      option.textContent = item[1];
+      select.append(option);
+    });
+    var pre = document.createElement('pre');
+    pre.className = 'tunnel-script';
+    pre.style.cssText = 'white-space:pre-wrap;overflow:auto;max-height:55vh;margin:0';
+    pre.textContent = scripts[select.value] || '';
+    select.onchange = function () { pre.textContent = scripts[select.value] || ''; };
+    var copy = document.createElement('button');
+    copy.className = 'btn primary';
+    copy.textContent = '复制脚本';
+    copy.onclick = function () {
+      if (navigator.clipboard) navigator.clipboard.writeText(pre.textContent).then(function () {
+        copy.textContent = '已复制';
+        setTimeout(function () { copy.textContent = '复制脚本'; }, 1500);
+      });
+    };
+    box.append(head, select, pre, copy);
+    overlay.append(box);
+    document.body.append(overlay);
+    overlay.addEventListener('click', function (event) { if (event.target === overlay) overlay.remove(); });
+  }
+
   function tunnelGetToken(id, name) {
     api('/api/clients/' + id + '/enroll-token', { method: 'POST' })
       .then(function (d) {
         tunnelSetMsg(true, name + ' 安装命令：' + (d.install_command || ''));
         if (navigator.clipboard) { navigator.clipboard.writeText(d.install_command).catch(function () {}); }
+        tunnelShowScript(name, d.install_scripts);
         render();
       })
       .catch(function (e) { tunnelSetMsg(false, e.message); render(); });
@@ -1150,6 +1198,9 @@ CROSSDESK_JS = r'''
   state.crossdeskAdminLoaded = false;
   state.crossdeskConnectDevice = '';
   state.crossdeskJoinTicket = '';
+  state.crossdeskScript = '';
+  state.crossdeskScriptOS = 'linux';
+  state.crossdeskScriptBusy = false;
 
   function loadCrossDesk() {
     if (state.crossdeskLoading) return Promise.resolve();
@@ -1161,6 +1212,22 @@ CROSSDESK_JS = r'''
       state.crossdesk = { enabled: false, error: e.message };
       state.crossdeskLoading = false;
     });
+  }
+
+  function crossdeskGenScript() {
+    state.crossdeskScriptBusy = true;
+    render();
+    api('/api/crossdesk/agent-script?os=' + encodeURIComponent(state.crossdeskScriptOS))
+      .then(function (d) {
+        state.crossdeskScriptBusy = false;
+        state.crossdeskScript = (d && d.script) || '';
+        render();
+      })
+      .catch(function (e) {
+        state.crossdeskScriptBusy = false;
+        tunnelSetMsg(false, e.message);
+        render();
+      });
   }
 
   function loadCrossDeskAdmin() {
@@ -1341,6 +1408,25 @@ CROSSDESK_JS = r'''
           class: 'crossdesk-frame', src: web, allow: 'clipboard-read; clipboard-write; microphone; fullscreen',
           allowfullscreen: 'allowfullscreen', referrerpolicy: 'no-referrer'
         }) : null
+      ]),
+      h('div', { class: 'card' }, [
+        h('div', { class: 'card-head' }, [h('h3', {}, ['主机端接入脚本（自动化）'])]),
+        h('div', { class: 'form-row2' }, [
+          h('select', { value: state.crossdeskScriptOS, onchange: function (e) { state.crossdeskScriptOS = e.target.value; } }, [
+            h('option', { value: 'linux' }, ['Linux']),
+            h('option', { value: 'darwin' }, ['macOS']),
+            h('option', { value: 'windows' }, ['Windows'])
+          ]),
+          h('button', { class: 'btn primary', disabled: state.crossdeskScriptBusy ? 'disabled' : null, onclick: crossdeskGenScript }, [state.crossdeskScriptBusy ? '生成中…' : '生成接入脚本']),
+          state.crossdeskScript ? h('button', {
+            class: 'btn', onclick: function () {
+              if (navigator.clipboard) navigator.clipboard.writeText(state.crossdeskScript).then(function () { tunnelSetMsg(true, '接入脚本已复制'); render(); });
+            }
+          }, ['复制脚本']) : null
+        ]),
+        state.crossdeskScript
+          ? h('pre', { class: 'tunnel-script', readonly: 'readonly' }, [state.crossdeskScript])
+          : h('div', { class: 'muted' }, ['脚本包含二进制下载、设备自动注册、systemd/launchd/计划任务与客户端自动升级。'])
       ]),
       (native ? h('div', { class: 'card' }, [
         h('div', { class: 'card-head' }, [

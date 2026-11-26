@@ -3,6 +3,8 @@
 // 后续用 Vue3 构建产物替换本文件与 app.css。
 (function () {
   var app = document.getElementById('app');
+  // 返回顶部按钮：固定在右下角，滚动超过一屏后显示。
+  var backTopBtn = null;
   var THEMES = [
     { value: 'warm', emoji: '🌞', label: '暖沙米' },
     { value: 'cool', emoji: '🌊', label: '冷蓝' },
@@ -106,7 +108,7 @@
   })(), hosts: [], total: 0, q: '', settings: [], components: [], artifacts: [], tasks: [], err: '',
     hostPage: 1, hostSize: 50, hostPages: 1, hostErr: '', hostsLoading: false, editingHost: null,
     agentTargetVersion: '', agentAutoUpdate: false, agentStats: null,
-    agentStatsAt: 0, agentStatsSig: '', agentUpdateActive: false,
+    agentStatsAt: 0, agentStatsSig: '', agentUpdateActive: false, agentStatsErr: '',
     // AI 接入
     ai: null, aiErr: '', aiTokens: [], aiTokensTotal: 0, aiTokenErr: '', aiTokenCreated: null, aiTokenForm: null, aiTokenMine: true,
     aiSnippets: null, aiSnippetsBusy: false, aiSnippetsErr: '', aiSnippetClient: '', aiSnippetOS: '', aiSnippetArch: '', aiGen: null,
@@ -116,6 +118,8 @@
     artifactPages: 1, artifactTotal: 0,
     guideOpen: null, guideOS: '', quickstart: undefined, quickstartErr: '', enroll: null,
     enrollMode: 'one_time', automationList: null, automationErr: '', automationLoading: false, automationCreated: null,
+    installScripts: null, installScriptsTried: false, installScriptBusy: false, installScriptErr: '',
+    automationOS: 'linux', automationArches: ['amd64'],
     preview: null, editingComp: null, taskForm: null, uploadComponent: '',
     hostImport: null, hostBatchEdit: null,
     tunnelTest: null,
@@ -146,7 +150,7 @@
     orgSelTeam: null, orgTeamMembers: null, orgTeamPerms: null, orgNewField: null,
     flyiamUsers: null, flyiamQuery: '', flyiamErr: '', hostGroupOptions: [],
     hostFacets: null, hostListFacets: null,
-    hostFilter: { app_code: '', os_family: '', account: '', agent_status: '' },
+    hostFilter: { app_code: [], biz_group: [], os_family: [], account: [], agent_status: [], upgrade_status: [] },
     extbinDraft: null, extbinHosts: null, extbinTTL: null,
     extbinAllowPrivate: null, extbinCIDRs: null, extbinQuery: '', extbinPage: 1,
     orgUserQ: '', orgUserForm: null, orgRoleForm: null, orgGroupForm: null,
@@ -697,6 +701,7 @@
           var cmd = (d && d.install_command) || '';
           tunnelSetMsg(true, '客户端已创建' + (cmd ? '，安装命令已复制' : ''));
           if (cmd && navigator.clipboard) { navigator.clipboard.writeText(cmd).catch(function () {}); }
+          tunnelShowScript((d && d.client && d.client.name) || name.value.trim(), d && d.install_scripts);
         });
       },
       after: function () { tunnelLoadAll().then(render); }
@@ -1164,11 +1169,58 @@
     ]);
   }
 
+  function tunnelShowScript(name, scripts) {
+    if (!scripts) return;
+    var old = document.getElementById('iflygo-install-script-modal');
+    if (old) old.remove();
+    var overlay = document.createElement('div');
+    overlay.id = 'iflygo-install-script-modal';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:24px';
+    var box = document.createElement('div');
+    box.style.cssText = 'background:var(--panel-bg,#fff);color:var(--text-color,#111);border-radius:12px;max-width:920px;width:100%;max-height:88vh;display:flex;flex-direction:column;padding:16px;gap:10px;box-shadow:0 20px 60px rgba(0,0,0,.35)';
+    var head = document.createElement('div');
+    head.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:8px';
+    var title = document.createElement('strong');
+    title.textContent = name + ' 接入脚本';
+    var close = document.createElement('button');
+    close.className = 'btn sm';
+    close.textContent = '关闭';
+    close.onclick = function () { overlay.remove(); };
+    head.append(title, close);
+    var select = document.createElement('select');
+    select.className = 'input';
+    [['linux', 'Linux'], ['darwin', 'macOS'], ['windows', 'Windows']].forEach(function (item) {
+      var option = document.createElement('option');
+      option.value = item[0];
+      option.textContent = item[1];
+      select.append(option);
+    });
+    var pre = document.createElement('pre');
+    pre.className = 'tunnel-script';
+    pre.style.cssText = 'white-space:pre-wrap;overflow:auto;max-height:55vh;margin:0';
+    pre.textContent = scripts[select.value] || '';
+    select.onchange = function () { pre.textContent = scripts[select.value] || ''; };
+    var copy = document.createElement('button');
+    copy.className = 'btn primary';
+    copy.textContent = '复制脚本';
+    copy.onclick = function () {
+      if (navigator.clipboard) navigator.clipboard.writeText(pre.textContent).then(function () {
+        copy.textContent = '已复制';
+        setTimeout(function () { copy.textContent = '复制脚本'; }, 1500);
+      });
+    };
+    box.append(head, select, pre, copy);
+    overlay.append(box);
+    document.body.append(overlay);
+    overlay.addEventListener('click', function (event) { if (event.target === overlay) overlay.remove(); });
+  }
+
   function tunnelGetToken(id, name) {
     api('/api/clients/' + id + '/enroll-token', { method: 'POST' })
       .then(function (d) {
         tunnelSetMsg(true, name + ' 安装命令：' + (d.install_command || ''));
         if (navigator.clipboard) { navigator.clipboard.writeText(d.install_command).catch(function () {}); }
+        tunnelShowScript(name, d.install_scripts);
         render();
       })
       .catch(function (e) { tunnelSetMsg(false, e.message); render(); });
@@ -1617,6 +1669,9 @@
   state.crossdeskAdminLoaded = false;
   state.crossdeskConnectDevice = '';
   state.crossdeskJoinTicket = '';
+  state.crossdeskScript = '';
+  state.crossdeskScriptOS = 'linux';
+  state.crossdeskScriptBusy = false;
 
   function loadCrossDesk() {
     if (state.crossdeskLoading) return Promise.resolve();
@@ -1628,6 +1683,22 @@
       state.crossdesk = { enabled: false, error: e.message };
       state.crossdeskLoading = false;
     });
+  }
+
+  function crossdeskGenScript() {
+    state.crossdeskScriptBusy = true;
+    render();
+    api('/api/crossdesk/agent-script?os=' + encodeURIComponent(state.crossdeskScriptOS))
+      .then(function (d) {
+        state.crossdeskScriptBusy = false;
+        state.crossdeskScript = (d && d.script) || '';
+        render();
+      })
+      .catch(function (e) {
+        state.crossdeskScriptBusy = false;
+        tunnelSetMsg(false, e.message);
+        render();
+      });
   }
 
   function loadCrossDeskAdmin() {
@@ -1809,6 +1880,25 @@
           allowfullscreen: 'allowfullscreen', referrerpolicy: 'no-referrer'
         }) : null
       ]),
+      h('div', { class: 'card' }, [
+        h('div', { class: 'card-head' }, [h('h3', {}, ['主机端接入脚本（自动化）'])]),
+        h('div', { class: 'form-row2' }, [
+          h('select', { value: state.crossdeskScriptOS, onchange: function (e) { state.crossdeskScriptOS = e.target.value; } }, [
+            h('option', { value: 'linux' }, ['Linux']),
+            h('option', { value: 'darwin' }, ['macOS']),
+            h('option', { value: 'windows' }, ['Windows'])
+          ]),
+          h('button', { class: 'btn primary', disabled: state.crossdeskScriptBusy ? 'disabled' : null, onclick: crossdeskGenScript }, [state.crossdeskScriptBusy ? '生成中…' : '生成接入脚本']),
+          state.crossdeskScript ? h('button', {
+            class: 'btn', onclick: function () {
+              if (navigator.clipboard) navigator.clipboard.writeText(state.crossdeskScript).then(function () { tunnelSetMsg(true, '接入脚本已复制'); render(); });
+            }
+          }, ['复制脚本']) : null
+        ]),
+        state.crossdeskScript
+          ? h('pre', { class: 'tunnel-script', readonly: 'readonly' }, [state.crossdeskScript])
+          : h('div', { class: 'muted' }, ['脚本包含二进制下载、设备自动注册、systemd/launchd/计划任务与客户端自动升级。'])
+      ]),
       (native ? h('div', { class: 'card' }, [
         h('div', { class: 'card-head' }, [
           h('h3', {}, ['原生信令设备与会话']),
@@ -1965,6 +2055,17 @@
   };
 
 
+  // appendChildren 递归挂载子节点：容忍单个字符串/节点，也展开 arr.map(...) 产生的嵌套数组。
+  function appendChildren(node, list) {
+    if (list == null) return;
+    if (!Array.isArray(list)) list = [list];
+    list.forEach(function (c) {
+      if (c == null) return;
+      if (Array.isArray(c)) { appendChildren(node, c); return; }
+      node.appendChild(typeof c === 'string' || typeof c === 'number' ? document.createTextNode(String(c)) : c);
+    });
+  }
+
   function h(tag, attrs, children) {
     var el = document.createElement(tag);
     attrs = attrs || {};
@@ -1977,13 +2078,7 @@
       else if (k === 'checked') el.checked = !!v;
       else el.setAttribute(k, v);
     }
-    // 容忍调用方把单个字符串/节点直接作为 children 传入，避免整页渲染崩溃。
-    if (children == null) children = [];
-    else if (!Array.isArray(children)) children = [children];
-    children.forEach(function (c) {
-      if (c == null) return;
-      el.appendChild(typeof c === 'string' || typeof c === 'number' ? document.createTextNode(String(c)) : c);
-    });
+    appendChildren(el, children);
     // select 的 value 需要在 option 挂载后设置才会生效
     if (val !== undefined) el.value = val;
     return el;
@@ -2002,7 +2097,7 @@
   function hint(text) { return h('div', { class: 'hint' }, [text]); }
 
   // 任务创建表单草稿：按登录用户保存在 localStorage，刷新页面后恢复
-  // （含主机筛选已选值、单选/多选模式以及命令脚本等输入）。
+  // （含主机筛选已选值以及命令脚本等输入）。
   var TASK_DRAFT_KEY = 'upgrade_mgr_task_draft_v1';
   function taskDraftKey() {
     var u = state.user && (state.user.Username || state.user.username);
@@ -2773,7 +2868,11 @@
   //   2. 用子进程 powershell.exe -File 执行，确保语法错误/脚本失败能拿到非 0 退出码，
   //      不会被外层 `exit $LASTEXITCODE` 吞成成功。
   function windowsInstallScript(action) {
-    var args = action === 'uninstall' ? ' uninstall -Yes' : ' ' + action;
+    // 与 Linux 的 /opt/monitor/exporter 对齐：Windows 二进制统一安装到 C:\monitor\exporter。
+    var winInstallDir = 'C:\\monitor\\exporter';
+    var args = action === 'uninstall'
+      ? ' uninstall -Yes -InstallDir "' + winInstallDir + '"'
+      : ' ' + action + ' -InstallDir "' + winInstallDir + '"';
     // 控制台地址兜底：老 Agent 可能没有注入平台地址变量。
     var consoleBase = '';
     try {
@@ -3056,17 +3155,17 @@
     {
       key: 'windows_exporter_script',
       label: 'windows_exporter_script（Windows 脚本安装）',
-      desc: 'Windows 专用示例：script_url 指向平台 /api/external/binary（自动代理外网或返回本地上传文件）。Agent 在 Windows 主机上默认用 powershell.exe -NoProfile -ExecutionPolicy Bypass -File 执行，脚本按系统版本自动选择 exe：Windows 10/Server 2016+ 用 latest，Windows 7/Server 2008 R2~2012 R2 用 legacy（v0.23.1 + Go 1.20，默认启用 hardware_info），注册 Windows 服务 windows_exporter、创建防火墙规则并写入默认配置。适合 Windows Server 2008 R2 ~ Windows 11；需要 PowerShell 2.0+（系统自带）。',
+      desc: 'Windows 专用示例：script_url 指向平台 /api/external/binary（自动代理外网或返回本地上传文件）。Agent 在 Windows 主机上默认用 powershell.exe -NoProfile -ExecutionPolicy Bypass -File 执行，脚本按系统版本自动选择 exe：Windows 10/Server 2016+ 用 latest，Windows 7/Server 2008 R2~2012 R2 用 legacy（v0.23.1 + Go 1.20，默认启用 hardware_info），安装到 C:\\monitor\\exporter（与 Linux 的 /opt/monitor/exporter 对齐）、注册 Windows 服务 windows_exporter、创建防火墙规则并写入默认配置。适合 Windows Server 2008 R2 ~ Windows 11；需要 PowerShell 2.0+（系统自带）。',
       comp: {
         name: 'windows_exporter_script', display_name: 'Windows Exporter（Win 脚本安装）', deploy_mode: 'script',
         binary_name: 'windows_exporter',
-        install_path: 'C:\\Program Files\\windows_exporter',
+        install_path: 'C:\\monitor\\exporter',
         service_name: 'windows_exporter', service_mgr: 'auto', enabled: true,
         script_url: WINDOWS_INSTALL_SCRIPT_PLATFORM_URL,
-        exec_args: ['install'],
+        exec_args: ['install', '-InstallDir', 'C:\\monitor\\exporter'],
         exec_timeout: '15m',
         health_cmd: [['powershell.exe', '-NoProfile', '-Command', "if ((Get-Service windows_exporter -ErrorAction Stop).Status -ne 'Running') { exit 1 }"]],
-        version_cmd: [['powershell.exe', '-NoProfile', '-Command', "& 'C:\\Program Files\\windows_exporter\\windows_exporter.exe' --version"]]
+        version_cmd: [['powershell.exe', '-NoProfile', '-Command', "& 'C:\\monitor\\exporter\\windows_exporter.exe' --version"]]
       }
     },
     {
@@ -3076,26 +3175,26 @@
       comp: {
         name: 'windows_exporter_script_update', display_name: 'Windows Exporter（Win 脚本更新）', deploy_mode: 'script',
         binary_name: 'windows_exporter',
-        install_path: 'C:\\Program Files\\windows_exporter',
+        install_path: 'C:\\monitor\\exporter',
         service_name: 'windows_exporter', service_mgr: 'auto', enabled: true,
         script_url: WINDOWS_INSTALL_SCRIPT_PLATFORM_URL,
-        exec_args: ['update'],
+        exec_args: ['update', '-InstallDir', 'C:\\monitor\\exporter'],
         exec_timeout: '15m',
         health_cmd: [['powershell.exe', '-NoProfile', '-Command', "if ((Get-Service windows_exporter -ErrorAction Stop).Status -ne 'Running') { exit 1 }"]],
-        version_cmd: [['powershell.exe', '-NoProfile', '-Command', "& 'C:\\Program Files\\windows_exporter\\windows_exporter.exe' --version"]]
+        version_cmd: [['powershell.exe', '-NoProfile', '-Command', "& 'C:\\monitor\\exporter\\windows_exporter.exe' --version"]]
       }
     },
     {
       key: 'windows_exporter_script_uninstall',
       label: 'windows_exporter_script_uninstall（Win 脚本卸载，非交互）',
-      desc: 'exec_args 为 uninstall -Yes（-Yes 跳过交互确认，非交互场景必需）。脚本停止并删除 Windows 服务 windows_exporter、防火墙规则与安装目录。service_name 填 windows_exporter 与安装/更新对齐，Agent（uninstall_detect 能力）识别卸载动作后跳过启服，避免 sc delete 延迟导致 ERROR_SERVICE_MARKED_FOR_DELETE。旧 Agent 会被服务端自动剥离 service_name。不填 health_cmd / version_cmd 避免卸载后健康检查失败。',
+      desc: 'exec_args 为 uninstall -Yes -InstallDir C:\\monitor\\exporter（-Yes 跳过交互确认，非交互场景必需）。脚本停止并删除 Windows 服务 windows_exporter、防火墙规则、安装目录，并强制清理注册表项 HKLM\\SYSTEM\\CurrentControlSet\\Services\\windows_exporter。service_name 填 windows_exporter 与安装/更新对齐，Agent（uninstall_detect 能力）识别卸载动作后跳过启服，避免 sc delete 延迟导致 ERROR_SERVICE_MARKED_FOR_DELETE。旧 Agent 会被服务端自动剥离 service_name。不填 health_cmd / version_cmd 避免卸载后健康检查失败。',
       comp: {
         name: 'windows_exporter_script_uninstall', display_name: 'Windows Exporter（Win 脚本卸载）', deploy_mode: 'script',
         binary_name: 'windows_exporter',
-        install_path: 'C:\\Program Files\\windows_exporter',
+        install_path: 'C:\\monitor\\exporter',
         service_name: 'windows_exporter', service_mgr: 'auto', enabled: true,
         script_url: WINDOWS_INSTALL_SCRIPT_PLATFORM_URL,
-        exec_args: ['uninstall', '-Yes'],
+        exec_args: ['uninstall', '-Yes', '-InstallDir', 'C:\\monitor\\exporter'],
         exec_timeout: '15m'
       }
     },
@@ -3242,10 +3341,24 @@
       raw.slice(idx + 1).split('&').forEach(function (kv) {
         if (!kv) return;
         var p = kv.split('=');
-        try { params[decodeURIComponent(p[0])] = decodeURIComponent((p[1] || '').replace(/\+/g, ' ')); } catch (e) {}
+        try {
+          var k = decodeURIComponent(p[0]);
+          var v = decodeURIComponent((p[1] || '').replace(/\+/g, ' '));
+          // 多选筛选用重复参数（app_code=A&app_code=B）：同一 key 聚合成数组。
+          if (params[k] === undefined) params[k] = v;
+          else if (Object.prototype.toString.call(params[k]) === '[object Array]') params[k].push(v);
+          else params[k] = [params[k], v];
+        } catch (e) {}
       });
     }
     return { view: view, params: params };
+  }
+
+  // asList 把筛选值统一成非空数组：兼容 URL 单值与多值。
+  function asList(v) {
+    var arr = Object.prototype.toString.call(v) === '[object Array]' ? v : [v];
+    return arr.map(function (x) { return String(x == null ? '' : x).trim(); })
+      .filter(function (x) { return x !== ''; });
   }
 
   function applyHashToState(r) {
@@ -3254,8 +3367,9 @@
     if (r.view === 'hosts') {
       state.q = p.q || '';
       state.hostFilter = {
-        app_code: p.app_code || '', os_family: p.os_family || '',
-        account: p.account || '', agent_status: p.agent_status || ''
+        app_code: asList(p.app_code), biz_group: asList(p.biz_group),
+        os_family: asList(p.os_family), account: asList(p.account),
+        agent_status: asList(p.agent_status), upgrade_status: asList(p.upgrade_status)
       };
       state.hostPage = n('page', 1);
     } else if (r.view === 'components') {
@@ -3289,8 +3403,13 @@
     var add = function (k, v) { if (v !== '' && v != null) qs.push(k + '=' + encodeURIComponent(v)); };
     if (state.view === 'hosts') {
       var hf = state.hostFilter || {};
-      add('q', state.q); add('app_code', hf.app_code); add('os_family', hf.os_family);
-      add('account', hf.account); add('agent_status', hf.agent_status);
+      var addAll = function (k, list) {
+        asList(list).forEach(function (v) { qs.push(k + '=' + encodeURIComponent(v)); });
+      };
+      add('q', state.q);
+      addAll('app_code', hf.app_code); addAll('biz_group', hf.biz_group);
+      addAll('os_family', hf.os_family); addAll('account', hf.account);
+      addAll('agent_status', hf.agent_status); addAll('upgrade_status', hf.upgrade_status);
       add('page', state.hostPage > 1 ? state.hostPage : '');
     } else if (state.view === 'components') {
       add('q', state.compQ); add('page', state.compPage > 1 ? state.compPage : '');
@@ -3443,6 +3562,195 @@
     return parts.join(' / ') || '-';
   }
 
+  // tagFilter 可搜索的多选标签筛选框（主机页与任务页共用）。
+  //
+  // opts:
+  //   label        标题/占位文案
+  //   candidates   初始候选值 [[value,label]|string]
+  //   initial      已选值数组
+  //   remoteField  非空时输入关键字请求 facets（app_code 等大候选值场景）
+  //   onChange(vals) 值变化（不重建页面，供表单实时保存）
+  //   onCommit(vals) 回车/失焦/移除标签时提交（主机页用来触发列表刷新）
+  // 返回 { el, getValues() }；getValues 会补交输入框中尚未回车的值。
+  function tagFilter(opts) {
+    opts = opts || {};
+    var label = opts.label || '筛选';
+    var values = asList(opts.initial).slice();
+    var local = opts.candidates || [];
+    var lastRaw = local;
+    var dirty = false;
+    var focused = false;
+
+    var tagsEl = h('div', { class: 'tag-filter-values' });
+    var input = h('input', {
+      class: 'tag-filter-input', autocomplete: 'off',
+      placeholder: label + '：全部', 'aria-label': '按 ' + label + ' 筛选'
+    });
+    var menu = h('div', { class: 'combo-menu', hidden: 'hidden' });
+    var box = h('div', { class: 'tag-filter-box' }, [tagsEl, input, menu]);
+    var wrap = h('div', { class: 'tag-filter', 'data-key': opts.key || null }, [
+      h('div', { class: 'tag-filter-head' }, [
+        h('span', { class: 'tag-filter-label' }, [label])
+      ]),
+      box
+    ]);
+    var timer = null, seq = 0;
+
+    function notify() {
+      if (typeof opts.onChange === 'function') opts.onChange(values.slice());
+    }
+    function commit() {
+      dirty = false;
+      if (typeof opts.onCommit === 'function') opts.onCommit(values.slice());
+    }
+    function renderTags() {
+      tagsEl.textContent = '';
+      values.forEach(function (v, i) {
+        tagsEl.appendChild(h('span', { class: 'tag' }, [
+          h('span', { class: 'tag-label', title: v }, [v]),
+          h('button', {
+            class: 'tag-x', type: 'button', title: '移除', 'aria-label': '移除 ' + v,
+            // preventDefault 避免先触发输入框 blur 导致整体重绘、点击丢失。
+            onmousedown: function (ev) { ev.preventDefault(); },
+            onclick: function () {
+              values.splice(i, 1);
+              renderTags();
+              notify();
+              commit();
+            }
+          }, ['×'])
+        ]));
+      });
+      input.placeholder = values.length ? '继续添加…' : (label + '：全部');
+    }
+    function norm(list) {
+      return (list || []).map(function (o) {
+        if (Object.prototype.toString.call(o) === '[object Array]') {
+          return { v: String(o[0]), t: String(o[1]) };
+        }
+        return { v: String(o), t: String(o) };
+      });
+    }
+    function optNode(value, text) {
+      var on = value ? values.indexOf(value) >= 0 : values.length === 0;
+      return h('div', {
+        class: 'combo-opt' + (on ? ' active' : ''),
+        'data-value': value
+      }, [(value && on ? '✓ ' : '') + text]);
+    }
+    function show(list) {
+      lastRaw = list || [];
+      // 失焦后远程搜索结果到达时不要重新弹开菜单。
+      if (!focused) { menu.hidden = true; return; }
+      var nodes = norm(lastRaw);
+      menu.innerHTML = '';
+      menu.appendChild(optNode('', label + '：全部'));
+      nodes.forEach(function (o) { menu.appendChild(optNode(o.v, o.t)); });
+      if (!nodes.length) {
+        menu.appendChild(h('div', { class: 'combo-empty' }, ['无匹配项，输入完整值后回车']));
+      }
+      menu.hidden = false;
+    }
+    function close() { menu.hidden = true; }
+    function filterLocal(kw) {
+      kw = String(kw || '').trim().toLowerCase();
+      if (!kw) return local;
+      return local.filter(function (o) {
+        var v = Object.prototype.toString.call(o) === '[object Array]' ? o : [o, o];
+        return String(v[0]).toLowerCase().indexOf(kw) >= 0 ||
+          String(v[1]).toLowerCase().indexOf(kw) >= 0;
+      }).slice(0, 300);
+    }
+    function pick(v) {
+      if (!v) {
+        values = [];
+      } else {
+        var idx = values.indexOf(v);
+        if (idx >= 0) values.splice(idx, 1);
+        else values.push(v);
+      }
+      dirty = true;
+      renderTags();
+      show(lastRaw);
+      notify();
+    }
+    function addTyped(raw) {
+      raw = String(raw || '');
+      // 命中候选时整体作为一个值（业务组可能含空格）；否则只按逗号拆分。
+      var hit = norm(local).concat(norm(lastRaw)).some(function (o) { return o.v === raw; });
+      var parts = raw && hit ? [raw] : raw.split(/[,，]+/);
+      parts.forEach(function (v) {
+        v = v.trim();
+        if (v && values.indexOf(v) < 0) values.push(v);
+      });
+      input.value = '';
+      if (parts.some(function (v) { return v.trim(); })) dirty = true;
+      renderTags();
+      show(lastRaw);
+      notify();
+    }
+    function remoteSearch(kw) {
+      var my = ++seq;
+      api('/api/hosts/facets?fields=' + encodeURIComponent(opts.remoteField) +
+          '&q=' + encodeURIComponent(kw) + '&limit=200')
+        .then(function (d) {
+          if (my !== seq) return;
+          show((((d || {}).values) || {})[opts.remoteField] || []);
+        })
+        .catch(function () {});
+    }
+    input.onfocus = function () {
+      focused = true;
+      show(opts.remoteField ? lastRaw : filterLocal(input.value));
+    };
+    input.oninput = function () {
+      if (!opts.remoteField) { show(filterLocal(input.value)); return; }
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(function () { remoteSearch(input.value.trim()); }, 250);
+    };
+    input.onkeydown = function (ev) {
+      if (ev.key === 'Escape') {
+        values = asList(opts.initial).slice();
+        dirty = false;
+        renderTags();
+        close();
+        input.blur();
+        return;
+      }
+      if (ev.key !== 'Enter') return;
+      ev.preventDefault();
+      var typed = String(input.value || '').trim();
+      if (typed) addTyped(typed);
+      commit();
+    };
+    input.onblur = function () {
+      focused = false;
+      setTimeout(function () {
+        close();
+        if (dirty) commit();
+      }, 150);
+    };
+    menu.onmousedown = function (ev) {
+      ev.preventDefault();
+      var t = ev.target;
+      while (t && t !== menu) {
+        if (t.getAttribute && t.getAttribute('data-value') !== null) {
+          return pick(t.getAttribute('data-value'));
+        }
+        t = t.parentNode;
+      }
+    };
+    renderTags();
+    return {
+      el: wrap,
+      getValues: function () {
+        var typed = String(input.value || '').trim();
+        if (typed) addTyped(typed);
+        return values.slice();
+      }
+    };
+  }
+
   function hostsView() {
     var qEl;
     var doSearch = function () {
@@ -3453,29 +3761,12 @@
     // 下拉筛选：选项来自 /api/hosts/facets?fields=...（租户内去重值），只加载一次。
     if (state.hostListFacets === null) {
       state.hostListFacets = { values: {} };
-      api('/api/hosts/facets?fields=app_code,os_family,os_type,account')
+      api('/api/hosts/facets?fields=app_code,biz_group,os_family,os_type,account&limit=300')
         .then(function (d) { state.hostListFacets = d || { values: {} }; render(); })
         .catch(function () {});
     }
     var hf = state.hostFilter || (state.hostFilter = {});
     var facetVals = (state.hostListFacets && state.hostListFacets.values) || {};
-    function filterSelect(key, label, options) {
-      var cur = hf[key] || '';
-      // 当前值不在候选里（如从 URL 带入）时也保留，避免下拉显示与实际筛选不一致。
-      if (cur && !options.some(function (o) { return o[0] === cur; })) options = options.concat([[cur, cur]]);
-      var el = h('select', {
-        'aria-label': '按 ' + label + ' 筛选',
-        onchange: function () {
-          hf[key] = el.value;
-          state.hostPage = 1;
-          loadHosts();
-        }
-      }, [h('option', { value: '' }, [label + '：全部'])].concat(options.map(function (o) {
-        return h('option', { value: o[0] }, [o[1]]);
-      })));
-      el.value = cur;
-      return h('label', { class: 'muted' }, [el]);
-    }
     function facetOptions(key) {
       return (facetVals[key] || []).map(function (v) { return [v, v]; });
     }
@@ -3494,19 +3785,20 @@
     }
     var statusOptions = ['online', 'offline', 'upgrading', 'restarting', 'crash_loop', 'unknown']
       .map(function (s) { return [s, agentStatusText(s)]; });
+    var upgradeStatusOptions = [
+      ['success', '升级成功'],
+      ['failed', '升级失败'],
+      ['none', '未升级']
+    ];
     var clearAll = function () {
       state.q = '';
-      state.hostFilter = { app_code: '', os_family: '', account: '', agent_status: '' };
+      state.hostFilter = { app_code: [], biz_group: [], os_family: [], account: [], agent_status: [], upgrade_status: [] };
       state.hostPage = 1;
       loadHosts();
     };
     var toolbar = h('div', { class: 'toolbar' }, [
-      (qEl = h('input', { value: state.q, placeholder: 'IP/出口 IP/隧道地址/主机名/业务组', 'aria-label': '搜索主机' }, [])),
+      (qEl = h('input', { value: state.q, placeholder: 'IP/出口 IP/隧道地址/主机名/app_code/账号/业务组', 'aria-label': '搜索主机' }, [])),
       h('button', { class: 'btn', onclick: doSearch }, ['搜索']),
-      filterSelect('agent_status', 'Agent 状态', statusOptions),
-      filterSelect('app_code', 'app_code', facetOptions('app_code')),
-      filterSelect('os_family', 'OS', osFacetOptions()),
-      filterSelect('account', '账号', facetOptions('account')),
       hostFilterActive() ? h('button', { class: 'btn ghost', onclick: clearAll }, ['清除筛选']) : null,
       isAdmin() ? h('button', { class: 'btn', onclick: openCreateHost }, ['新增主机']) : null,
       isAdmin() ? h('a', {
@@ -3528,6 +3820,30 @@
       h('span', { class: 'muted auto-refresh-tip' }, ['● 自动刷新中'])
     ]);
     qEl.onkeydown = function (ev) { if (ev.key === 'Enter') doSearch(); };
+    // 筛选标签框单独一行：支持输入搜索与多选，选择即生效。
+    function hostFilterTag(key, label, options, remoteField) {
+      return tagFilter({
+        key: key,
+        label: label,
+        candidates: options,
+        initial: hf[key],
+        remoteField: remoteField,
+        onChange: function (vals) { hf[key] = vals; },
+        onCommit: function (vals) {
+          hf[key] = vals;
+          state.hostPage = 1;
+          loadHosts();
+        }
+      }).el;
+    }
+    var filterBar = h('div', { class: 'toolbar filter-bar' }, [
+      hostFilterTag('agent_status', 'Agent 状态', statusOptions),
+      hostFilterTag('upgrade_status', '升级状态', upgradeStatusOptions),
+      hostFilterTag('app_code', 'app_code', facetOptions('app_code'), 'app_code'),
+      hostFilterTag('biz_group', '业务组', facetOptions('biz_group'), 'biz_group'),
+      hostFilterTag('os_family', 'OS', osFacetOptions()),
+      hostFilterTag('account', '账号', facetOptions('account'), 'account')
+    ]);
 
     var listHostDefs = (state.hostFieldDefs || [])
       .filter(function (d) { return d.showInList; })
@@ -3560,6 +3876,7 @@
         h('td', {}, [
           h('span', { class: 'tag' }, [agentStatusText(x.agent_status)]),
           agentBuildLine(x),
+          x.agent_id && !x.agent_update_status ? h('div', { class: 'muted' }, ['自升级：未升级']) : null,
           x.agent_update_status ? h('div', { class: 'muted' }, [
             '自升级：' + cmdStatusText(x.agent_update_status) +
             (x.agent_update_stage ? ' / ' + stageText(x.agent_update_stage) : '') +
@@ -3616,6 +3933,7 @@
         : null,
       h('div', { class: 'card' }, [
         toolbar,
+        filterBar,
         hostSel && (state.hosts.length || hostSel.progress) ? hostSel.bar : null,
         hostSel ? hostSel.progress : null,
         (function () {
@@ -3854,23 +4172,76 @@
     return mask;
   }
 
+  var agentStatsReqSeq = 0;
+  // loadAgentStats 拉取 Agent 版本分布。
+  //
+  // 与主机列表共用同一轮自动刷新：每次 loadHosts 都会调用（空闲 15 秒、
+  // 有升级动作 4 秒），这里只按数据指纹去重，避免数据没变时重建 DOM。
   function loadAgentStats() {
-    state.agentStatsAt = Date.now();
+    var seq = ++agentStatsReqSeq;
     return api('/api/agents/stats')
       .then(function (d) {
-        // 自动刷新时版本分布通常不变，避免每次轮询都重建 DOM。
+        // 只接受最后一次请求，避免慢响应覆盖新结果。
+        if (seq !== agentStatsReqSeq) return;
+        state.agentStatsAt = Date.now();
+        state.agentStatsErr = '';
+        // 数据没变时不重建 DOM，只就地更新“最近更新时间”文字。
+        refreshAgentStatsTip();
         var sig = JSON.stringify(d || null);
         if (sig === state.agentStatsSig) return;
         state.agentStatsSig = sig;
         state.agentStats = d;
-        render();
+        if (state.view === 'hosts') render();
       })
-      .catch(function () { state.agentStats = null; });
+      .catch(function (e) {
+        if (seq !== agentStatsReqSeq) return;
+        // 保留上一次成功的数据：轮询偶发失败不应该把卡片清空。
+        var msg = '加载版本分布失败: ' + e.message;
+        if (msg === state.agentStatsErr) return;
+        state.agentStatsErr = msg;
+        if (state.view === 'hosts') render();
+      });
+  }
+
+  // agentStatsTipText 版本分布卡片的自动刷新提示（含最近成功更新时间）。
+  function agentStatsTipText() {
+    var text = '● 自动刷新中' +
+      (state.agentStatsAt ? ' · ' + fmtTime(state.agentStatsAt).slice(11) : '');
+    // 数据未变化时就地更新提示时不会走 applyI18n，这里主动翻译。
+    return translateText(text) || text;
+  }
+
+  // refreshAgentStatsTip 数据未变化时只更新提示文字，不重建整个列表。
+  function refreshAgentStatsTip() {
+    var el = document.getElementById('agent-stats-tip');
+    if (el) el.textContent = agentStatsTipText();
   }
 
   function agentStatsCard() {
     var st = state.agentStats;
-    if (!st || !st.total) return null;
+    var head = h('div', { class: 'card-head' }, [
+      h('h3', {}, ['Agent 版本分布']),
+      h('div', { class: 'card-head-actions' }, [
+        h('span', {
+          class: 'muted auto-refresh-tip', id: 'agent-stats-tip'
+        }, [agentStatsTipText()]),
+        // 除自动刷新外保留手动刷新，便于升级后立即核对最新分布。
+        h('button', {
+          type: 'button', class: 'btn ghost small',
+          title: '立即刷新版本分布', onclick: function () { loadAgentStats(); }
+        }, ['刷新'])
+      ])
+    ]);
+    if (!st || !st.total) {
+      // 首次加载失败时给出提示；没有 Agent 时保持空白，不占用页面空间。
+      if (state.agentStatsErr) {
+        return h('div', { class: 'card' }, [
+          head,
+          h('div', { class: 'err', role: 'alert' }, [state.agentStatsErr])
+        ]);
+      }
+      return null;
+    }
     var rows = (st.list || []).map(function (x) {
       return [
         x.version || '未知',
@@ -3878,8 +4249,12 @@
         x.arch || '-',
         x.count || 0,
         x.offline || 0,
+        // 旧版本数量会随 Agent 逐个升级而变化（3 -> 2 -> 1 -> 最新），
+        // 让「状态」列在整组升级完成前也能看出自动刷新效果。
         x.outdated
-          ? h('span', { class: 'tag status-failed' }, ['旧版本'])
+          ? h('span', { class: 'tag status-failed' }, [
+            '旧版本' + (x.outdated_count ? ' ' + x.outdated_count : '')
+          ])
           : h('span', { class: 'tag status-success' }, ['最新'])
       ];
     });
@@ -3887,10 +4262,14 @@
       ? '（离线按 agent 状态或心跳超过 ' + st.offline_after + ' 统计）'
       : '（离线按 agent 状态或心跳超时统计）';
     return h('div', { class: 'card' }, [
-      h('h3', {}, ['Agent 版本分布']),
+      head,
       hint('目标版本：' + (st.target_version || '-') +
-        '；离线 ' + (st.offline || 0) + ' 台；旧版本 ' + (st.outdated || 0) +
+        '；在线 ' + (st.online || 0) + ' 台；离线 ' + (st.offline || 0) +
+        ' 台；旧版本 ' + (st.outdated || 0) +
         ' 台' + offlineNote + '。'),
+      state.agentStatsErr
+        ? h('div', { class: 'err', role: 'alert' }, [state.agentStatsErr + '（显示上次数据）'])
+        : null,
       simpleTable(['版本', 'OS', '架构', '数量', '离线', '状态'], st.list || [],
         function (x, i) { return rows[i]; })
     ]);
@@ -4320,10 +4699,36 @@
     ]
   };
 
-  function archOptions(osName) {
-    return (AGENT_ARCHES[osName] || AGENT_ARCHES.linux).map(function (a) {
-      return h('option', { value: a[0] }, [a[1]]);
-    });
+  // archPicker 多选架构：返回可重建的复选框组，切换 OS 时自动裁剪非法架构。
+  // 一次性令牌会为每个架构分别生成独立令牌；自动化令牌复用同一个令牌。
+  function archPicker(osName, selected, onChange) {
+    var box = h('div', { class: 'check-group' }, []);
+    var current = (selected || []).slice();
+    function render(os) {
+      box.textContent = '';
+      var options = AGENT_ARCHES[os] || AGENT_ARCHES.linux;
+      var allowed = options.map(function (a) { return a[0]; });
+      current = current.filter(function (a) { return allowed.indexOf(a) >= 0; });
+      if (!current.length) current = [allowed[0] || 'amd64'];
+      options.forEach(function (a) {
+        var cb = h('input', { type: 'checkbox', checked: current.indexOf(a[0]) >= 0 }, []);
+        cb.onchange = function () {
+          if (cb.checked) {
+            if (current.indexOf(a[0]) < 0) current.push(a[0]);
+          } else {
+            current = current.filter(function (x) { return x !== a[0]; });
+          }
+          if (typeof onChange === 'function') onChange(current.slice());
+        };
+        box.appendChild(h('label', { class: 'check check-row' }, [cb, h('span', {}, [a[1]])]));
+      });
+    }
+    render(osName);
+    return {
+      el: box,
+      setOS: function (os) { render(os); },
+      values: function () { return current.slice(); }
+    };
   }
 
   // enrollCard 包含两种接入令牌：
@@ -4337,8 +4742,65 @@
         enrollModeTab('one_time', '一次性令牌'),
         enrollModeTab('automation', '自动化令牌')
       ]),
-      mode === 'automation' ? automationEnrollBody() : oneTimeEnrollBody()
+      mode === 'automation' ? automationEnrollBody() : oneTimeEnrollBody(),
+      isAdmin() ? installScriptSection() : null
     ]);
+  }
+
+  // installScriptSection 生成一体化安装脚本入口（永久令牌）。
+  // 脚本/安装器 URL 固定，内部运行时读取 /api/agent/install-monitor/token；
+  // 重新生成只会轮换令牌，不改变脚本地址。
+  function installScriptSection() {
+    var d = state.installScripts;
+    var busy = !!state.installScriptBusy;
+    // 首次打开自动加载脚本信息（令牌不存在时服务端会自动创建），
+    // 用户无需先点「生成接入脚本」就能直接复制命令。
+    if (!state.installScriptsTried) {
+      state.installScriptsTried = true;
+      api('/api/agent/install-monitor/token?format=json')
+        .then(function (res) { state.installScripts = res || {}; render(); })
+        .catch(function () {});
+    }
+    function generate() {
+      state.installScriptBusy = true;
+      state.installScriptErr = '';
+      api('/api/agent/install-monitor/token', { method: 'POST' })
+        .then(function (res) {
+          state.installScripts = res || {};
+          state.installScriptBusy = false;
+          render();
+        })
+        .catch(function (e) {
+          state.installScriptErr = e.message;
+          state.installScriptBusy = false;
+          render();
+        });
+    }
+    var lines = [
+      h('h3', { style: 'margin-top:18px' }, ['生成接入脚本（自动化）']),
+      hint('脚本使用永久自动化令牌，可重复执行并强制重新注册主机；令牌在首次执行时自动创建，无需先点「生成接入脚本」（该按钮仅用于主动轮换）。Linux 自动识别架构，安装 Agent + Node Exporter；Linux 脚本与 Windows 安装器在终端无参数运行都会显示 1/2/3/4 数字菜单。两者都先安装 Agent，再清理旧监控，避免失联；安装/更新完成后自动探测 16666/metrics（3 秒超时、最多 10 次），成功显示 ✅，失败打印端口与服务诊断。仅使用控制台内网地址下载。'),
+      state.installScriptErr ? h('div', { class: 'err', role: 'alert' }, [state.installScriptErr]) : null,
+      h('div', { class: 'toolbar' }, [
+        h('button', {
+          type: 'button', class: 'btn', disabled: busy ? 'disabled' : null,
+          onclick: generate
+        }, [busy ? '生成中…' : '生成接入脚本'])
+      ])
+    ];
+    if (d) {
+      var base = d.base_url || '';
+      var linux = 'curl -fsSL -m 3 --retry 3 "' + (d.linux_url || '') + '" | bash -s -- install -y --server "' + base + '"';
+      var win = 'install-windows-monitor.exe install -y --server "' + base + '"';
+      lines.push(h('div', {}, [
+        hint('永久令牌：' + (d.token_prefix || '') + '。重新生成会轮换令牌，旧脚本 URL 会自动读取新令牌。'),
+        codeBlock(linux, 'Linux 接入脚本命令'),
+        hint('Windows 安装器下载地址（在目标机以管理员 PowerShell/CMD 运行）：'),
+        codeBlock(d.windows_url || '', 'Windows 安装器地址'),
+        codeBlock(win, 'Windows 安装命令'),
+        hint('⚠️ 安装脚本与令牌接口无鉴权，仅限内网使用；请在防火墙限制访问来源。')
+      ]));
+    }
+    return h('div', {}, lines);
   }
 
   function enrollModeTab(mode, label) {
@@ -4365,38 +4827,48 @@
     var osEl = h('select', { value: (e && e.os) || 'linux' },
       AGENT_OS.map(function (a) { return h('option', { value: a[0] }, [a[1]]); }));
     var curOS = (e && e.os) || 'linux';
-    var archEl = h('select', { value: (e && e.arch) || 'amd64' }, archOptions(curOS));
+    var picker = archPicker(curOS, (e && e.arches) || ['amd64']);
     // 切换操作系统时同步刷新可选架构：Windows 只有 amd64/arm64，且无 legacy。
     osEl.onchange = function () {
       var next = osEl.value;
-      var keep = archEl.value;
       var allowed = (AGENT_ARCHES[next] || []).map(function (a) { return a[0]; });
-      var arch = allowed.indexOf(keep) >= 0 ? keep : 'amd64';
-      state.enroll = { os: next, arch: arch, force: forceEl.checked, err: '' };
+      var keep = picker.values().filter(function (a) { return allowed.indexOf(a) >= 0; });
+      if (!keep.length) keep = [allowed[0] || 'amd64'];
+      state.enroll = { os: next, arches: keep, force: forceEl.checked, err: '' };
       render();
     };
     return h('div', {}, [
       hint('主机信息来自 Agent 注册：IP 取服务端看到的来源地址，主机名、OS、架构、init 系统由 Agent 上报。所以装好客户端，主机就会带着 IP 出现在列表里。'),
       field('目标操作系统', osEl, 'Windows 支持 Server 2008 R2 ~ Windows 11（amd64/arm64）；Windows 安装命令需在“管理员 PowerShell”中执行。'),
-      field('目标机器架构', archEl, 'Linux 上执行 uname -m：x86_64 选 amd64，aarch64 选 arm64。Windows 绝大多数为 amd64；arm64 仅用于 Windows on ARM。镜像里默认只带构建架构的 Agent，选其他架构下载可能 404。'),
+      field('目标机器架构', picker.el, '可多选：多选时生成一条自动识别目标机架构的命令（Linux 用 uname -m + 内核检测，Windows 用 PROCESSOR_ARCHITECTURE）；一次性令牌仍只能接入一台主机。镜像/部署目录需包含对应架构的 Agent，否则下载会 404。'),
       field('强制重新注册', forceEl, '勾选后命令会带 --force，覆盖目标机已有 state.json 并重新注册。仅在换服务端、数据库重置或重新接入同一台机器时使用；普通重装请勿勾选。'),
       h('div', { class: 'toolbar' }, [
         h('button', {
           type: 'button', class: 'btn', onclick: function () {
             var osName = osEl.value;
-            var arch = archEl.value;
+            var arches = picker.values();
             var force = forceEl.checked;
-            api('/api/agent/enroll-token?os=' + encodeURIComponent(osName) + '&arch=' + encodeURIComponent(arch) + (force ? '&force=1' : ''), { method: 'POST' })
-              .then(function (d) { state.enroll = { os: osName, arch: arch, force: force, base: d.base_url, cmd: d.install_command, expires: d.expires_in, err: '' }; render(); })
-              .catch(function (err) { state.enroll = { os: osName, arch: arch, force: force, err: err.message }; render(); });
+            if (!arches.length) { alert('请至少选择一个目标架构'); return; }
+            api('/api/agent/enroll-token?os=' + encodeURIComponent(osName) + '&arch=' + encodeURIComponent(arches.join(',')) + (force ? '&force=1' : ''), { method: 'POST' })
+              .then(function (d) {
+                var cmds = d.commands || (d.install_command ? [{ arch: d.arch, install_command: d.install_command }] : []);
+                state.enroll = { os: osName, arches: arches, force: force, base: d.base_url, commands: cmds, expires: d.expires_in, err: '' };
+                render();
+              })
+              .catch(function (err) { state.enroll = { os: osName, arches: arches, force: force, err: err.message }; render(); });
           }
         }, ['生成接入命令'])
       ]),
       e && e.err ? h('div', { class: 'err field', role: 'alert' }, [e.err]) : null,
-      e && e.cmd ? h('div', {}, [
+      e && e.commands && e.commands.length ? h('div', {}, [
         e.base ? hint('安装命令使用地址：' + e.base + '。可在“设置”页修改 server.external_url，保存后立即生效；Nginx 域名场景填 https://your-domain。') : null,
-        hint(((e.os === 'windows') ? '在目标机器用“管理员 PowerShell”执行（令牌一次性使用，' : '在目标机器用 root 执行（令牌一次性使用，') + Math.round((e.expires || 900) / 60) + ' 分钟内有效，每台机器各生成一次）：'),
-        codeBlock(e.cmd, '主机接入命令'),
+        hint(((e.os === 'windows') ? '在目标机器用“管理员 PowerShell”执行（令牌一次性使用，' : '在目标机器用 root 执行（令牌一次性使用，') + Math.round((e.expires || 900) / 60) + ' 分钟内有效，每台机器各生成一次）' +
+          (e.commands.length === 1 && e.commands[0].arch === 'auto'
+            ? '。命令会自动识别目标机架构（已选 ' + (e.arches || []).join(' / ') + '），一次性令牌仍只能接入一台主机。'
+            : '：')),
+        e.commands.map(function (c) {
+          return codeBlock(c.install_command, '主机接入命令 · ' + (c.arch === 'auto' ? '自动识别架构' : c.arch));
+        }),
         e.os === 'windows' ? hint('Windows 安装使用 PowerShell + System.Net.WebClient，兼容 Server 2008 R2 自带的 PowerShell 2.0。cmd 可先执行 powershell -NoProfile -ExecutionPolicy Bypass 再粘贴命令。服务以 LocalSystem 运行，重启后自动恢复。') : null,
         e.force ? hint('当前为强制重新注册命令（含 --force）：会覆盖目标机现有 Agent 身份，旧 Agent 记录将不再被该主机使用。') : null,
         hint('执行完成后点上方“搜索”刷新列表。如果 IP 显示成了代理地址，检查服务端 server.trust_proxy 配置。'),
@@ -4424,24 +4896,29 @@
     };
     var maxUsesEl = h('input', { type: 'number', min: '0', step: '1', value: '0' }, []);
     var cidrEl = h('input', { placeholder: '10.0.0.0/8,192.168.1.0/24' }, []);
-    var osEl = h('select', { value: 'linux' },
+    var osEl = h('select', { value: state.automationOS || 'linux' },
       AGENT_OS.map(function (a) { return h('option', { value: a[0] }, [a[1]]); }));
-    var archEl = h('select', { value: 'amd64' }, archOptions('linux'));
+    var picker = archPicker(state.automationOS || 'linux', state.automationArches || ['amd64'],
+      function (vals) { state.automationArches = vals; });
     osEl.onchange = function () {
-      var next = osEl.value;
-      var keep = archEl.value;
-      var allowed = (AGENT_ARCHES[next] || []).map(function (a) { return a[0]; });
-      archEl.innerHTML = '';
-      archOptions(next).forEach(function (o) { archEl.appendChild(o); });
-      archEl.value = allowed.indexOf(keep) >= 0 ? keep : 'amd64';
+      state.automationOS = osEl.value;
+      picker.setOS(osEl.value);
+      state.automationArches = picker.values();
     };
     var forceEl = h('input', { type: 'checkbox' }, []);
 
+    var createdCmds = created
+      ? (created.commands || (created.install_command ? [{ arch: created.arch, install_command: created.install_command }] : []))
+      : [];
     var createdBlock = created ? h('div', { class: 'field' }, [
       hint('自动化令牌已生成（仅显示一次，请立即复制到自动化平台）：'),
       codeBlock(created.token, '自动化令牌'),
-      created.install_command ? hint('安装命令示例（token 已嵌入）：') : null,
-      created.install_command ? codeBlock(created.install_command, '安装命令示例') : null,
+      createdCmds.length ? hint(createdCmds.length === 1 && createdCmds[0].arch === 'auto'
+        ? '安装命令示例（token 已嵌入，命令会自动识别目标机架构）：'
+        : '安装命令示例（token 已嵌入，可分别用于所选架构）：') : null,
+      createdCmds.map(function (c) {
+        return codeBlock(c.install_command, '安装命令示例 · ' + (c.arch === 'auto' ? '自动识别架构' : c.arch));
+      }),
       created.expires_at ? hint('到期时间：' + fmtTime(created.expires_at)) : hint('永久有效：不会自动过期，请妥善保管并定期轮换。'),
       h('button', { type: 'button', class: 'btn ghost small', onclick: function () { state.automationCreated = null; render(); } }, ['关闭提示'])
     ]) : null;
@@ -4491,7 +4968,7 @@
               }, ['注销']) : null,
               x.enabled ? h('button', {
                 type: 'button', class: 'btn ghost small',
-                onclick: function () { rotateAutomationToken(x, osEl.value, archEl.value, forceEl.checked); }
+                onclick: function () { rotateAutomationToken(x, osEl.value, picker.values(), forceEl.checked); }
               }, ['轮换']) : null
             ])
           ];
@@ -4510,7 +4987,7 @@
       field('最大使用次数（0=不限）', maxUsesEl, '达到上限后令牌自动失效；永久令牌建议至少设置来源 CIDR。'),
       field('IP/CIDR 白名单（可选）', cidrEl, '逗号分隔，例如 10.0.0.0/8,192.168.1.0/24；为空表示不限制来源 IP。'),
       field('安装命令目标系统', osEl, '令牌本身与操作系统无关；这里只影响生成的安装命令示例。'),
-      field('安装命令架构', archEl, '仅用于生成安装命令示例，不会限制令牌本身。'),
+      field('安装命令架构', picker.el, '可多选；多选时生成一条自动识别目标机架构的安装命令。令牌本身与架构无关。'),
       field('强制重新注册', forceEl, '安装命令是否带 --force；普通接入不要勾选。'),
       h('div', { class: 'toolbar' }, [
         h('button', {
@@ -4520,12 +4997,15 @@
               alert('最大使用次数需为 0 或正整数');
               return;
             }
+            var arches = picker.values();
+            if (!arches.length) { alert('请至少选择一个安装命令架构'); return; }
             var payload = {
               name: nameEl.value,
               max_uses: maxUses,
               allowed_cidrs: cidrEl.value.split(',').map(function (v) { return v.trim(); }).filter(Boolean),
               os: osEl.value,
-              arch: archEl.value,
+              arch: arches[0],
+              arches: arches,
               force: forceEl.checked
             };
             if (expiryEl.value === 'permanent') {
@@ -4591,10 +5071,12 @@
       .catch(function (e) { alert('注销失败: ' + e.message); });
   }
 
-  function rotateAutomationToken(x, osName, arch, force) {
+  function rotateAutomationToken(x, osName, arches, force) {
     if (!confirm('确定轮换令牌“' + (x.name || x.id) + '”吗？旧 token 会立即失效。')) return;
+    var list = Array.isArray(arches) ? arches : String(arches || 'amd64').split(',');
+    var archQS = list.map(function (a) { return String(a).trim(); }).filter(Boolean).join(',') || 'amd64';
     api('/api/agent/enroll-tokens/' + x.id + '/rotate?os=' + encodeURIComponent(osName || 'linux') +
-      '&arch=' + encodeURIComponent(arch || 'amd64') + (force ? '&force=1' : ''), { method: 'POST' })
+      '&arch=' + encodeURIComponent(archQS) + (force ? '&force=1' : ''), { method: 'POST' })
       .then(function (d) {
         state.automationCreated = d;
         state.automationList = null;
@@ -6533,6 +7015,9 @@
         return h('option', { value: g }, [g]);
       })
     ));
+    var datalistEl = h('datalist', { id: listID }, (candidates || []).map(function (g) {
+      return h('option', { value: g }, []);
+    }));
     var inputEl = h('input', {
       list: listID,
       placeholder: placeholder || '选择或输入后回车添加',
@@ -6540,6 +7025,35 @@
         if (e.key === 'Enter') { e.preventDefault(); add(inputEl.value); }
       }
     }, []);
+
+    // setCandidates 更新下拉候选（远程搜索时按输入关键字刷新）。
+    function setCandidates(list) {
+      candidates = list || [];
+      while (selectEl.options.length > 1) selectEl.remove(1);
+      candidates.forEach(function (g) {
+        selectEl.appendChild(h('option', { value: g }, [g]));
+      });
+      datalistEl.textContent = '';
+      candidates.forEach(function (g) {
+        datalistEl.appendChild(h('option', { value: g }, []));
+      });
+    }
+    var remoteTimer = null, remoteSeq = 0;
+    if (opts.remoteField) {
+      inputEl.oninput = function () {
+        if (remoteTimer) clearTimeout(remoteTimer);
+        remoteTimer = setTimeout(function () {
+          var my = ++remoteSeq;
+          api('/api/hosts/facets?fields=' + encodeURIComponent(opts.remoteField) +
+              '&q=' + encodeURIComponent(inputEl.value.trim()) + '&limit=200')
+            .then(function (d) {
+              if (my !== remoteSeq) return;
+              setCandidates((((d || {}).values) || {})[opts.remoteField] || []);
+            })
+            .catch(function () {});
+        }, 250);
+      };
+    }
     var addBtn = h('button', {
       class: 'btn ghost small', type: 'button', title: '添加',
       onclick: function () { add(inputEl.value); }
@@ -6575,7 +7089,7 @@
       }
       values.forEach(function (v, i) {
         tagsEl.appendChild(h('span', { class: 'tag' }, [
-          v,
+          h('span', { class: 'tag-label', title: v }, [v]),
           h('button', {
             class: 'tag-x', type: 'button', title: '移除', 'aria-label': '移除 ' + v,
             onclick: function () { removeAt(i); }
@@ -6588,11 +7102,9 @@
       el: h('div', { class: 'tag-picker' }, [
         tagsEl,
         h('div', { class: 'toolbar' }, [
-          (candidates && candidates.length) ? selectEl : null,
+          (opts.remoteField || (candidates && candidates.length)) ? selectEl : null,
           inputEl,
-          h('datalist', { id: listID }, (candidates || []).map(function (g) {
-            return h('option', { value: g }, []);
-          })),
+          datalistEl,
           addBtn
         ])
       ]),
@@ -7658,6 +8170,9 @@
     '清除筛选': 'Clear filters', '导出 CSV': 'Export CSV', '详情日志': 'Details',
     '启动': 'Start', '暂停': 'Pause', '推进': 'Promote', '重试': 'Retry',
     '升级 Agent': 'Upgrade Agent', '测试连接': 'Test connection',
+    '升级状态': 'Upgrade status', '升级成功': 'Upgrade succeeded',
+    '升级失败': 'Upgrade failed', '未升级': 'Not upgraded',
+    '自升级：未升级': 'Self-upgrade: not upgraded',
     '保存设置': 'Save settings', '保存策略': 'Save policy', '添加所选成员': 'Add selected',
     '从 FlyIAM 同步组织': 'Sync org from FlyIAM', '从 FlyIAM 同步字段': 'Sync fields from FlyIAM',
     '创建本地账号': 'Create local account', '加载 FlyIAM 用户': 'Load FlyIAM users',
@@ -7699,6 +8214,8 @@
     '个部门': 'departments', '条': 'entries', '台': 'hosts'
   };
   var I18N_RULES = [
+    [/^● 自动刷新中 · (.*)$/, '● Auto-refreshing · $1'],
+    [/^● 自动刷新中$/, '● Auto-refreshing'],
     [/^共 (\d+) 个任务.*$/, 'Total $1 task(s)'],
     [/^筛选结果 (\d+) 个任务.*$/, 'Filtered: $1 task(s)'],
     [/^第 (\d+) \/ (\d+) 页.*$/, 'Page $1 / $2'],
@@ -7997,10 +8514,15 @@
     var f = state.hostFilter || {};
     var qs = [];
     if (state.q) qs.push('q=' + encodeURIComponent(state.q));
-    if (f.app_code) qs.push('app_code=' + encodeURIComponent(f.app_code));
-    if (f.os_family) qs.push('os_family=' + encodeURIComponent(f.os_family));
-    if (f.account) qs.push('account=' + encodeURIComponent(f.account));
-    if (f.agent_status) qs.push('agent_status=' + encodeURIComponent(f.agent_status));
+    var addAll = function (k, list) {
+      asList(list).forEach(function (v) { qs.push(k + '=' + encodeURIComponent(v)); });
+    };
+    addAll('app_code', f.app_code);
+    addAll('biz_group', f.biz_group);
+    addAll('os_family', f.os_family);
+    addAll('account', f.account);
+    addAll('agent_status', f.agent_status);
+    addAll('upgrade_status', f.upgrade_status);
     return qs;
   }
   // hostFilterActive 是否设置了任何主机筛选条件（关键字或下拉）。
@@ -9004,22 +9526,22 @@
     return mask;
   }
 
-  // HOST_FILTER_FIELDS 任务主机筛选字段元数据（label + 默认是否单选）。
+  // HOST_FILTER_FIELDS 任务主机筛选字段元数据（仅 label；支持多选）。
   // 新增字段：后端 hosts 列存在且 host_facets.go 白名单放行后，
   // 只需在此补充一条即可自动获得下拉选择、手填与模式切换。
   var HOST_FILTER_FIELDS = {
     app_code: { label: 'App Code' },
     biz_group: { label: '业务组' },
-    os_family: { label: '操作系统', single: true },
-    os_type: { label: '系统类型', single: true },
+    os_family: { label: '操作系统' },
+    os_type: { label: '系统类型' },
     account: { label: '账号' },
     department: { label: '部门' },
     vendor: { label: '厂商' },
     arch: { label: '架构' },
-    host_type: { label: '主机类型', single: true }
+    host_type: { label: '主机类型' }
   };
   function hostFilterMeta(col) {
-    return HOST_FILTER_FIELDS[col] || { label: col, single: false };
+    return HOST_FILTER_FIELDS[col] || { label: col };
   }
 
   function tasksView() {
@@ -9035,7 +9557,7 @@
     }
     // 加载主机字段选项（任务筛选用）
     if (state.hostFacets === null) {
-      api('/api/hosts/facets')
+      api('/api/hosts/facets?limit=300')
         .then(function (d) { state.hostFacets = d || { fields: [], values: {} }; render(); })
         .catch(function () { state.hostFacets = { fields: [], values: {} }; });
     }
@@ -9046,17 +9568,16 @@
     });
 
     // 表单值放在 state.taskForm 里：预览会触发 render，靠它保留用户输入。
-    // 首次进入时合并 localStorage 草稿，刷新页面后仍保留已填内容与单选/多选模式。
+    // 首次进入时合并 localStorage 草稿，刷新页面后仍保留已填内容。
     var f = state.taskForm || (state.taskForm = Object.assign({
       kind: 'upgrade', name: '', component_id: '', version: '', ip_expr: '',
       script: '', interpreter: '', args: '', stdin: '', tty: false, timeout: '10m',
       mode: 'count', batch_size: '10', canary_count: '1', auto_promote: true,
-      filters: {}, filterModes: {}
+      filters: {}
     }, loadTaskDraft() || {}));
     if (!f.kind) f.kind = 'upgrade';
     if (!isAdmin() && f.kind === 'command') f.kind = 'upgrade';
     if (!f.filters) f.filters = {};
-    if (!f.filterModes) f.filterModes = {};
 
     function versionsFor(cid) {
       var out = [];
@@ -9202,62 +9723,35 @@
       if (box && box.parentNode) box.parentNode.removeChild(box);
     }
 
-    // 构建字段选择器（多个 tagPicker）
-    // 默认模式来自 HOST_FILTER_FIELDS；用户可在每个字段标题右侧勾选/取消「单选」自由切换。
+    // 构建字段选择器（与主机页共用可搜索的多选标签框，不再单独提供单选开关：
+    // 只选一个值即为单选，选多个即为多选）。
     var facets = state.hostFacets || { fields: [], values: {} };
     var fieldPickers = {};
     var fieldPickerEls = [];
 
-    // filterField 在字段标题右侧提供「单选」开关。
-    function filterField(label, modeEl, input, hintText) {
-      if (!input.id) input.id = 'f' + (++fieldSeq);
-      return h('div', { class: 'field' }, [
-        h('div', { class: 'field-head' }, [
-          h('label', { for: input.id }, [label]),
-          h('label', { class: 'field-mode', title: '勾选后该字段只允许一个值' }, [modeEl, ' 单选'])
-        ]),
-        input,
-        hintText ? hint(hintText) : null
-      ]);
-    }
-
     facets.fields.forEach(function (col) {
       var meta = hostFilterMeta(col);
       var label = meta.label;
-      var configured = f.filterModes[col];
-      var multi = configured === undefined ? !meta.single : !!configured;
-      var picker = tagPicker(
-        facets.values[col] || [],
-        '选择或输入 ' + label + (multi ? '（可多选）' : '（单选）') + ' 后回车',
-        {
-          initial: f.filters[col] || [],
-          multi: multi,
-          // 立即写回 taskForm：预览/自动刷新会触发 render，靠它恢复已选值。
-          onChange: function (vals) {
-            if (vals.length > 0) f.filters[col] = vals;
-            else delete f.filters[col];
-            invalidatePreview();
-            saveTaskDraft(f);
-          }
-        }
-      );
-      fieldPickers[col] = picker;
-      var singleEl = h('input', {
-        type: 'checkbox', checked: !multi,
-        'aria-label': label + '筛选单选模式',
-        onchange: function () {
-          // 先合入尚未回车的输入，再按新模式裁剪已选值。
-          picker.getValues();
-          f.filterModes[col] = !singleEl.checked;
-          if (singleEl.checked && (f.filters[col] || []).length > 1) {
-            f.filters[col] = f.filters[col].slice(0, 1);
-          }
+      var picker = tagFilter({
+        key: col,
+        label: label,
+        candidates: facets.values[col] || [],
+        initial: f.filters[col] || [],
+        // app_code/业务组等候选值可能很多：输入时按需向服务端搜索。
+        remoteField: col,
+        // 立即写回 taskForm：预览/自动刷新会触发 render，靠它恢复已选值。
+        onChange: function (vals) {
+          if (vals.length > 0) f.filters[col] = vals;
+          else delete f.filters[col];
           invalidatePreview();
-          render();
+          saveTaskDraft(f);
         }
-      }, []);
-      fieldPickerEls.push(filterField(label, singleEl, picker.el,
-        (multi ? '多选' : '单选') + '，留空表示不限；可从下拉选择或手填。'));
+      });
+      fieldPickers[col] = picker;
+      fieldPickerEls.push(h('div', { class: 'field' }, [
+        picker.el,
+        hint('支持输入搜索与多选；只选一个即为单选。留空表示不限。')
+      ]));
     });
 
     // 提交前收集 filters（补上用户尚未回车确认的输入）
@@ -9482,7 +9976,7 @@
       // 主机字段筛选（如果配置了可选字段）
       fieldPickerEls.length > 0 ? h('div', { class: 'field-group' }, [
         h('h4', {}, ['主机筛选（可选）']),
-        hint('按主机字段筛选（部分字段单选，其余可多选）；留空表示不限。与 IP 段取交集。')
+        hint('按主机字段筛选：支持输入搜索与多选（只选一个即为单选）；留空表示不限。与 IP 段取交集。')
       ].concat(fieldPickerEls)) : null,
       f.kind === 'command' ? field('命令脚本', scriptEl,
         '脚本会以文件形式交给解释器执行，支持管道、重定向与进程替换。需要交互确认时填写标准输入，必要时勾选伪终端。') : null,
@@ -10363,8 +10857,54 @@
     ]);
   }
 
+  // initBackToTop 创建全局返回顶部按钮（不随页面 render 重建）。
+  function initBackToTop() {
+    if (backTopBtn) return;
+    backTopBtn = h('button', {
+      type: 'button', class: 'back-to-top', tabindex: '-1',
+      'aria-label': '返回顶部', title: '返回顶部',
+      onclick: function () {
+        var reduce = window.matchMedia &&
+          window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        if (reduce || !window.scrollTo) {
+          window.scrollTo(0, 0);
+          return;
+        }
+        try { window.scrollTo({ top: 0, behavior: 'smooth' }); }
+        catch (e) { window.scrollTo(0, 0); }
+      }
+    }, [h('span', { 'aria-hidden': 'true' }, ['↑'])]);
+    document.body.appendChild(backTopBtn);
+    updateBackToTopLabel();
+
+    var ticking = false;
+    function update() {
+      ticking = false;
+      var y = window.scrollY || window.pageYOffset || 0;
+      var show = y > 360;
+      backTopBtn.classList.toggle('visible', show);
+      // 隐藏时不进入 Tab 顺序，避免不可见焦点。
+      backTopBtn.setAttribute('tabindex', show ? '0' : '-1');
+    }
+    window.addEventListener('scroll', function () {
+      if (ticking) return;
+      ticking = true;
+      if (window.requestAnimationFrame) window.requestAnimationFrame(update);
+      else setTimeout(update, 100);
+    }, { passive: true });
+    update();
+  }
+
+  function updateBackToTopLabel() {
+    if (!backTopBtn) return;
+    var label = state.lang === 'en' ? 'Back to top' : '返回顶部';
+    backTopBtn.setAttribute('aria-label', label);
+    backTopBtn.setAttribute('title', label);
+  }
+
   function render() {
     app.innerHTML = '';
+    updateBackToTopLabel();
     if (!state.user) { app.appendChild(loginView()); return; }
     if (state.quickstart === undefined) {
       state.quickstart = null;
@@ -10451,16 +10991,14 @@
     // 主机页每次进入时重新加载：数据更新频繁，列表不能太旧。
     if (!quiet) {
       state.view = 'hosts';
-      state.hostListFacets = null; // 重新加载下拉筛选的选项（刚插入的主机值可能不在缓存里）。
+      // 筛选候选值只在首次进入时加载：搜索/翻页/改筛选不重复跑 DISTINCT 查询。
+      // 新增的 app_code/业务组可在可搜索下拉里输入关键字，由服务端按 q 实时查找。
       // 页面刷新或从其他页签切回时，恢复显示后台主机删除作业的进度（仅管理员可删除）。
       if (isAdmin()) resumeBatchJob(HOST_DELETE_JOB);
     }
-    // 版本分布变化较慢：手动刷新/进入页面时立即拉取；自动刷新时默认 30 秒，
-    // 有 Agent 正在自升级时缩短到 10 秒，便于及时看到剩余旧版本数量。
-    var statsEvery = state.agentUpdateActive ? 10000 : 30000;
-    if (!quiet || !state.agentStatsAt || Date.now() - state.agentStatsAt >= statsEvery) {
-      loadAgentStats();
-    }
+    // 版本分布与主机列表共用同一轮自动刷新：空闲 15 秒、有升级动作 4 秒，
+    // 保证卡片和主机列表同步更新；数据未变化时 loadAgentStats 内部按指纹跳过重绘。
+    loadAgentStats();
     // 主机自定义字段定义：列表列与编辑表单共用；只加载一次，失败后置空数组。
     if (state.hostFieldDefs === undefined) {
       state.hostFieldDefs = null;
@@ -10490,7 +11028,7 @@
         state.agentTargetVersion = d.agent_target_version || '';
         state.agentAutoUpdate = !!d.agent_auto_update;
         state.hostsLoading = false;
-        // 自升级刚结束：立即刷新一次版本分布，不必等下一个 10/30 秒周期。
+        // 自升级刚结束：立即刷新一次版本分布，不必等下一轮自动刷新。
         var wasUpdating = state.agentUpdateActive;
         var nowUpdating = (d.list || []).some(function (x) {
           var s = x.agent_update_status;
@@ -11168,6 +11706,10 @@
       state.taskForm = null;
       state.taskDetailId = null;
       state.taskDetail = null;
+      state.hostListFacets = null;
+      state.hostFacets = null;
+      state.installScripts = null;
+      state.installScriptsTried = false;
       state.hostsSig = '';
       state.tasksSig = '';
       state.taskDetailSig = '';
@@ -11184,6 +11726,8 @@
     applyHashToState(route);
     switchView(route.view);
   });
+
+  initBackToTop();
 
   // 启动：先取认证方式（casdoor 需要登录页展示 SSO 入口），再尝试拿当前用户。
   loadAuthConfig().then(function () {

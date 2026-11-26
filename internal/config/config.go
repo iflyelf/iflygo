@@ -47,6 +47,15 @@ type Config struct {
 	Client ClientConfig `yaml:"client"`
 	// CrossDesk 可选：远程桌面服务（信令/TURN/Web 客户端）。
 	CrossDesk CrossDeskConfig `yaml:"crossdesk"`
+	// ClientUpdate 可选：iflygo-client 自动升级清单。
+	ClientUpdate ClientUpdateConfig `yaml:"client_update"`
+}
+
+// ClientUpdateConfig 客户端自动升级配置。
+type ClientUpdateConfig struct {
+	Enabled     bool   `yaml:"enabled"`
+	ManifestURL string `yaml:"manifest_url"`
+	BaseURL     string `yaml:"base_url"`
 }
 
 // CrossDeskConfig 远程桌面（CrossDesk）集成配置。
@@ -392,6 +401,11 @@ func Default() *Config {
 		Auth:     AuthConfig{Provider: "builtin", AdminUsername: "admin"},
 		TCPRelay: TCPRelayConfig{Mode: "auto"},
 		Client:   ClientConfig{MTU: 1280, Interval: "30s", AutoNAT: true, AutoNATMaxRetries: 5},
+		ClientUpdate: ClientUpdateConfig{
+			Enabled:     true,
+			ManifestURL: "https://github.com/iflyelf/iflygo/releases/latest/download/iflygo-client-manifest.json",
+			BaseURL:     "https://github.com/iflyelf/iflygo/releases/latest/download",
+		},
 		CrossDesk: CrossDeskConfig{
 			WebURL:          "https://web.crossdesk.cn",
 			DownloadURL:     "https://github.com/kunkundi/crossdesk/releases/latest",
@@ -509,6 +523,9 @@ func (c *Config) applyEnv() {
 	setInt(&c.Client.AutoNATMaxRetries, "CLIENT_AUTO_NAT_MAX_RETRIES")
 	setStr(&c.Client.AutoNATWebhook, "CLIENT_AUTO_NAT_WEBHOOK")
 	setStr(&c.Client.EgressExclude, "CLIENT_EGRESS_EXCLUDE")
+	setBool(&c.ClientUpdate.Enabled, "CLIENT_UPDATE_ENABLED")
+	setStr(&c.ClientUpdate.ManifestURL, "CLIENT_UPDATE_MANIFEST_URL")
+	setStr(&c.ClientUpdate.BaseURL, "CLIENT_UPDATE_BASE_URL")
 	setBool(&c.CrossDesk.Enabled, "CROSSDESK_ENABLED")
 	setStr(&c.CrossDesk.ServerURL, "CROSSDESK_SERVER_URL")
 	setStr(&c.CrossDesk.WebURL, "CROSSDESK_WEB_URL")

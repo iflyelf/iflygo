@@ -5,7 +5,7 @@ package client
 import "fmt"
 
 // installWindowsService 非 Windows 平台占位：正常路径不会调用。
-func installWindowsService(exe, stateDir, relay, token, configPath string) error {
+func installWindowsService(exe, stateDir, relay, token, configPath string, autoUpdate bool) error {
 	return fmt.Errorf("当前平台不支持 Windows 服务安装")
 }
 

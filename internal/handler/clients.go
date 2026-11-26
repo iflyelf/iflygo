@@ -419,6 +419,7 @@ func CreateClient(sc *svc.ServiceContext) http.HandlerFunc {
 			"client":          model.ClientNode{ID: nid, NetworkID: net.ID, Name: req.Name, IPv4: ipv4, IPv6: ipv6, Groups: req.Groups, Subnets: req.Subnets, Status: "offline", CreatedAt: now, UpdatedAt: now, ClientSettings: settings},
 			"enroll_token":    token,
 			"install_command": enrollCommand(baseURL(sc, r), token, req.Name),
+			"install_scripts": buildClientInstallScripts(baseURL(sc, r), token, req.Name),
 		})
 	}
 }
@@ -480,7 +481,10 @@ func ClientEnrollToken(sc *svc.ServiceContext) http.HandlerFunc {
 			httpx.FailErr(w, http.StatusInternalServerError, err)
 			return
 		}
-		httpx.OK(w, map[string]any{"enroll_token": token, "install_command": enrollCommand(baseURL(sc, r), token, row.Name)})
+		httpx.OK(w, map[string]any{
+			"enroll_token": token, "install_command": enrollCommand(baseURL(sc, r), token, row.Name),
+			"install_scripts": buildClientInstallScripts(baseURL(sc, r), token, row.Name),
+		})
 	}
 }
 

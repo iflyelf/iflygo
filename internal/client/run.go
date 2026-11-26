@@ -31,6 +31,9 @@ type RunOptions struct {
 	TCPRelay      string        // 中继地址；"off" 等价 udp；空则自动发现
 	TCPRelayToken string
 	ConfigPath    string // 空则 <state-dir>/client.yaml
+	// AutoUpdate 周期性检查并升级客户端；服务安装时建议开启。
+	AutoUpdate     bool
+	UpdateInterval time.Duration
 }
 
 // Run 启动客户端主循环：心跳 + 配置热更新 + overlay + 客户端配置文件热加载。
@@ -64,6 +67,14 @@ func Run(opts RunOptions) error {
 
 	log.Printf("🚀 iflygo-client 运行中: #%d %s (%s) 服务器 %s", st.ClientID, st.Name, st.IPv4, st.Server)
 	log.Printf("⚙️ 客户端配置: %s（支持热加载）", cfgPath)
+	if opts.AutoUpdate {
+		log.Printf("⬆️ 自动升级已启用（检查间隔 %s）", opts.UpdateInterval)
+		go func() {
+			if err := AutoUpdateLoop(ctx, st.Server, dir, opts.UpdateInterval, log.Default()); err != nil && !errors.Is(err, ErrRestartRequired) {
+				log.Printf("⚠️ 自动升级已停止: %v", err)
+			}
+		}()
+	}
 
 	// 首次心跳获取服务端下发的数据面策略，再拉取配置。
 	hbInfo, hbErr := c.Heartbeat(ctx)

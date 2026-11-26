@@ -177,6 +177,64 @@ jobs:
           done
           ls -lh
 
+      - name: 构建 Windows 监控安装器（可选工具）
+        run: |
+          cd third_party/upgrade_mgr
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" \
+            -o "$GITHUB_WORKSPACE/dist/install-windows-monitor.exe" ./cmd/install-monitor
+
+      - name: 生成客户端升级清单
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+
+          root = os.getcwd()
+          dist = os.path.join(root, "dist")
+          version = open(os.path.join(root, "VERSION"), encoding="utf-8").read().strip()
+
+          def sha256(path):
+              h = hashlib.sha256()
+              with open(path, "rb") as f:
+                  for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                      h.update(chunk)
+              return h.hexdigest()
+
+          assets = {}
+          for name in sorted(os.listdir(dist)):
+              if not name.startswith("iflygo-client-"):
+                  continue
+              if name.endswith((".tar.gz", ".zip", ".json")) or name == "checksums.txt":
+                  continue
+              key = name[len("iflygo-client-"):]
+              if key.endswith(".exe"):
+                  key = key[:-4]
+              path = os.path.join(dist, name)
+              assets[key] = {
+                  "file": name,
+                  "sha256": sha256(path),
+                  "size": os.path.getsize(path),
+              }
+
+          for name in sorted(os.listdir(dist)):
+              if not name.startswith("iflygo-client-"):
+                  continue
+              if not name.endswith((".tar.gz", ".zip")):
+                  continue
+              key = name[len("iflygo-client-"):].replace(".tar.gz", "").replace(".zip", "")
+              if key.endswith(".exe"):
+                  key = key[:-4]
+              if key in assets:
+                  path = os.path.join(dist, name)
+                  assets[key]["package"] = name
+                  assets[key]["package_sha256"] = sha256(path)
+
+          with open(os.path.join(dist, "iflygo-client-manifest.json"), "w", encoding="utf-8") as f:
+              json.dump({"version": version, "assets": assets}, f, ensure_ascii=False, indent=2)
+          print(json.dumps({"version": version, "assets": sorted(assets)}, ensure_ascii=False))
+          PY
+
       - name: 发布 Release
         uses: softprops/action-gh-release@v3.0.3
         with:
@@ -190,4 +248,11 @@ jobs:
             dist/*.tar.gz
             dist/*.zip
             dist/*.exe
+            dist/iflygo-client-linux-amd64
+            dist/iflygo-client-linux-arm64
+            dist/iflygo-client-linux-arm
+            dist/iflygo-client-darwin-amd64
+            dist/iflygo-client-darwin-arm64
+            dist/iflygo-client-manifest.json
+            dist/install-windows-monitor.exe
             dist/checksums.txt

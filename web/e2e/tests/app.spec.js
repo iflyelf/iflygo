@@ -82,6 +82,13 @@ test('隧道管理：创建网络与客户端', async ({ page }) => {
   await page.getByPlaceholder('名称').fill('e2e-client-' + suffix);
   await page.getByRole('button', { name: '创建客户端', exact: true }).click();
   await expect(page.locator('table')).toContainText('e2e-client-' + suffix);
+
+  // 创建后自动弹出接入脚本（含 enroll 与自动升级）。
+  const scriptModal = page.locator('#iflygo-install-script-modal');
+  await expect(scriptModal).toBeVisible();
+  await expect(scriptModal.locator('pre')).toContainText('iflygo-client enroll');
+  await expect(scriptModal.locator('pre')).toContainText('--auto-update');
+  await scriptModal.getByRole('button', { name: '关闭' }).click();
 });
 
 test('隧道管理：编辑客户端参数与 IP 自动下发', async ({ page }) => {
@@ -207,6 +214,8 @@ test('远程桌面：CrossDesk 集成页', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'CrossDesk 服务状态' })).toBeVisible();
   await expect(page.locator('.crossdesk-feature')).toHaveCount(8);
   await expect(page.getByRole('heading', { name: '原生信令设备与会话' })).toBeVisible();
+  await page.getByRole('button', { name: '生成接入脚本', exact: true }).click();
+  await expect(page.locator('pre.tunnel-script', { hasText: 'crossdesk host' }).first()).toBeVisible();
   await page.getByRole('button', { name: '在页面内打开', exact: true }).click();
   await expect(page.locator('.crossdesk-frame')).toHaveAttribute('src', '/crossdesk/web/');
 });

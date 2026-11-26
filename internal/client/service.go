@@ -24,6 +24,11 @@ func SystemdUnitWithRelay(exe, stateDir, relay, token string) string {
 
 // SystemdUnitWithOptions 生成完整启动参数的 systemd 单元内容。
 func SystemdUnitWithOptions(exe, stateDir, relay, token, configPath string) string {
+	return SystemdUnitWithAutoUpdate(exe, stateDir, relay, token, configPath, false)
+}
+
+// SystemdUnitWithAutoUpdate 生成带自动升级参数的 systemd 单元内容。
+func SystemdUnitWithAutoUpdate(exe, stateDir, relay, token, configPath string, autoUpdate bool) string {
 	extra := ""
 	if configPath != "" {
 		extra += " --config " + configPath
@@ -33,6 +38,9 @@ func SystemdUnitWithOptions(exe, stateDir, relay, token, configPath string) stri
 	}
 	if token != "" {
 		extra += " --tcp-relay-token " + token
+	}
+	if autoUpdate {
+		extra += " --auto-update"
 	}
 	return fmt.Sprintf(`[Unit]
 Description=iFlyGo Client Agent
@@ -52,9 +60,9 @@ WantedBy=multi-user.target
 }
 
 // InstallService 安装为系统服务；relay/token/config 非空时写入 unit 的启动参数。
-func InstallService(exe, stateDir, relay, token, configPath string) error {
+func InstallService(exe, stateDir, relay, token, configPath string, autoUpdate bool) error {
 	if runtime.GOOS == "windows" {
-		return installWindowsService(exe, stateDir, relay, token, configPath)
+		return installWindowsService(exe, stateDir, relay, token, configPath, autoUpdate)
 	}
 	if runtime.GOOS != "linux" {
 		return fmt.Errorf("暂不支持 %s 服务安装（Linux systemd / Windows SCM 已支持）", runtime.GOOS)
@@ -62,7 +70,7 @@ func InstallService(exe, stateDir, relay, token, configPath string) error {
 	if strings.ContainsAny(relay+token+configPath, " \t\r\n\"'\\") {
 		return fmt.Errorf("服务启动参数不能包含空白或引号")
 	}
-	unit := SystemdUnitWithOptions(exe, stateDir, relay, token, configPath)
+	unit := SystemdUnitWithAutoUpdate(exe, stateDir, relay, token, configPath, autoUpdate)
 	path := filepath.Join("/etc/systemd/system", serviceName+".service")
 	if err := os.WriteFile(path, []byte(unit), 0o644); err != nil {
 		return fmt.Errorf("写入 unit 失败（需要 root）: %w", err)
