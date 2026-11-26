@@ -22,25 +22,31 @@ import (
 // 可选 WebRTC 视频轨道：通过外部 ffmpeg 编码 VP8/H.264，替代 JPEG 帧通道。
 // 二进制本身仍不依赖 CGO；未启用或编码器不可用时自动回退到 JPEG。
 type videoPipeline struct {
-	track   *webrtc.TrackLocalStaticSample
-	codec   string
+	track *webrtc.TrackLocalStaticSample
+	codec string
+	log   *log.Logger
+
+	baseWidth   int
+	baseHeight  int
+	baseFPS     int
+	baseBitrate int
+
 	width   int
 	height  int
 	fps     int
 	bitrate int
 	command string
-	log     *log.Logger
 
 	ctx    context.Context
 	cancel context.CancelFunc
+	gen    atomic.Uint64
 	active atomic.Bool
 	closed atomic.Bool
 
-	frames chan []byte
-	free   chan []byte
-	cmd    *exec.Cmd
-	mu     sync.Mutex
-
+	mu       sync.Mutex
+	frames   chan []byte
+	free     chan []byte
+	cmd      *exec.Cmd
 	lastPush time.Time
 }
 
@@ -85,22 +91,29 @@ func newVideoPipeline(cfg Config, logger *log.Logger) (*videoPipeline, error) {
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	p := &videoPipeline{
-		track: track, codec: codec, width: width, height: height,
-		fps: fps, bitrate: bitrate, command: cfg.VideoEncoder, log: logger,
-		ctx: ctx, cancel: cancel,
-		frames: make(chan []byte, 2),
-		free:   make(chan []byte, 2),
-	}
-	for i := 0; i < 2; i++ {
-		p.free <- make([]byte, width*height*4)
-	}
-	if _, err := exec.LookPath("ffmpeg"); err != nil && p.command == "" {
-		cancel()
+	if _, err := exec.LookPath("ffmpeg"); err != nil && cfg.VideoEncoder == "" {
 		return nil, fmt.Errorf("未找到 ffmpeg，无法启用视频轨道")
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	p := &videoPipeline{
+		track: track, codec: codec, log: logger,
+		baseWidth: width, baseHeight: height, baseFPS: fps, baseBitrate: bitrate,
+		width: width, height: height, fps: fps, bitrate: bitrate,
+		command: cfg.VideoEncoder,
+		ctx:     ctx, cancel: cancel,
+	}
+	p.resetBuffers()
 	return p, nil
+}
+
+// resetBuffers 需在持有 p.mu 时调用。
+func (p *videoPipeline) resetBuffers() {
+	p.frames = make(chan []byte, 2)
+	p.free = make(chan []byte, 2)
+	for i := 0; i < 2; i++ {
+		p.free <- make([]byte, p.width*p.height*4)
+	}
+	p.lastPush = time.Time{}
 }
 
 func (p *videoPipeline) start() error {
@@ -109,8 +122,19 @@ func (p *videoPipeline) start() error {
 	if p.closed.Load() {
 		return fmt.Errorf("视频轨道已关闭")
 	}
-	shell, args := videoCommand(p.command, p.codec, p.width, p.height, p.fps, p.bitrate)
-	cmd := exec.CommandContext(p.ctx, shell, args...)
+	return p.startLocked()
+}
+
+func (p *videoPipeline) startLocked() error {
+	ctx := p.ctx
+	frames := p.frames
+	free := p.free
+	fps := p.fps
+	width, height := p.width, p.height
+	gen := p.gen.Add(1)
+
+	shell, args := videoCommand(p.command, p.codec, width, height, fps, p.bitrate)
+	cmd := exec.CommandContext(ctx, shell, args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -124,16 +148,18 @@ func (p *videoPipeline) start() error {
 	}
 	p.cmd = cmd
 	p.active.Store(true)
-	go p.writeLoop(stdin)
-	go p.readLoop(stdout)
+	go p.writeLoop(ctx, stdin, frames, free)
+	go p.readLoop(ctx, stdout, fps)
 	go func() {
 		err := cmd.Wait()
-		p.active.Store(false)
-		if p.ctx.Err() == nil {
-			p.log.Printf("⚠️ 视频编码器退出: %v", err)
+		if p.gen.Load() == gen {
+			p.active.Store(false)
+			if p.ctx.Err() == nil {
+				p.log.Printf("⚠️ 视频编码器退出: %v", err)
+			}
 		}
 	}()
-	p.log.Printf("🎬 视频轨道已启用: %s %dx%d@%d %dkbps", p.codec, p.width, p.height, p.fps, p.bitrate)
+	p.log.Printf("🎬 视频轨道已启用: %s %dx%d@%d %dkbps", p.codec, width, height, fps, p.bitrate)
 	return nil
 }
 
@@ -169,26 +195,25 @@ func (p *videoPipeline) ready() bool {
 	return p != nil && p.active.Load()
 }
 
-func (p *videoPipeline) writeLoop(stdin io.WriteCloser) {
+func (p *videoPipeline) writeLoop(ctx context.Context, stdin io.WriteCloser, frames <-chan []byte, free chan<- []byte) {
 	defer stdin.Close()
 	for {
 		select {
-		case <-p.ctx.Done():
+		case <-ctx.Done():
 			return
-		case frame := <-p.frames:
+		case frame := <-frames:
 			if _, err := stdin.Write(frame); err != nil {
-				p.active.Store(false)
-				p.free <- frame
+				free <- frame
 				return
 			}
-			p.free <- frame
+			free <- frame
 		}
 	}
 }
 
-func (p *videoPipeline) readLoop(stdout io.Reader) {
+func (p *videoPipeline) readLoop(ctx context.Context, stdout io.Reader, fps int) {
 	if p.codec == "h264" {
-		p.readH264(stdout)
+		p.readH264(stdout, fps)
 		return
 	}
 	header := make([]byte, 32)
@@ -199,8 +224,13 @@ func (p *videoPipeline) readLoop(stdout io.Reader) {
 		p.log.Printf("⚠️ 视频编码器输出不是 IVF")
 		return
 	}
-	duration := time.Second / time.Duration(p.fps)
+	duration := time.Second / time.Duration(fps)
 	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 		frameHeader := make([]byte, 12)
 		if _, err := io.ReadFull(stdout, frameHeader); err != nil {
 			return
@@ -220,11 +250,11 @@ func (p *videoPipeline) readLoop(stdout io.Reader) {
 }
 
 // readH264 按 Access Unit Delimiter 切分 Annex-B 码流，每个访问单元写一个样本。
-func (p *videoPipeline) readH264(stdout io.Reader) {
+func (p *videoPipeline) readH264(stdout io.Reader, fps int) {
 	buf := make([]byte, 0, 256*1024)
 	tmp := make([]byte, 64*1024)
 	var current []byte
-	duration := time.Second / time.Duration(p.fps)
+	duration := time.Second / time.Duration(fps)
 	flush := func() {
 		if len(current) == 0 {
 			return
@@ -298,9 +328,11 @@ func splitNALUs(buf []byte) (nalus [][]byte, rest []byte) {
 	return nalus, rest
 }
 
-// push 缩放并投递一帧；仅在 captureLoop 中调用。返回 false 表示丢弃。
+// push 缩放并投递一帧；仅在 captureLoop 中调用。
 func (p *videoPipeline) push(src image.Image) bool {
-	if !p.ready() || p.closed.Load() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.active.Load() || p.closed.Load() {
 		return false
 	}
 	interval := time.Second / time.Duration(p.fps)
@@ -343,7 +375,52 @@ func (p *videoPipeline) push(src image.Image) bool {
 	}
 }
 
+// applyClientSettings 将 Web 客户端的画质/帧率请求映射到编码器参数。
+func (p *videoPipeline) applyClientSettings(quality, fps, preference int) {
+	if p == nil || quality < 0 || quality > 2 || preference < 0 || preference > 2 {
+		return
+	}
+	fps, bitrate := videoTargets(quality, fps, preference, p.baseFPS, p.baseBitrate)
+	p.reconfigure(p.baseWidth, p.baseHeight, fps, bitrate)
+}
+
+func videoTargets(quality, fps, preference, baseFPS, baseBitrate int) (int, int) {
+	if fps != 30 && fps != 60 {
+		fps = baseFPS
+	}
+	qualityFactor := [...]float64{0.4, 0.65, 1.0}[quality]
+	prefFactor := [...]float64{0.8, 1.0, 0.9}[preference]
+	bitrate := int(float64(baseBitrate) * qualityFactor * prefFactor)
+	if bitrate < 300 {
+		bitrate = 300
+	}
+	return fps, bitrate
+}
+
+func (p *videoPipeline) reconfigure(width, height, fps, bitrate int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed.Load() {
+		return
+	}
+	if p.width == width && p.height == height && p.fps == fps && p.bitrate == bitrate {
+		return
+	}
+	p.cancel()
+	p.active.Store(false)
+	p.width, p.height, p.fps, p.bitrate = width, height, fps, bitrate
+	p.ctx, p.cancel = context.WithCancel(context.Background())
+	p.resetBuffers()
+	if err := p.startLocked(); err != nil {
+		p.log.Printf("⚠️ 视频轨道重配置失败: %v", err)
+		return
+	}
+	p.log.Printf("🎛️ 视频轨道调整: %dx%d@%d %dkbps", width, height, fps, bitrate)
+}
+
 func (p *videoPipeline) close() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.closed.Store(true)
 	p.cancel()
 	p.active.Store(false)

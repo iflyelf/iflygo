@@ -334,6 +334,9 @@ func (s *session) applyVideoSettings(req *videoSettingsMessage) {
 	s.agent.videoQuality.Store(quality)
 	s.agent.videoFPS.Store(int32(req.FrameRate))
 	s.agent.videoPref.Store(int32(req.Preference))
+	if s.agent.video != nil {
+		s.agent.video.applyClientSettings(req.Quality, req.FrameRate, req.Preference)
+	}
 	s.agent.log.Printf("🎛️ 画面设置: 质量=%d 帧率=%d 偏好=%d", req.Quality, req.FrameRate, req.Preference)
 	reply, err := json.Marshal(map[string]any{
 		"type": 12,

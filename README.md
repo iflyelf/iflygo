@@ -670,6 +670,7 @@ docker compose up -d
 >
 > 视频轨道：`--video-codec vp8` 或 `h264` 时，Agent 通过 ffmpeg 编码并发送标准
 > WebRTC 视频轨道，浏览器原生解码，带宽显著低于 JPEG；未启用时继续使用 JPEG 帧通道。
+> Web 端的画质/帧率设置会按质量映射码率，并重启编码器使 30/60fps 立即生效。
 > H.264 模式为官方 CrossDesk 客户端互通预留，仍需真机兼容性回归。
 > Wayland 原生会话、Windows/macOS 原生音频采集仍需平台原生层；
 > 官方 CrossDesk 客户端使用 WebRTC 视频，与本 Agent 的 JPEG 画面通道不互通
