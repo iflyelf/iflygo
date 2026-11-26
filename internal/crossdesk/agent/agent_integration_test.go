@@ -681,13 +681,14 @@ settingsDone:
 	}
 	select {
 	case packet := <-audioPackets:
-		if len(packet) != audioHeader+audioChunk {
+		if len(packet) != audioHeader+audioChunk/4 {
 			t.Fatalf("unexpected audio packet size: %d", len(packet))
 		}
+		format := binary.LittleEndian.Uint16(packet[14:16])
 		if string(packet[0:4]) != "CDA1" ||
 			binary.LittleEndian.Uint32(packet[8:12]) != audioRate ||
 			binary.LittleEndian.Uint16(packet[12:14]) != audioChannels ||
-			binary.LittleEndian.Uint16(packet[14:16]) != audioFormatS16 {
+			(format != audioFormatADPCM && format != audioFormatADPCMReset) {
 			t.Fatalf("bad audio header: %x", packet[:audioHeader])
 		}
 	case <-time.After(5 * time.Second):

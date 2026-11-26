@@ -141,7 +141,7 @@ func newSession(a *Agent, guest string) (*session, error) {
 	}
 	if a.audio != nil {
 		audio, err := pc.CreateDataChannel("iflygo-audio-v1", &webrtc.DataChannelInit{
-			Ordered: &unordered, MaxRetransmits: &zeroRetransmits,
+			Ordered: &ordered,
 		})
 		if err == nil {
 			s.audioChannel = audio

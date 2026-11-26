@@ -116,10 +116,11 @@ func cmdCrossDesk(args []string) {
 	fs.Var(fileRoots, "file-root", "允许文件浏览/传输的目录（可重复，host）")
 	audio := fs.Bool("audio", false, "启用音频采集（host）")
 	audioCmd := fs.String("audio-cmd", "", "音频采集命令，输出 48kHz 双声道 s16le PCM（host）")
+	audioCodec := fs.String("audio-codec", "adpcm", "音频编码：adpcm（约 384kbps）或 pcm（1.5Mbps）")
 	fs.Parse(args[1:])
 
 	if action == "host" {
-		cmdCrossDeskHost(*server, *device, *pass, *insecure, *fps, *quality, *maxWidth, *stun, *credentials, *fileRoots, *audio, *audioCmd)
+		cmdCrossDeskHost(*server, *device, *pass, *insecure, *fps, *quality, *maxWidth, *stun, *credentials, *fileRoots, *audio, *audioCmd, *audioCodec)
 		return
 	}
 
@@ -157,7 +158,7 @@ func cmdCrossDesk(args []string) {
 	}
 }
 
-func cmdCrossDeskHost(server, device, password string, insecure bool, fps, quality, maxWidth int, stun, credentials string, fileRoots []string, audio bool, audioCmd string) {
+func cmdCrossDeskHost(server, device, password string, insecure bool, fps, quality, maxWidth int, stun, credentials string, fileRoots []string, audio bool, audioCmd, audioCodec string) {
 	if strings.TrimSpace(server) == "" {
 		fmt.Fprintln(os.Stderr, "❌ --server 必填")
 		os.Exit(2)
@@ -169,7 +170,7 @@ func cmdCrossDeskHost(server, device, password string, insecure bool, fps, quali
 		ServerURL: strings.TrimSpace(server), DeviceID: strings.TrimSpace(device), Password: password,
 		FPS: fps, Quality: quality, MaxWidth: maxWidth, STUN: splitComma(stun),
 		Insecure: insecure, CredentialsPath: credentials, FileRoots: fileRoots,
-		Audio: audio, AudioCommand: audioCmd,
+		Audio: audio, AudioCommand: audioCmd, AudioCodec: audioCodec,
 		Logger: log.New(os.Stdout, "", log.LstdFlags),
 	})
 	if err := a.Run(ctx); err != nil {

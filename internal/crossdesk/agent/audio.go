@@ -7,6 +7,7 @@ import (
 	"io"
 	"os/exec"
 	"runtime"
+	"strings"
 
 	"github.com/pion/webrtc/v4"
 )
@@ -20,12 +21,11 @@ import (
 //	14..15 format（1 = s16le）
 //	16..   PCM 数据
 const (
-	audioProtocol  = "iflygo-audio-v1"
-	audioHeader    = 16
-	audioRate      = 48000
-	audioChannels  = 2
-	audioFormatS16 = 1
-	audioChunk     = audioRate / 50 * audioChannels * 2 // 20ms
+	audioProtocol = "iflygo-audio-v1"
+	audioHeader   = 16
+	audioRate     = 48000
+	audioChannels = 2
+	audioChunk    = audioRate / 50 * audioChannels * 2 // 20ms s16le
 )
 
 var audioMagic = [4]byte{'C', 'D', 'A', '1'}
@@ -85,15 +85,15 @@ func newAudioSource(custom string) (AudioSource, error) {
 	return &commandAudio{command: command}, nil
 }
 
-// audioFrame 组装一帧 PCM。
-func audioFrame(seq uint32, pcm []byte) []byte {
-	frame := make([]byte, audioHeader+len(pcm))
+// audioFrame 组装一帧音频。
+func audioFrame(seq uint32, format uint16, payload []byte) []byte {
+	frame := make([]byte, audioHeader+len(payload))
 	copy(frame[0:4], audioMagic[:])
 	binary.LittleEndian.PutUint32(frame[4:8], seq)
 	binary.LittleEndian.PutUint32(frame[8:12], audioRate)
 	binary.LittleEndian.PutUint16(frame[12:14], audioChannels)
-	binary.LittleEndian.PutUint16(frame[14:16], audioFormatS16)
-	copy(frame[audioHeader:], pcm)
+	binary.LittleEndian.PutUint16(frame[14:16], format)
+	copy(frame[audioHeader:], payload)
 	return frame
 }
 
@@ -141,6 +141,12 @@ func (a *Agent) audioLoop(ctx context.Context) {
 	defer reader.Close()
 	a.log.Printf("🎙️ 音频采集已启动")
 	defer a.log.Printf("🎙️ 音频采集已停止")
+	codec := strings.ToLower(strings.TrimSpace(a.cfg.AudioCodec))
+	if codec != "pcm" {
+		codec = "adpcm"
+	}
+	encoder := &adpcmEncoder{}
+	reset := true
 	buf := make([]byte, audioChunk)
 	var seq uint32
 	for {
@@ -156,29 +162,48 @@ func (a *Agent) audioLoop(ctx context.Context) {
 			return
 		}
 		seq++
-		a.broadcastAudio(audioFrame(seq, buf))
+		format := uint16(audioFormatPCM)
+		payload := buf
+		if codec == "adpcm" {
+			// 每 250ms 重置一次编码状态，便于新客户端在丢帧后重新同步。
+			if reset || seq%12 == 1 {
+				encoder.reset()
+				format = audioFormatADPCMReset
+			} else {
+				format = audioFormatADPCM
+			}
+			reset = false
+			payload = encoder.encode(buf)
+		}
+		if !a.broadcastAudio(audioFrame(seq, format, payload)) && codec == "adpcm" {
+			reset = true
+		}
 	}
 }
 
-func (a *Agent) broadcastAudio(frame []byte) {
+func (a *Agent) broadcastAudio(frame []byte) bool {
 	a.mu.Lock()
 	list := make([]*session, 0, len(a.sessions))
 	for _, s := range a.sessions {
 		list = append(list, s)
 	}
 	a.mu.Unlock()
+	ok := true
 	for _, s := range list {
-		s.sendAudio(frame)
+		if !s.sendAudio(frame) {
+			ok = false
+		}
 	}
+	return ok
 }
 
-func (s *session) sendAudio(frame []byte) {
+func (s *session) sendAudio(frame []byte) bool {
 	dc := s.audioChannel
 	if dc == nil || dc.ReadyState() != webrtc.DataChannelStateOpen {
-		return
+		return true
 	}
 	if dc.BufferedAmount() > 256*1024 {
-		return
+		return false
 	}
-	_ = dc.Send(frame)
+	return dc.Send(frame) == nil
 }

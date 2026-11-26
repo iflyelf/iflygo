@@ -50,6 +50,7 @@ type Config struct {
 	// Audio 启用音频采集；AudioCommand 为空时使用平台默认命令。
 	Audio        bool
 	AudioCommand string
+	AudioCodec   string
 	// AudioSource 可注入测试实现。
 	AudioSource AudioSource
 }

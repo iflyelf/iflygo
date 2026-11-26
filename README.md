@@ -662,6 +662,7 @@ docker compose up -d
 > Windows 使用 GDI + SendInput；macOS 需授予“屏幕录制/辅助功能”权限。
 > 音频在 Linux 上默认使用 `parec`/`ffmpeg` 采集系统声音，其他平台可用
 > `--audio-cmd` 指定输出 48kHz 双声道 s16le PCM 的采集命令。
+> 默认使用 IMA ADPCM（约 384 kbps），可用 `--audio-codec pcm` 切回 1.5 Mbps PCM。
 > Wayland 原生会话、Windows/macOS 原生音频采集仍需平台原生层；
 > 官方 CrossDesk 客户端使用 WebRTC 视频，与本 Agent 的 JPEG 画面通道不互通
 > （iFlyGo 内置 Web 客户端已适配）。

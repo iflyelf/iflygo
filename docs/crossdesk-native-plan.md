@@ -84,7 +84,8 @@ CrossDesk 不是单一服务，而是完整的跨平台远控产品：
   - 路径穿越与符号链接拒绝，上传永不覆盖同名文件；
   - FileChunk/ACK 协议兼容内置 Web 客户端；
 - PCM 音频播放：
-  - `iflygo-audio-v1` 无序 DataChannel，20ms s16le 48kHz 双声道；
+  - `iflygo-audio-v1` 可靠 DataChannel，20ms 48kHz 双声道；
+  - IMA ADPCM（约 384 kbps）默认开启，每 250ms 重置同步；可切回 PCM；
   - Linux 默认 `parec` / `ffmpeg -f pulse`，其他平台可用 `--audio-cmd`；
   - 内置 Web 客户端使用 Web Audio 播放，音频按钮按需启停采集；
   - 客户端 `audio_capture` 控制采集生命周期；
