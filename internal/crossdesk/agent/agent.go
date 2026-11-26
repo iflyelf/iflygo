@@ -53,6 +53,12 @@ type Config struct {
 	AudioCodec   string
 	// AudioSource 可注入测试实现。
 	AudioSource AudioSource
+	// VideoCodec 启用 WebRTC 视频轨道（vp8/h264），需要 ffmpeg。
+	VideoCodec   string
+	VideoSize    string
+	VideoFPS     int
+	VideoBitrate int
+	VideoEncoder string
 }
 
 type credentials struct {
@@ -86,6 +92,8 @@ type Agent struct {
 	audio     AudioSource
 	audioMu   sync.Mutex
 	audioStop context.CancelFunc
+
+	video *videoPipeline
 
 	clipboard    Clipboard
 	clipSessions int
@@ -132,6 +140,13 @@ func (a *Agent) Run(ctx context.Context) error {
 	clipCtx, stopClip := context.WithCancel(ctx)
 	defer stopClip()
 	go a.clipboardLoop(clipCtx)
+	if a.video != nil {
+		if err := a.video.start(); err != nil {
+			a.log.Printf("⚠️ 视频轨道启动失败，回退到 JPEG: %v", err)
+			a.video.close()
+			a.video = nil
+		}
+	}
 
 	var failures int
 	for {
@@ -220,6 +235,11 @@ func (a *Agent) prepare() error {
 	a.files = newFileBrowser(a.cfg.FileRoots)
 	if len(a.cfg.FileRoots) > 0 && a.files == nil {
 		a.log.Printf("⚠️ 文件传输已禁用：没有可用的 --file-root 目录")
+	}
+	if pipeline, err := newVideoPipeline(a.cfg, a.log); err != nil {
+		a.log.Printf("⚠️ 视频轨道已禁用: %v", err)
+	} else {
+		a.video = pipeline
 	}
 	if a.cfg.Audio {
 		if a.cfg.AudioSource != nil {
@@ -344,6 +364,9 @@ func (a *Agent) closeResources() {
 		_ = a.clipboard.Close()
 	}
 	a.stopAudio()
+	if a.video != nil {
+		a.video.close()
+	}
 }
 
 func (a *Agent) runOnce(ctx context.Context) error {
@@ -705,6 +728,10 @@ func (a *Agent) captureLoop(ctx context.Context) {
 			continue
 		}
 		quality := int(a.videoQuality.Load())
+		if a.video != nil && a.video.ready() {
+			a.video.push(img)
+			continue
+		}
 		jpeg, w, h, err := encodeJPEG(img, a.cfg.MaxWidth, quality)
 		if err != nil {
 			if time.Since(lastErrAt) > 5*time.Second {

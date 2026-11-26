@@ -1818,7 +1818,7 @@ function applyNativeDisplays(hostInfo) {
   if (!hostInfo || hostInfo.agent !== "iflygo-go" ||
       !Array.isArray(hostInfo.displays) || !elements.displaySelect) return;
   const displays = hostInfo.displays.filter(d => d && Number.isInteger(d.id));
-  if (!displays.length || trackMap.size > 0) return;
+  if (!displays.length) return;
   nativeDisplays = displays;
   window.CrossDeskNativeDisplays = displays;
   elements.displaySelect.innerHTML = "";

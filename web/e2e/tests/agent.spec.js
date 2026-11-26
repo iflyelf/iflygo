@@ -10,29 +10,41 @@ const password = process.env.AGENT_PASSWORD || '';
 const hostClipboard = process.env.AGENT_CLIPBOARD_TEXT || '';
 const display = process.env.AGENT_DISPLAY || ':99';
 const fileRoot = process.env.AGENT_FILE_ROOT || '';
+const videoCodec = process.env.AGENT_VIDEO_CODEC || '';
 
 test.describe('CrossDesk 纯 Go Agent', () => {
   test.skip(!deviceID || !password, '未提供 AGENT_DEVICE_ID / AGENT_PASSWORD');
 
-  test('接收 JPEG 画面并完成键鼠交互', async ({ page }) => {
+  test('画面、剪贴板、文件、音频与多显示器', async ({ page }) => {
     await page.goto(`/crossdesk/web/?device_id=${encodeURIComponent(deviceID)}`);
     await page.fill('#transmission-pwd', password);
     await expect(page.locator('#connect')).toBeEnabled();
     await page.click('#connect');
 
-    await expect.poll(
-      () => page.evaluate(() => window.CrossDeskFrameView?.frames || 0),
-      { timeout: 30000 },
-    ).toBeGreaterThan(2);
+    if (videoCodec) {
+      await expect.poll(
+        () => page.evaluate(() => document.getElementById('video')?.videoWidth || 0),
+        { timeout: 30000 },
+      ).toBeGreaterThan(0);
+      await expect.poll(
+        () => page.evaluate(() => document.getElementById('video')?.currentTime || 0),
+        { timeout: 15000 },
+      ).toBeGreaterThan(0);
+    } else {
+      await expect.poll(
+        () => page.evaluate(() => window.CrossDeskFrameView?.frames || 0),
+        { timeout: 30000 },
+      ).toBeGreaterThan(2);
 
-    const canvas = await page.evaluate(() => {
-      const el = document.getElementById('native-frame-canvas');
-      return el ? { width: el.width, height: el.height, display: el.style.display } : null;
-    });
-    expect(canvas).not.toBeNull();
-    expect(canvas.width).toBeGreaterThan(0);
-    expect(canvas.height).toBeGreaterThan(0);
-    expect(canvas.display).toBe('block');
+      const canvas = await page.evaluate(() => {
+        const el = document.getElementById('native-frame-canvas');
+        return el ? { width: el.width, height: el.height, display: el.style.display } : null;
+      });
+      expect(canvas).not.toBeNull();
+      expect(canvas.width).toBeGreaterThan(0);
+      expect(canvas.height).toBeGreaterThan(0);
+      expect(canvas.display).toBe('block');
+    }
 
     // 多显示器：host_info 填充 Web 客户端的显示选择器。
     await expect.poll(
@@ -189,10 +201,18 @@ test.describe('CrossDesk 纯 Go Agent', () => {
     }
 
     // 画面仍在持续更新。
-    const before = await page.evaluate(() => window.CrossDeskFrameView.frames);
-    await expect.poll(
-      () => page.evaluate(() => window.CrossDeskFrameView.frames),
-      { timeout: 10000 },
-    ).toBeGreaterThan(before);
+    if (videoCodec) {
+      const before = await page.evaluate(() => document.getElementById('video')?.currentTime || 0);
+      await expect.poll(
+        () => page.evaluate(() => document.getElementById('video')?.currentTime || 0),
+        { timeout: 10000 },
+      ).toBeGreaterThan(before);
+    } else {
+      const before = await page.evaluate(() => window.CrossDeskFrameView.frames);
+      await expect.poll(
+        () => page.evaluate(() => window.CrossDeskFrameView.frames),
+        { timeout: 10000 },
+      ).toBeGreaterThan(before);
+    }
   });
 });

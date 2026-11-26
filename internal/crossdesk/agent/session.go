@@ -201,6 +201,11 @@ func newSession(a *Agent, guest string) (*session, error) {
 		}
 	})
 
+	if a.video != nil && a.video.track != nil {
+		if _, err := pc.AddTrack(a.video.track); err != nil {
+			a.log.Printf("⚠️ 添加视频轨道失败: %v", err)
+		}
+	}
 	offer, err := pc.CreateOffer(nil)
 	if err != nil {
 		s.close()

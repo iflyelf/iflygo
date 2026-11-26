@@ -117,10 +117,16 @@ func cmdCrossDesk(args []string) {
 	audio := fs.Bool("audio", false, "启用音频采集（host）")
 	audioCmd := fs.String("audio-cmd", "", "音频采集命令，输出 48kHz 双声道 s16le PCM（host）")
 	audioCodec := fs.String("audio-codec", "adpcm", "音频编码：adpcm（约 384kbps）或 pcm（1.5Mbps）")
+	videoCodec := fs.String("video-codec", "", "WebRTC 视频编码：vp8 / h264（需要 ffmpeg；默认 JPEG 帧）")
+	videoSize := fs.String("video-size", "1280x720", "视频轨道分辨率")
+	videoFPS := fs.Int("video-fps", 30, "视频轨道帧率")
+	videoBitrate := fs.Int("video-bitrate", 2500, "视频轨道码率（kbps）")
+	videoEncoder := fs.String("video-encoder", "", "自定义编码命令（stdin=RGBA，stdout=IVF/H264）")
 	fs.Parse(args[1:])
 
 	if action == "host" {
-		cmdCrossDeskHost(*server, *device, *pass, *insecure, *fps, *quality, *maxWidth, *stun, *credentials, *fileRoots, *audio, *audioCmd, *audioCodec)
+		cmdCrossDeskHost(*server, *device, *pass, *insecure, *fps, *quality, *maxWidth, *stun, *credentials, *fileRoots, *audio, *audioCmd, *audioCodec,
+			*videoCodec, *videoSize, *videoFPS, *videoBitrate, *videoEncoder)
 		return
 	}
 
@@ -158,7 +164,8 @@ func cmdCrossDesk(args []string) {
 	}
 }
 
-func cmdCrossDeskHost(server, device, password string, insecure bool, fps, quality, maxWidth int, stun, credentials string, fileRoots []string, audio bool, audioCmd, audioCodec string) {
+func cmdCrossDeskHost(server, device, password string, insecure bool, fps, quality, maxWidth int, stun, credentials string, fileRoots []string, audio bool, audioCmd, audioCodec string,
+	videoCodec, videoSize string, videoFPS, videoBitrate int, videoEncoder string) {
 	if strings.TrimSpace(server) == "" {
 		fmt.Fprintln(os.Stderr, "❌ --server 必填")
 		os.Exit(2)
@@ -171,6 +178,8 @@ func cmdCrossDeskHost(server, device, password string, insecure bool, fps, quali
 		FPS: fps, Quality: quality, MaxWidth: maxWidth, STUN: splitComma(stun),
 		Insecure: insecure, CredentialsPath: credentials, FileRoots: fileRoots,
 		Audio: audio, AudioCommand: audioCmd, AudioCodec: audioCodec,
+		VideoCodec: videoCodec, VideoSize: videoSize, VideoFPS: videoFPS,
+		VideoBitrate: videoBitrate, VideoEncoder: videoEncoder,
 		Logger: log.New(os.Stdout, "", log.LstdFlags),
 	})
 	if err := a.Run(ctx); err != nil {

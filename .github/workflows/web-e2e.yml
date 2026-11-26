@@ -150,7 +150,7 @@ jobs:
       - name: 安装 X11 依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb x11-utils x11-xserver-utils xclip
+          sudo apt-get install -y xvfb x11-utils x11-xserver-utils xclip ffmpeg
 
       - name: grdp 子模块补丁
         run: |
@@ -209,6 +209,7 @@ jobs:
             --credentials /tmp/agent-device.json \
             --file-root /tmp/agent-files \
             --audio --audio-cmd "python3 scripts/audio_silence.py" \
+            --video-codec vp8 --video-size 1280x720 --video-bitrate 2000 \
             --fps 10 --quality 65 > /tmp/agent.log 2>&1 &
           for i in $(seq 1 60); do
             if [ -s /tmp/agent-device.json ]; then break; fi
@@ -230,6 +231,7 @@ jobs:
           AGENT_CLIPBOARD_TEXT: agent-clipboard-e2e
           AGENT_DISPLAY: ':99'
           AGENT_FILE_ROOT: /tmp/agent-files
+          AGENT_VIDEO_CODEC: vp8
         run: npx playwright test tests/agent.spec.js
 
       - name: 失败时输出日志

@@ -637,7 +637,8 @@ docker compose up -d
 > **Phase 3 纯 Go 静态 Agent**：`iflygo-client crossdesk host` 可直接作为主机端，
 > 使用 X11（Linux）、GDI（Windows）、CoreGraphics（macOS）采集屏幕，通过 Pion
 > DataChannel 发送分片 JPEG，注入键鼠事件，并支持双向文本剪贴板、
-> 画质/帧率协商、多显示器切换、受限目录文件传输与 PCM 音频播放。
+> 画质/帧率协商、多显示器切换、受限目录文件传输、ADPCM 音频，
+> 以及可选的 WebRTC VP8/H.264 视频轨道（ffmpeg 编码）。
 > 二进制保持 `CGO_ENABLED=0`，可交叉编译：
 > ```bash
 > # 首次运行自动注册设备并保存凭据；也可显式指定 --device/--password
@@ -649,6 +650,9 @@ docker compose up -d
 > iflygo-client crossdesk host --server https://iflygo.example.com --file-root /srv/share
 > # 启用音频（Linux 默认 PulseAudio/PipeWire；其他平台用 --audio-cmd）
 > iflygo-client crossdesk host --server https://iflygo.example.com --audio
+> # 可选 WebRTC 视频轨道（需要 ffmpeg；默认仍为 JPEG 帧通道）
+> iflygo-client crossdesk host --server https://iflygo.example.com \
+>   --video-codec vp8 --video-size 1280x720 --video-bitrate 2500
 > ```
 >
 > 文件传输仅限 `--file-root` 指定目录：路径穿越与符号链接被拒绝，
@@ -663,6 +667,10 @@ docker compose up -d
 > 音频在 Linux 上默认使用 `parec`/`ffmpeg` 采集系统声音，其他平台可用
 > `--audio-cmd` 指定输出 48kHz 双声道 s16le PCM 的采集命令。
 > 默认使用 IMA ADPCM（约 384 kbps），可用 `--audio-codec pcm` 切回 1.5 Mbps PCM。
+>
+> 视频轨道：`--video-codec vp8` 或 `h264` 时，Agent 通过 ffmpeg 编码并发送标准
+> WebRTC 视频轨道，浏览器原生解码，带宽显著低于 JPEG；未启用时继续使用 JPEG 帧通道。
+> H.264 模式为官方 CrossDesk 客户端互通预留，仍需真机兼容性回归。
 > Wayland 原生会话、Windows/macOS 原生音频采集仍需平台原生层；
 > 官方 CrossDesk 客户端使用 WebRTC 视频，与本 Agent 的 JPEG 画面通道不互通
 > （iFlyGo 内置 Web 客户端已适配）。
