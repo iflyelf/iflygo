@@ -153,7 +153,9 @@ func ExternalBinaryDownload(s *svc.ServiceContext) http.HandlerFunc {
 		// 名称按大小写不敏感匹配（URL 已转小写，配置里可能保留大写）。
 		var asset *extbin.Entry
 		for i := range entries {
-			if strings.EqualFold(entries[i].Name, name) {
+			// 允许白名单条目带 .exe（如 install-windows-monitor.exe），
+			// 也兼容访问时不带扩展名的写法。
+			if strings.EqualFold(entries[i].Name, name) || strings.EqualFold(entries[i].Name, name+".exe") {
 				asset = &entries[i]
 				break
 			}
