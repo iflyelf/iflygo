@@ -114,10 +114,12 @@ func cmdCrossDesk(args []string) {
 	credentials := fs.String("credentials", "", "设备凭据保存路径（host，默认 ~/.config/iflygo/crossdesk-device.json）")
 	fileRoots := &stringList{}
 	fs.Var(fileRoots, "file-root", "允许文件浏览/传输的目录（可重复，host）")
+	audio := fs.Bool("audio", false, "启用音频采集（host）")
+	audioCmd := fs.String("audio-cmd", "", "音频采集命令，输出 48kHz 双声道 s16le PCM（host）")
 	fs.Parse(args[1:])
 
 	if action == "host" {
-		cmdCrossDeskHost(*server, *device, *pass, *insecure, *fps, *quality, *maxWidth, *stun, *credentials, *fileRoots)
+		cmdCrossDeskHost(*server, *device, *pass, *insecure, *fps, *quality, *maxWidth, *stun, *credentials, *fileRoots, *audio, *audioCmd)
 		return
 	}
 
@@ -155,7 +157,7 @@ func cmdCrossDesk(args []string) {
 	}
 }
 
-func cmdCrossDeskHost(server, device, password string, insecure bool, fps, quality, maxWidth int, stun, credentials string, fileRoots []string) {
+func cmdCrossDeskHost(server, device, password string, insecure bool, fps, quality, maxWidth int, stun, credentials string, fileRoots []string, audio bool, audioCmd string) {
 	if strings.TrimSpace(server) == "" {
 		fmt.Fprintln(os.Stderr, "❌ --server 必填")
 		os.Exit(2)
@@ -167,6 +169,7 @@ func cmdCrossDeskHost(server, device, password string, insecure bool, fps, quali
 		ServerURL: strings.TrimSpace(server), DeviceID: strings.TrimSpace(device), Password: password,
 		FPS: fps, Quality: quality, MaxWidth: maxWidth, STUN: splitComma(stun),
 		Insecure: insecure, CredentialsPath: credentials, FileRoots: fileRoots,
+		Audio: audio, AudioCommand: audioCmd,
 		Logger: log.New(os.Stdout, "", log.LstdFlags),
 	})
 	if err := a.Run(ctx); err != nil {

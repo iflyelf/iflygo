@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -157,6 +158,34 @@ func (f *fakeInput) SetDisplay(x, y, w, h int) {
 	f.mu.Unlock()
 }
 
+type fakeAudio struct {
+	started atomic.Bool
+}
+
+func (f *fakeAudio) Start(ctx context.Context) (io.ReadCloser, error) {
+	f.started.Store(true)
+	reader, writer := io.Pipe()
+	go func() {
+		defer writer.Close()
+		chunk := make([]byte, audioChunk)
+		ticker := time.NewTicker(20 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if _, err := writer.Write(chunk); err != nil {
+					return
+				}
+			}
+		}
+	}()
+	return reader, nil
+}
+
+func (f *fakeAudio) Close() error { return nil }
+
 type fakeClipboard struct {
 	mu     sync.Mutex
 	text   string
@@ -201,7 +230,7 @@ func TestAgentStreamsFramesAndAcceptsInput(t *testing.T) {
 		CredentialsPath: t.TempDir() + "/device.json",
 		Logger:          log.New(io.Discard, "", 0),
 		Screen:          newFakeScreen(), Input: input, Clipboard: clip,
-		FileRoots: []string{root},
+		FileRoots: []string{root}, Audio: true, AudioSource: &fakeAudio{},
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -277,12 +306,29 @@ func TestAgentStreamsFramesAndAcceptsInput(t *testing.T) {
 	motionReady := make(chan *webrtc.DataChannel, 1)
 	clipReady := make(chan *webrtc.DataChannel, 1)
 	clipMessages := make(chan []byte, 16)
+	audioReady := make(chan *webrtc.DataChannel, 1)
+	audioPackets := make(chan []byte, 64)
 	fileReady := make(chan *webrtc.DataChannel, 1)
 	feedbackReady := make(chan *webrtc.DataChannel, 1)
 	filePackets := make(chan []byte, 64)
 	feedbackPackets := make(chan []byte, 64)
 	pc.OnDataChannel(func(dc *webrtc.DataChannel) {
 		switch dc.Label() {
+		case "iflygo-audio-v1":
+			dc.OnOpen(func() {
+				select {
+				case audioReady <- dc:
+				default:
+				}
+			})
+			dc.OnMessage(func(m webrtc.DataChannelMessage) {
+				if !m.IsString {
+					select {
+					case audioPackets <- append([]byte(nil), m.Data...):
+					default:
+					}
+				}
+			})
 		case "file":
 			dc.OnOpen(func() {
 				select {
@@ -622,6 +668,35 @@ settingsDone:
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+
+	// --- 音频 ---
+	var audioDC *webrtc.DataChannel
+	select {
+	case audioDC = <-audioReady:
+	case <-time.After(10 * time.Second):
+		t.Fatal("audio channel did not open")
+	}
+	if err := dc.SendText(`{"type":2,"audio_capture":true}`); err != nil {
+		t.Fatalf("enable audio: %v", err)
+	}
+	select {
+	case packet := <-audioPackets:
+		if len(packet) != audioHeader+audioChunk {
+			t.Fatalf("unexpected audio packet size: %d", len(packet))
+		}
+		if string(packet[0:4]) != "CDA1" ||
+			binary.LittleEndian.Uint32(packet[8:12]) != audioRate ||
+			binary.LittleEndian.Uint16(packet[12:14]) != audioChannels ||
+			binary.LittleEndian.Uint16(packet[14:16]) != audioFormatS16 {
+			t.Fatalf("bad audio header: %x", packet[:audioHeader])
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("audio packet not received")
+	}
+	if err := dc.SendText(`{"type":2,"audio_capture":false}`); err != nil {
+		t.Fatalf("disable audio: %v", err)
+	}
+	_ = audioDC
 
 	// --- 文件浏览与传输 ---
 	var fileDC, feedbackDC *webrtc.DataChannel

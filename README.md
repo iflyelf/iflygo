@@ -637,7 +637,8 @@ docker compose up -d
 > **Phase 3 纯 Go 静态 Agent**：`iflygo-client crossdesk host` 可直接作为主机端，
 > 使用 X11（Linux）、GDI（Windows）、CoreGraphics（macOS）采集屏幕，通过 Pion
 > DataChannel 发送分片 JPEG，注入键鼠事件，并支持双向文本剪贴板、
-> 画质/帧率协商、多显示器切换与受限目录文件传输。二进制保持 `CGO_ENABLED=0`，可交叉编译：
+> 画质/帧率协商、多显示器切换、受限目录文件传输与 PCM 音频播放。
+> 二进制保持 `CGO_ENABLED=0`，可交叉编译：
 > ```bash
 > # 首次运行自动注册设备并保存凭据；也可显式指定 --device/--password
 > iflygo-client crossdesk host --server https://iflygo.example.com
@@ -646,6 +647,8 @@ docker compose up -d
 >   --device 123456789 --password '******' --fps 15 --quality 70 --max-width 1920
 > # 开放文件浏览/传输（可重复；不指定则关闭）
 > iflygo-client crossdesk host --server https://iflygo.example.com --file-root /srv/share
+> # 启用音频（Linux 默认 PulseAudio/PipeWire；其他平台用 --audio-cmd）
+> iflygo-client crossdesk host --server https://iflygo.example.com --audio
 > ```
 >
 > 文件传输仅限 `--file-root` 指定目录：路径穿越与符号链接被拒绝，
@@ -657,7 +660,9 @@ docker compose up -d
 >
 > 平台支持：Linux 需 X11 会话（XWayland 只能捕获 X11 窗口，无法捕获原生 Wayland 桌面）；
 > Windows 使用 GDI + SendInput；macOS 需授予“屏幕录制/辅助功能”权限。
-> Wayland 原生会话与音频仍需平台原生层；
+> 音频在 Linux 上默认使用 `parec`/`ffmpeg` 采集系统声音，其他平台可用
+> `--audio-cmd` 指定输出 48kHz 双声道 s16le PCM 的采集命令。
+> Wayland 原生会话、Windows/macOS 原生音频采集仍需平台原生层；
 > 官方 CrossDesk 客户端使用 WebRTC 视频，与本 Agent 的 JPEG 画面通道不互通
 > （iFlyGo 内置 Web 客户端已适配）。
 >

@@ -208,6 +208,7 @@ jobs:
             --server http://127.0.0.1:18090 \
             --credentials /tmp/agent-device.json \
             --file-root /tmp/agent-files \
+            --audio --audio-cmd "python3 scripts/audio_silence.py" \
             --fps 10 --quality 65 > /tmp/agent.log 2>&1 &
           for i in $(seq 1 60); do
             if [ -s /tmp/agent-device.json ]; then break; fi

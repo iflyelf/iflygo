@@ -24,6 +24,8 @@ type session struct {
 
 	fileChannel     *webrtc.DataChannel
 	feedbackChannel *webrtc.DataChannel
+	audioChannel    *webrtc.DataChannel
+	audioOn         bool
 	rpcMu           sync.Mutex
 	pendingRPC      map[int64]chan map[string]any
 	nextRPCID       int64
@@ -69,6 +71,7 @@ type controlMessage struct {
 	Keyboard      *keyboardMessage      `json:"keyboard"`
 	VideoSettings *videoSettingsMessage `json:"video_settings"`
 	DisplayID     *int                  `json:"display_id"`
+	AudioCapture  *bool                 `json:"audio_capture"`
 }
 
 func newSession(a *Agent, guest string) (*session, error) {
@@ -110,6 +113,7 @@ func newSession(a *Agent, guest string) (*session, error) {
 				"agent": "iflygo-go", "platform": runtime.GOOS,
 				"supports_video_settings": true, "supports_clipboard": a.clipboard != nil,
 				"supports_file_browser": a.files != nil, "supports_web_file_browser": a.files != nil,
+				"supports_audio": a.audio != nil,
 				"host_name": func() string {
 					if a.files != nil {
 						return a.files.hostname
@@ -133,6 +137,14 @@ func newSession(a *Agent, guest string) (*session, error) {
 				}
 			})
 			clip.OnClose(func() { s.closeClipboard() })
+		}
+	}
+	if a.audio != nil {
+		audio, err := pc.CreateDataChannel("iflygo-audio-v1", &webrtc.DataChannelInit{
+			Ordered: &unordered, MaxRetransmits: &zeroRetransmits,
+		})
+		if err == nil {
+			s.audioChannel = audio
 		}
 	}
 	if a.files != nil {
@@ -297,6 +309,11 @@ func (s *session) onMessage(msg webrtc.DataChannelMessage) {
 	case 4:
 		if action.DisplayID != nil {
 			s.agent.setDisplay(*action.DisplayID)
+		}
+	case 2:
+		if action.AudioCapture != nil && s.agent.audio != nil {
+			s.audioOn = *action.AudioCapture
+			s.agent.refreshAudio()
 		}
 	}
 }

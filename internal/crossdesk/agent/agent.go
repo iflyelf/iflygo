@@ -47,6 +47,11 @@ type Config struct {
 	Clipboard Clipboard
 	// FileRoots 允许浏览/传输的目录；为空时禁用文件传输。
 	FileRoots []string
+	// Audio 启用音频采集；AudioCommand 为空时使用平台默认命令。
+	Audio        bool
+	AudioCommand string
+	// AudioSource 可注入测试实现。
+	AudioSource AudioSource
 }
 
 type credentials struct {
@@ -76,6 +81,10 @@ type Agent struct {
 	capStop  context.CancelFunc
 
 	files *fileBrowser
+
+	audio     AudioSource
+	audioMu   sync.Mutex
+	audioStop context.CancelFunc
 
 	clipboard    Clipboard
 	clipSessions int
@@ -211,6 +220,15 @@ func (a *Agent) prepare() error {
 	if len(a.cfg.FileRoots) > 0 && a.files == nil {
 		a.log.Printf("⚠️ 文件传输已禁用：没有可用的 --file-root 目录")
 	}
+	if a.cfg.Audio {
+		if a.cfg.AudioSource != nil {
+			a.audio = a.cfg.AudioSource
+		} else if source, err := newAudioSource(a.cfg.AudioCommand); err != nil {
+			a.log.Printf("⚠️ 音频已禁用: %v", err)
+		} else {
+			a.audio = source
+		}
+	}
 	a.refreshDisplays()
 	return nil
 }
@@ -324,6 +342,7 @@ func (a *Agent) closeResources() {
 	if a.clipboard != nil {
 		_ = a.clipboard.Close()
 	}
+	a.stopAudio()
 }
 
 func (a *Agent) runOnce(ctx context.Context) error {
@@ -629,6 +648,7 @@ func (a *Agent) closeAllSessions() {
 	for _, s := range sessions {
 		s.close()
 	}
+	a.stopAudio()
 }
 
 // dropSession 由 session 关闭时调用；只有当前映射仍指向它时才清理。
@@ -649,6 +669,7 @@ func (a *Agent) dropSession(s *session) {
 	if current {
 		a.log.Printf("👋 连接结束: %s", s.guest)
 	}
+	a.refreshAudio()
 }
 
 func (a *Agent) captureLoop(ctx context.Context) {

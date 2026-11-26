@@ -6,6 +6,7 @@ Upstream: https://github.com/kunkundi/crossdesk-web-client
 License: see LICENSE in this directory.
 
 Modifications by iFlyGo: `frame_view.js` renders the pure-Go agent's
-chunked JPEG DataChannel frames; `web_client.js` binds binary frame messages
-and resets the frame view on teardown. These modifications remain under
+chunked JPEG DataChannel frames; `audio_pcm.js` plays the agent's PCM audio
+channel; `web_client.js` binds binary frame/audio messages, wires the audio
+button and resets state on teardown. These modifications remain under
 LGPL-3.0 as part of this separate web application.

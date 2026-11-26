@@ -83,6 +83,11 @@ CrossDesk 不是单一服务，而是完整的跨平台远控产品：
   - 目录下载先向浏览器发送 `prepare` 预留子目录；
   - 路径穿越与符号链接拒绝，上传永不覆盖同名文件；
   - FileChunk/ACK 协议兼容内置 Web 客户端；
+- PCM 音频播放：
+  - `iflygo-audio-v1` 无序 DataChannel，20ms s16le 48kHz 双声道；
+  - Linux 默认 `parec` / `ffmpeg -f pulse`，其他平台可用 `--audio-cmd`；
+  - 内置 Web 客户端使用 Web Audio 播放，音频按钮按需启停采集；
+  - 客户端 `audio_capture` 控制采集生命周期；
 - 多显示器枚举与切换：
   - Linux：RandR CRTC；
   - Windows：EnumDisplayMonitors；
@@ -98,13 +103,13 @@ CrossDesk 不是单一服务，而是完整的跨平台远控产品：
 
 - 未使用 H.264/AV1（纯 Go 无成熟编码器），采用分片 JPEG；
 - 由 iFlyGo 内置 Web 客户端渲染，官方 CrossDesk 客户端不识别该画面通道；
-- 音频与 Wayland 原生截图仍需后续原生层。
+- Windows/macOS 原生音频采集、Wayland 原生截图仍需后续原生层。
 
 后续可演进：
 
 - 接入 WebRTC 视频轨道（需 CGO/原生编码器或硬件编码 SDK）；
 - 平台音频采集与 Opus；
-- 硬件编码；
+- Windows/macOS 原生音频采集、硬件编码；
 - 隐私屏、登录前远控、服务安装与自动升级。
 
 ### Phase 4：DeskHub / 群控 / 移动端 / CLI / MCP
@@ -174,7 +179,7 @@ CrossDesk 不是单一服务，而是完整的跨平台远控产品：
 ### 尚未完成（后续阶段）
 
 - 官方 CrossDesk 客户端与本 Agent 的视频互通（需 H.264/VP8 编码）；
-- 音频采集/播放；
+- Windows/macOS 原生音频采集；
 - Wayland 原生截图；
 - Android/iOS/HarmonyOS NEXT 原生控制端；
 - 媒体层的 MCP/CLI 远程操作（当前仅为管理面）。
@@ -192,7 +197,7 @@ CrossDesk 不是单一服务，而是完整的跨平台远控产品：
 
 1. 用官方桌面/Web 客户端做 Phase 1 协议兼容性回归；
 2. 补齐官方客户端与纯 Go Agent 的视频互通（H.264/VP8）；
-3. 音频；
+3. Windows/macOS 原生音频采集；
 4. 移动端/CLI/MCP 的媒体操作。
 
 > 当前 CrossDesk 官方客户端仍使用 WebRTC 视频；纯 Go Agent 提供 JPEG 画面通道，

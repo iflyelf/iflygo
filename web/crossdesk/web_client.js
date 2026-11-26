@@ -624,14 +624,25 @@ function setAudioToggleVisible(visible) {
   elements.audioToggleBtn.disabled = !visible;
 }
 
-function updateAudioToggleState() {
-  if (!elements.audioToggleBtn || !elements.audio) return;
+function pcmAudio() {
+  return window.CrossDeskPCMAudio;
+}
 
-  const hasAudio = !!elements.audio.srcObject;
+function hasPcmAudio() {
+  return pcmAudio()?.available === true;
+}
+
+function updateAudioToggleState() {
+  if (!elements.audioToggleBtn) return;
+  const hasTrack = !!elements.audio?.srcObject;
+  const hasPcm = hasPcmAudio();
+  const hasAudio = hasTrack || hasPcm;
   setAudioToggleVisible(hasAudio);
   if (!hasAudio) return;
 
-  const isPlaying = !elements.audio.paused && !elements.audio.muted;
+  const isPlaying = hasTrack
+    ? (!elements.audio.paused && !elements.audio.muted)
+    : pcmAudio().enabled;
   elements.audioToggleBtn.classList.toggle("audio-is-playing", isPlaying);
   const actionLabel = isPlaying ? "声音" : "静音";
   const label = document.getElementById("audio-toggle-label");
@@ -647,7 +658,14 @@ function updateAudioToggleState() {
 }
 
 async function tryPlayRemoteAudio() {
-  if (!elements.audio?.srcObject) return false;
+  if (!elements.audio?.srcObject) {
+    const pcm = pcmAudio();
+    if (!pcm?.available) return false;
+    const ok = await pcm.enable();
+    if (ok) control?.sendAudioCapture(true);
+    updateAudioToggleState();
+    return ok;
+  }
 
   elements.audio.muted = false;
   try {
@@ -662,11 +680,19 @@ async function tryPlayRemoteAudio() {
 }
 
 async function toggleRemoteAudio() {
-  if (!elements.audio?.srcObject) return;
+  const hasTrack = !!elements.audio?.srcObject;
+  const pcm = pcmAudio();
+  if (!hasTrack && !pcm?.available) return;
 
-  const isPlaying = !elements.audio.paused && !elements.audio.muted;
+  const isPlaying = hasTrack
+    ? (!elements.audio.paused && !elements.audio.muted)
+    : pcm.enabled;
   if (isPlaying) {
-    elements.audio.muted = true;
+    if (hasTrack) elements.audio.muted = true;
+    else {
+      pcm.disable();
+      control?.sendAudioCapture(false);
+    }
     updateAudioToggleState();
     return;
   }
@@ -1404,6 +1430,11 @@ function createPeerConnection() {
   peer.ondatachannel = (event) => {
     if (peer !== pc) return;
     const channel = event.channel;
+    if (channel.label === "iflygo-audio-v1") {
+      window.CrossDeskPCMAudio?.attach(channel);
+      updateAudioToggleState();
+      return;
+    }
     if (peer.crossdeskFiles?.attach(channel)) return;
     if (peer.crossdeskClipboard?.attach(channel)) return;
     if (channel.label === "crossdesk-qos-v1") {
@@ -1890,6 +1921,7 @@ if (elements.audioToggleBtn) {
     void toggleRemoteAudio();
   });
 }
+window.addEventListener("crossdesk-pcm-audio", () => updateAudioToggleState());
 
 if (elements.retrySignalingBtn) {
   elements.retrySignalingBtn.addEventListener("click", retrySignalingNow);

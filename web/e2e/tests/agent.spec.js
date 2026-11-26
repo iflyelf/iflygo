@@ -155,6 +155,25 @@ test.describe('CrossDesk 纯 Go Agent', () => {
       }, { timeout: 15000 }).toBe('agent-upload-e2e');
     }
 
+    // 音频：点击音频按钮后接收 PCM 并播放。
+    await expect.poll(
+      () => page.evaluate(() => !!window.CrossDeskPCMAudio?.available &&
+        !document.getElementById('audio-toggle').disabled),
+      { timeout: 10000 },
+    ).toBe(true);
+    await page.evaluate(() => document.getElementById('audio-toggle').click());
+    await expect.poll(
+      () => page.evaluate(() => window.CrossDeskPCMAudio?.samples || 0),
+      { timeout: 15000 },
+    ).toBeGreaterThan(0);
+    await expect.poll(
+      () => page.evaluate(() => window.CrossDeskPCMAudio?.enabled),
+    ).toBe(true);
+    await page.evaluate(() => document.getElementById('audio-toggle').click());
+    await expect.poll(
+      () => page.evaluate(() => window.CrossDeskPCMAudio?.enabled),
+    ).toBe(false);
+
     // 浏览器 -> 主机剪贴板（仅 Linux CI 的 Xvfb 环境验证）。
     if (hostClipboard && process.platform === 'linux') {
       await page.evaluate(() => navigator.clipboard.writeText('browser-to-agent'));
