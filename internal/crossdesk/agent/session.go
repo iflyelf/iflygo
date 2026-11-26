@@ -24,6 +24,9 @@ type session struct {
 
 	fileChannel     *webrtc.DataChannel
 	feedbackChannel *webrtc.DataChannel
+	rpcMu           sync.Mutex
+	pendingRPC      map[int64]chan map[string]any
+	nextRPCID       int64
 	fileMu          sync.Mutex
 	uploads         map[uint32]string
 	incoming        map[uint32]*incomingUpload
@@ -77,6 +80,7 @@ func newSession(a *Agent, guest string) (*session, error) {
 		agent: a, guest: guest, pc: pc,
 		uploads: map[uint32]string{}, incoming: map[uint32]*incomingUpload{},
 		cancelled: map[uint32]bool{}, fileDone: make(chan struct{}),
+		pendingRPC: map[int64]chan map[string]any{},
 	}
 
 	ordered, unordered := true, false

@@ -180,8 +180,10 @@ jobs:
           export DISPLAY=:99
           xsetroot -solid '#1e3a5f'
           printf 'agent-clipboard-e2e' | nohup xclip -selection clipboard -in -loops 0 > /tmp/xclip.log 2>&1 &
-          mkdir -p /tmp/agent-files
+          mkdir -p /tmp/agent-files/folder/sub /tmp/agent-files/folder/empty
           printf 'agent-file-e2e' > /tmp/agent-files/report.txt
+          printf 'A' > /tmp/agent-files/folder/a.txt
+          printf 'B' > /tmp/agent-files/folder/sub/b.txt
           nohup xmessage -geometry 700x300+60+60 -title "iFlyGo Agent" "CrossDesk pure-Go agent" > /tmp/xmessage.log 2>&1 &
 
       - name: 启动控制台与 Agent

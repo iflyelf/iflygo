@@ -649,15 +649,15 @@ docker compose up -d
 > ```
 >
 > 文件传输仅限 `--file-root` 指定目录：路径穿越与符号链接被拒绝，
-> 上传使用唯一文件名且不覆盖已有文件；支持目录浏览、单文件下载、文件/目录上传。
-> 目录下载仍需后续实现。
+> 上传使用唯一文件名且不覆盖已有文件；支持目录浏览、文件/目录下载、文件/目录上传。
+> 目录下载会先向浏览器预留子目录，需要浏览器选择本机目录（File System Access/OPFS）。
 > 首次运行会自动注册设备，并生成 Ed25519 设备密钥（保存于
 > `~/.config/iflygo/crossdesk-device.json`，权限 0600）；已有设备首次绑定密钥时
 > 需要一次 `--password`，绑定后仅用密钥签名登录。
 >
 > 平台支持：Linux 需 X11 会话（XWayland 只能捕获 X11 窗口，无法捕获原生 Wayland 桌面）；
 > Windows 使用 GDI + SendInput；macOS 需授予“屏幕录制/辅助功能”权限。
-> Wayland 原生会话、音频与目录下载仍需平台原生层；
+> Wayland 原生会话与音频仍需平台原生层；
 > 官方 CrossDesk 客户端使用 WebRTC 视频，与本 Agent 的 JPEG 画面通道不互通
 > （iFlyGo 内置 Web 客户端已适配）。
 >

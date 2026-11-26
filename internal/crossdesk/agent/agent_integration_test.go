@@ -733,6 +733,89 @@ settingsDone:
 			string(packet[fileHeaderSize:fileHeaderSize+nameSize]), string(downloadPayload))
 	}
 
+	// 目录下载：Agent 先向浏览器发送 prepare，再按预留 ID 发送文件。
+	folder := filepath.Join(root, "folder")
+	if err := os.MkdirAll(filepath.Join(folder, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(folder, "empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(folder, "a.txt"), []byte("A"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(folder, "sub", "b.txt"), []byte("B"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sendRPC(106, map[string]any{
+		"op": "copy", "paths": []string{folder}, "destination": "/local/test", "transfer_id": "dir-download",
+	})
+	var prepare map[string]any
+	copyOK := false
+	prepDeadline := time.After(8 * time.Second)
+	for prepare == nil || !copyOK {
+		select {
+		case data := <-controlText:
+			var msg map[string]any
+			if json.Unmarshal(data, &msg) != nil || msg["type"] != "file_browser" {
+				continue
+			}
+			if msg["op"] == "reply" {
+				if v, ok := msg["id"].(float64); ok && int64(v) == 106 {
+					if msg["ok"] != true {
+						t.Fatalf("directory copy rejected: %v", msg)
+					}
+					copyOK = true
+				}
+			} else if msg["op"] == "prepare" {
+				prepare = msg
+			}
+		case <-prepDeadline:
+			t.Fatalf("prepare not received (copyOK=%v)", copyOK)
+		}
+	}
+	items := prepare["items"].([]any)
+	dirByID := map[uint32]string{}
+	dirs := map[string]bool{}
+	for _, raw := range items {
+		item, _ := raw.(map[string]any)
+		dir, _ := item["directory"].(string)
+		dirs[dir] = true
+		if id, ok := item["file_id"].(float64); ok && id != 0 {
+			dirByID[uint32(id)] = dir
+		}
+	}
+	for _, want := range []string{"folder", "folder/sub", "folder/empty"} {
+		if !dirs[want] {
+			t.Fatalf("prepare missing directory %q: %v", want, dirs)
+		}
+	}
+	reply := map[string]any{"type": "file_browser", "version": 1, "id": prepare["id"], "op": "reply", "ok": true}
+	replyData, _ := json.Marshal(reply)
+	if err := dc.SendText(string(replyData)); err != nil {
+		t.Fatalf("send prepare reply: %v", err)
+	}
+	gotFiles := map[string]string{}
+	fileDeadline := time.After(8 * time.Second)
+	for len(gotFiles) < 2 {
+		select {
+		case packet := <-filePackets:
+			if len(packet) < fileHeaderSize || binary.LittleEndian.Uint32(packet[0:4]) != fileChunkMagic {
+				continue
+			}
+			id := binary.LittleEndian.Uint32(packet[4:8])
+			nameSize := int(binary.LittleEndian.Uint16(packet[28:30]))
+			name := string(packet[fileHeaderSize : fileHeaderSize+nameSize])
+			payload := string(packet[fileHeaderSize+nameSize:])
+			gotFiles[filepath.ToSlash(filepath.Join(dirByID[id], name))] = payload
+		case <-fileDeadline:
+			t.Fatalf("directory download files missing: %v", gotFiles)
+		}
+	}
+	if gotFiles["folder/a.txt"] != "A" || gotFiles["folder/sub/b.txt"] != "B" {
+		t.Fatalf("unexpected directory download: %v", gotFiles)
+	}
+
 	// 上传：Guest -> Agent。
 	sendRPC(105, map[string]any{
 		"op": "prepare", "destination": root,

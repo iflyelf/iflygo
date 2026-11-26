@@ -103,6 +103,42 @@ test.describe('CrossDesk 纯 Go Agent', () => {
       const downloaded = await download.path();
       expect(fs.readFileSync(downloaded, 'utf8')).toBe('agent-file-e2e');
 
+      // 目录下载：使用 OPFS 作为本机目录，验证 prepare 预留与子目录结构。
+      const folderResult = await page.evaluate(async () => {
+        const opfs = await navigator.storage.getDirectory();
+        await opfs.removeEntry('folder', { recursive: true }).catch(() => {});
+        const local = new window.CrossDeskLocalDirectory(opfs);
+        const browser = window.CrossDeskFiles.browser;
+        browser.selectLocal(local);
+        window.CrossDeskFileManager.open(window.CrossDeskFiles);
+        const roots = await browser.listRemote('@roots');
+        const listing = await browser.listRemote(roots.entries[0].path);
+        const folder = listing.entries.find(entry => entry.directory && entry.name === 'folder');
+        if (!folder) throw new Error('folder entry missing');
+        await browser.download([folder], local.base);
+        const read = async parts => {
+          let dir = opfs;
+          for (const part of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(part);
+          const handle = await dir.getFileHandle(parts[parts.length - 1]);
+          return (await handle.getFile()).text();
+        };
+        for (let i = 0; i < 100; i++) {
+          try {
+            const a = await read(['folder', 'a.txt']);
+            const b = await read(['folder', 'sub', 'b.txt']);
+            let empty = true;
+            try {
+              const root = await opfs.getDirectoryHandle('folder');
+              await root.getDirectoryHandle('empty');
+            } catch (_) { empty = false; }
+            return { a, b, empty };
+          } catch (_) {}
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        throw new Error('folder download timeout');
+      });
+      expect(folderResult).toEqual({ a: 'A', b: 'B', empty: true });
+
       fs.rmSync(path.join(realRoot, 'agent-upload.txt'), { force: true });
       await page.evaluate(async () => {
         const browser = window.CrossDeskFiles.browser;

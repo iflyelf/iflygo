@@ -156,6 +156,24 @@ func (fb *fileBrowser) handleRPC(s *session, data []byte) {
 	if json.Unmarshal(data, &req) != nil || req.Type != "file_browser" || req.Version != 1 || req.ID < 0 {
 		return
 	}
+	if req.Op == "reply" {
+		var raw map[string]any
+		if json.Unmarshal(data, &raw) == nil {
+			s.rpcMu.Lock()
+			ch := s.pendingRPC[req.ID]
+			s.rpcMu.Unlock()
+			if ch != nil {
+				select {
+				case ch <- raw:
+				default:
+				}
+			}
+		}
+		return
+	}
+	if req.Op == "notice" {
+		return
+	}
 	switch req.Op {
 	case "list":
 		result := fb.list(req.Path, req.Cursor, req.Pagination)
@@ -412,11 +430,18 @@ func (s *session) prepareUpload(req *fileRPC) map[string]any {
 	return map[string]any{"ok": true}
 }
 
+type downloadPlan struct {
+	path string
+	id   uint32
+}
+
 func (s *session) startDownload(req *fileRPC) map[string]any {
 	if len(req.Paths) == 0 || len(req.Paths) > 256 {
 		return map[string]any{"ok": false, "error": "invalid_request"}
 	}
-	files := make([]string, 0, len(req.Paths))
+	localDest := strings.HasPrefix(req.Destination, "/local/")
+	var plans []downloadPlan
+	var prepareItems []map[string]any
 	for _, raw := range req.Paths {
 		real, ok := s.agent.files.resolveExisting(raw)
 		if !ok {
@@ -430,32 +455,77 @@ func (s *session) startDownload(req *fileRPC) map[string]any {
 			return map[string]any{"ok": false, "error": "symbolic_link"}
 		}
 		if info.IsDir() {
+			if !localDest {
+				return map[string]any{"ok": false, "error": "unsupported"}
+			}
+			base := filepath.Base(real)
+			err := filepath.WalkDir(real, func(path string, entry os.DirEntry, walkErr error) error {
+				if walkErr != nil {
+					return nil
+				}
+				if entry.Type()&os.ModeSymlink != 0 {
+					if entry.IsDir() {
+						return filepath.SkipDir
+					}
+					return nil
+				}
+				rel, err := filepath.Rel(real, path)
+				if err != nil {
+					return nil
+				}
+				rel = filepath.ToSlash(filepath.Join(base, rel))
+				if entry.IsDir() {
+					prepareItems = append(prepareItems, map[string]any{"file_id": 0, "directory": rel})
+					return nil
+				}
+				if !entry.Type().IsRegular() {
+					return nil
+				}
+				if len(plans) >= 4096 {
+					return fmt.Errorf("too_many_files")
+				}
+				id := s.nextFile()
+				plans = append(plans, downloadPlan{path: path, id: id})
+				dir := filepath.ToSlash(filepath.Dir(rel))
+				prepareItems = append(prepareItems, map[string]any{"file_id": id, "directory": dir})
+				return nil
+			})
+			if err != nil {
+				return map[string]any{"ok": false, "error": "too_many_files"}
+			}
+		} else if info.Mode().IsRegular() {
+			if len(plans) >= 4096 {
+				return map[string]any{"ok": false, "error": "too_many_files"}
+			}
+			id := s.nextFile()
+			plans = append(plans, downloadPlan{path: real, id: id})
+			if localDest {
+				prepareItems = append(prepareItems, map[string]any{"file_id": id, "directory": ""})
+			}
+		} else {
 			return map[string]any{"ok": false, "error": "unsupported"}
 		}
-		if !info.Mode().IsRegular() {
-			return map[string]any{"ok": false, "error": "unsupported"}
-		}
-		files = append(files, real)
 	}
-	go s.sendFiles(req.TransferID, files)
+	if len(prepareItems) > 4096 || (len(plans) == 0 && len(prepareItems) == 0) {
+		return map[string]any{"ok": false, "error": "too_many_files"}
+	}
+	go s.sendPlans(req.TransferID, req.Destination, localDest, prepareItems, plans)
 	return map[string]any{"ok": true, "message": "queued"}
 }
 
-func (s *session) sendFiles(transferID string, paths []string) {
-	deadline := time.Now().Add(8 * time.Second)
-	for time.Now().Before(deadline) {
-		if s.fileChannel != nil && s.fileChannel.ReadyState() == webrtc.DataChannelStateOpen &&
-			s.feedbackChannel != nil && s.feedbackChannel.ReadyState() == webrtc.DataChannelStateOpen {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if s.fileChannel == nil || s.fileChannel.ReadyState() != webrtc.DataChannelStateOpen {
+func (s *session) sendPlans(transferID, destination string, local bool, prepareItems []map[string]any, plans []downloadPlan) {
+	if !s.waitFileChannels(8 * time.Second) {
 		s.fileNotice(transferID, false, "disconnected")
 		return
 	}
-	for _, path := range paths {
-		if err := s.sendFile(path); err != nil {
+	if local {
+		if err := s.requestPrepare(transferID, destination, prepareItems); err != nil {
+			s.fileNotice(transferID, false, "directory_not_writable")
+			return
+		}
+	}
+	for _, plan := range plans {
+		if err := s.sendFile(plan.path, plan.id); err != nil {
 			s.fileNotice(transferID, false, "file_unreadable")
 			return
 		}
@@ -463,7 +533,68 @@ func (s *session) sendFiles(transferID string, paths []string) {
 	s.fileNotice(transferID, true, "")
 }
 
-func (s *session) sendFile(path string) error {
+// waitFileChannels 等待浏览器附加 file / file_feedback 通道。
+func (s *session) waitFileChannels(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if s.fileChannel != nil && s.fileChannel.ReadyState() == webrtc.DataChannelStateOpen &&
+			s.feedbackChannel != nil && s.feedbackChannel.ReadyState() == webrtc.DataChannelStateOpen {
+			return true
+		}
+		select {
+		case <-s.fileDone:
+			return false
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	return false
+}
+
+// requestPrepare 在目录下载前向浏览器预留文件 ID -> 子目录。
+func (s *session) requestPrepare(transferID, destination string, items []map[string]any) error {
+	id := s.nextRPC()
+	reply := make(chan map[string]any, 1)
+	s.rpcMu.Lock()
+	s.pendingRPC[id] = reply
+	s.rpcMu.Unlock()
+	defer func() {
+		s.rpcMu.Lock()
+		delete(s.pendingRPC, id)
+		s.rpcMu.Unlock()
+	}()
+	if !s.sendControlJSON(map[string]any{
+		"type": "file_browser", "version": 1, "id": id, "op": "prepare",
+		"destination": destination, "transfer_id": transferID, "items": items,
+	}) {
+		return fmt.Errorf("disconnected")
+	}
+	select {
+	case msg := <-reply:
+		if msg["ok"] == true {
+			return nil
+		}
+		if reason, _ := msg["error"].(string); reason != "" {
+			return fmt.Errorf("%s", reason)
+		}
+		return fmt.Errorf("prepare rejected")
+	case <-s.fileDone:
+		return fmt.Errorf("session closed")
+	case <-time.After(5 * time.Second):
+		return fmt.Errorf("prepare timeout")
+	}
+}
+
+func (s *session) nextRPC() int64 {
+	s.rpcMu.Lock()
+	defer s.rpcMu.Unlock()
+	s.nextRPCID++
+	if s.nextRPCID <= 0 {
+		s.nextRPCID = 1
+	}
+	return s.nextRPCID
+}
+
+func (s *session) sendFile(path string, id uint32) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -478,7 +609,6 @@ func (s *session) sendFile(path string) error {
 		return fmt.Errorf("invalid file name")
 	}
 	total := info.Size()
-	id := s.nextFile()
 	offset := int64(0)
 	first := true
 	for {
