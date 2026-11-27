@@ -219,7 +219,7 @@ BASE="https://github.com/iflyelf/iflygo/releases/latest/download"
 # 国内默认走代理；海外可改为 DOWNLOAD="$BASE"
 DOWNLOAD="${PROXY}${BASE}"
 
-wget -q -c --no-check-certificate -O /tmp/checksums.txt "${DOWNLOAD}/checksums.txt"
+wget -q -c -O /tmp/checksums.txt "${DOWNLOAD}/checksums.txt"
 cd /tmp
 sha256sum -c checksums.txt --ignore-missing
 ```
@@ -239,9 +239,9 @@ BASE="https://github.com/iflyelf/iflygo/releases/latest/download"
 DOWNLOAD="${PROXY}${BASE}"
 cd /tmp
 
-wget -q -c --no-check-certificate -O "iflygo-server-linux-${ARCH}.tar.gz" "${DOWNLOAD}/iflygo-server-linux-${ARCH}.tar.gz"
-wget -q -c --no-check-certificate -O "iflygo-client-linux-${ARCH}.tar.gz" "${DOWNLOAD}/iflygo-client-linux-${ARCH}.tar.gz"
-wget -q -c --no-check-certificate -O checksums.txt "${DOWNLOAD}/checksums.txt"
+wget -q -c -O "iflygo-server-linux-${ARCH}.tar.gz" "${DOWNLOAD}/iflygo-server-linux-${ARCH}.tar.gz"
+wget -q -c -O "iflygo-client-linux-${ARCH}.tar.gz" "${DOWNLOAD}/iflygo-client-linux-${ARCH}.tar.gz"
+wget -q -c -O checksums.txt "${DOWNLOAD}/checksums.txt"
 
 # 使用 release 中的原始文件名校验（缺失的其他平台会跳过）
 sha256sum -c checksums.txt --ignore-missing
@@ -256,9 +256,9 @@ install -m 0755 "/tmp/iflygo-client-linux-${ARCH}" /usr/local/bin/iflygo-client
 /usr/local/bin/iflygo-client version
 ```
 
-> 国内默认使用代理前缀 `https://proxy.xiaonuo.live/?url=`；海外可改为直连。
-> `--no-check-certificate` / `curl -k` 仅用于代理证书异常的环境；
-> 生产环境请确认代理证书有效后去掉该参数。
+> 国内默认使用代理前缀 `https://proxy.xiaonuo.live/?url=`；该域名使用可信证书，
+> 无需跳过 TLS 校验。海外可改为直连 `DOWNLOAD="$BASE"`。
+> Release 页面同时提供「国内代理下载」与「GitHub 直连」两列链接。
 
 #### 2. 准备数据库
 
@@ -482,7 +482,7 @@ BASE="https://github.com/iflyelf/iflygo/releases/latest/download"
 # 国内默认走代理；海外可改为 DOWNLOAD="$BASE"
 DOWNLOAD="${PROXY}${BASE}"
 cd /tmp
-curl -fL -k -o "iflygo-client-darwin-${ARCH}.tar.gz" "${DOWNLOAD}/iflygo-client-darwin-${ARCH}.tar.gz"
+curl -fL -o "iflygo-client-darwin-${ARCH}.tar.gz" "${DOWNLOAD}/iflygo-client-darwin-${ARCH}.tar.gz"
 tar -xzf "iflygo-client-darwin-${ARCH}.tar.gz"
 sudo install -m 0755 "iflygo-client-darwin-${ARCH}" /usr/local/bin/iflygo-client
 
@@ -570,7 +570,7 @@ BASE="https://github.com/iflyelf/iflygo/releases/latest/download"
 DOWNLOAD="${PROXY}${BASE}"
 ARCH=amd64
 cd /tmp
-curl -fL -k -o "iflygo-client-linux-${ARCH}" "${DOWNLOAD}/iflygo-client-linux-${ARCH}"
+curl -fL -o "iflygo-client-linux-${ARCH}" "${DOWNLOAD}/iflygo-client-linux-${ARCH}"
 sudo install -m 0755 "iflygo-client-linux-${ARCH}" /usr/local/bin/iflygo-client
 sudo mkdir -p /var/lib/iflygo-crossdesk
 ```
@@ -630,8 +630,8 @@ PROXY="https://proxy.xiaonuo.live/?url="
 BASE="https://github.com/iflyelf/iflygo/releases/latest/download"
 DOWNLOAD="${PROXY}${BASE}"   # 海外可改为 DOWNLOAD="$BASE"
 cd /tmp
-wget -q -c --no-check-certificate -O iflygo-server-linux-amd64.tar.gz "${DOWNLOAD}/iflygo-server-linux-amd64.tar.gz"
-wget -q -c --no-check-certificate -O checksums.txt "${DOWNLOAD}/checksums.txt"
+wget -q -c -O iflygo-server-linux-amd64.tar.gz "${DOWNLOAD}/iflygo-server-linux-amd64.tar.gz"
+wget -q -c -O checksums.txt "${DOWNLOAD}/checksums.txt"
 sha256sum -c checksums.txt --ignore-missing
 tar -xzf iflygo-server-linux-amd64.tar.gz
 
@@ -993,7 +993,7 @@ docker compose up -d
   BASE="https://github.com/iflyelf/iflygo/releases/latest/download"
   # 国内默认走代理；海外可改为 DOWNLOAD="$BASE"
   DOWNLOAD="${PROXY}${BASE}"
-  wget -q -c --no-check-certificate -O iflygo-android.apk "${DOWNLOAD}/iflygo-android.apk"
+  wget -q -c -O iflygo-android.apk "${DOWNLOAD}/iflygo-android.apk"
   ```
   当前为 debug 签名（可直接安装）；正式分发建议配置自有 release keystore 后重新签名。
 - **本地构建**：见 `mobile/android/README.md`（需要 JDK 17、Android SDK 34、

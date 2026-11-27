@@ -240,6 +240,70 @@ jobs:
           print(json.dumps({"version": version, "assets": sorted(assets)}, ensure_ascii=False))
           PY
 
+      - name: 生成 Release 下载页
+        env:
+          TAG_NAME: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
+        run: |
+          python3 - <<'PY'
+          import os
+
+          tag = os.environ.get("TAG_NAME", "latest")
+          repo = os.environ.get("GITHUB_REPOSITORY", "iflyelf/iflygo")
+          if tag == "latest":
+              rel = f"https://github.com/{repo}/releases/latest/download"
+              history = f"https://github.com/{repo}/commits/main"
+          else:
+              rel = f"https://github.com/{repo}/releases/download/{tag}"
+              history = f"https://github.com/{repo}/releases/tag/{tag}"
+          proxy = "https://proxy.xiaonuo.live/?url="
+
+          assets = [
+              ("服务端 Linux amd64", "iflygo-server-linux-amd64.tar.gz"),
+              ("服务端 Linux arm64", "iflygo-server-linux-arm64.tar.gz"),
+              ("服务端 Linux arm", "iflygo-server-linux-arm.tar.gz"),
+              ("服务端 macOS amd64", "iflygo-server-darwin-amd64.tar.gz"),
+              ("服务端 macOS arm64", "iflygo-server-darwin-arm64.tar.gz"),
+              ("服务端 Windows amd64", "iflygo-server-windows-amd64.zip"),
+              ("服务端 Windows arm64", "iflygo-server-windows-arm64.zip"),
+              ("客户端 Linux amd64", "iflygo-client-linux-amd64.tar.gz"),
+              ("客户端 Linux arm64", "iflygo-client-linux-arm64.tar.gz"),
+              ("客户端 Linux arm", "iflygo-client-linux-arm.tar.gz"),
+              ("客户端 macOS amd64", "iflygo-client-darwin-amd64.tar.gz"),
+              ("客户端 macOS arm64", "iflygo-client-darwin-arm64.tar.gz"),
+              ("客户端 Windows amd64", "iflygo-client-windows-amd64.zip"),
+              ("客户端 Windows arm64", "iflygo-client-windows-arm64.zip"),
+              ("Android APK", "iflygo-android.apk"),
+              ("Windows 监控安装器", "install-windows-monitor.exe"),
+              ("客户端升级清单", "iflygo-client-manifest.json"),
+              ("SHA256 校验和", "checksums.txt"),
+          ]
+
+          lines = [
+              "# iFlyGo " + tag,
+              "",
+              "> 国内推荐 **代理下载**；海外可使用 **GitHub 直连**。所有文件均提供 SHA256，见 `checksums.txt`。",
+              "",
+              "## 下载",
+              "",
+              "| 文件 | 国内代理下载 | GitHub 直连 |",
+              "|---|---|---|",
+          ]
+          for label, name in assets:
+              lines.append(f"| {label} | [下载]({proxy}{rel}/{name}) | [下载]({rel}/{name}) |")
+          lines += [
+              "",
+              "## 说明",
+              "- `iflygo-client-manifest.json` 用于客户端 `self-update` / `--auto-update`。",
+              "- Windows zip 已内置 `wintun.dll`。",
+              "- Android APK 为 debug 签名，可直接安装；正式分发请自行重签。",
+              "- 二进制部署文档：https://github.com/" + repo + "#-部署",
+              "- 更新记录：" + history,
+          ]
+          with open("dist/release-body.md", "w", encoding="utf-8") as f:
+              f.write("\n".join(lines) + "\n")
+          print("\n".join(lines[:8]))
+          PY
+
       - name: 发布 Release
         uses: softprops/action-gh-release@v3.0.3
         with:
@@ -248,7 +312,8 @@ jobs:
           name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
           prerelease: false
           make_latest: true
-          generate_release_notes: ${{ startsWith(github.ref, 'refs/tags/') }}
+          body_path: dist/release-body.md
+          generate_release_notes: false
           files: |
             dist/*.tar.gz
             dist/*.zip
