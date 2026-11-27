@@ -164,7 +164,9 @@ CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/iflygo-client ./cmd/cli
 
 > 发布产物：GitHub Releases 的 `latest` 提供 7 个平台的
 > `iflygo-server-*` / `iflygo-client-*`（Linux/macOS 为 `.tar.gz`，Windows 为 `.zip`，
-> zip 内已包含 `wintun.dll`）。
+> zip 内已包含 `wintun.dll`），同时提供自动升级用原始二进制、
+> `iflygo-client-manifest.json`、`checksums.txt` 与可选的
+> `install-windows-monitor.exe`。
 > 容器镜像：`iflyelf/iflygo:latest`、`swr.cn-east-3.myhuaweicloud.com/iflyelf/iflygo:latest`
 >（`linux/amd64`、`linux/arm64`）。
 
@@ -198,20 +200,53 @@ CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/iflygo-client ./cmd/cli
 
 ### 方式一：二进制部署（Linux systemd，推荐）
 
+#### 0. 发布产物与校验
+
+| 文件 | 用途 |
+|---|---|
+| `iflygo-server-<os>-<arch>.tar.gz` | 控制面 / 数据面服务端 |
+| `iflygo-client-<os>-<arch>.tar.gz` | Linux / macOS 客户端 |
+| `iflygo-client-windows-<arch>.zip` | Windows 客户端（含 `wintun.dll`） |
+| `iflygo-client-<os>-<arch>` / `.exe` | 自动升级使用的原始二进制 |
+| `iflygo-client-manifest.json` | 客户端升级清单（版本、SHA256、下载 URL） |
+| `install-windows-monitor.exe` | 可选：主机监控一体化安装器 |
+| `iflygo-android.apk` | Android 隧道客户端 |
+| `checksums.txt` | 全部制品的 SHA256 |
+
+```bash
+BASE=https://github.com/iflyelf/iflygo/releases/latest/download
+wget -qO /tmp/checksums.txt "$BASE/checksums.txt"
+cd /tmp
+sha256sum -c checksums.txt --ignore-missing
+```
+
+> 新增能力：客户端 `self-update` / `--auto-update` 会读取
+> `iflygo-client-manifest.json`，校验 SHA256 后替换二进制；
+> 服务端通过 `/api/client/update` 与 `/api/client/download` 提供清单与下载跳转。
+
 #### 1. 下载并安装
 
 ```bash
 # 按需替换 ARCH：amd64 / arm64 / arm
 ARCH=amd64
 BASE=https://github.com/iflyelf/iflygo/releases/latest/download
+cd /tmp
 
-wget -c -O /tmp/iflygo-server.tar.gz  "$BASE/iflygo-server-linux-${ARCH}.tar.gz"
-wget -c -O /tmp/iflygo-client.tar.gz  "$BASE/iflygo-client-linux-${ARCH}.tar.gz"
-tar -xzf /tmp/iflygo-server.tar.gz -C /tmp
-tar -xzf /tmp/iflygo-client.tar.gz -C /tmp
+wget -c "$BASE/iflygo-server-linux-${ARCH}.tar.gz"
+wget -c "$BASE/iflygo-client-linux-${ARCH}.tar.gz"
+wget -c "$BASE/checksums.txt"
+
+# 使用 release 中的原始文件名校验（缺失的其他平台会跳过）
+sha256sum -c checksums.txt --ignore-missing
+
+tar -xzf "iflygo-server-linux-${ARCH}.tar.gz" -C /tmp
+tar -xzf "iflygo-client-linux-${ARCH}.tar.gz" -C /tmp
 
 install -m 0755 "/tmp/iflygo-server-linux-${ARCH}" /usr/local/bin/iflygo-server
 install -m 0755 "/tmp/iflygo-client-linux-${ARCH}" /usr/local/bin/iflygo-client
+
+/usr/local/bin/iflygo-server -version
+/usr/local/bin/iflygo-client version
 ```
 
 > 国内访问慢时可使用代理前缀（可选）：
@@ -310,6 +345,10 @@ SERVER_EXTERNAL_URL=https://iflygo.example.com
 # CLIENT_AUTO_NAT_MAX_RETRIES=5
 # CLIENT_AUTO_NAT_WEBHOOK=https://hooks.example.com/iflygo
 # CLIENT_EGRESS_EXCLUDE=10.0.0.0/8,192.168.0.0/16
+# 客户端自动升级（页面「设置 → 客户端升级」也可配置，页面优先）
+CLIENT_UPDATE_ENABLED=true
+CLIENT_UPDATE_MANIFEST_URL=https://github.com/iflyelf/iflygo/releases/latest/download/iflygo-client-manifest.json
+CLIENT_UPDATE_BASE_URL=https://github.com/iflyelf/iflygo/releases/latest/download
 ```
 
 > 优先级：**页面设置 > 环境变量 > 配置文件 > 内置默认值**。
@@ -333,8 +372,13 @@ journalctl -u iflygo-server -f
 
 #### 5. 接入 Linux 客户端
 
-1. 页面 → **隧道 → 客户端 → 创建客户端**，复制 enroll token 或安装命令；
-2. 在目标主机执行：
+推荐直接使用页面脚本（自动完成下载、enroll、systemd 与自动升级）：
+
+1. 页面 → **隧道 → 客户端 → 创建客户端**；
+2. 点击 **安装命令**，在弹窗中选择 Linux，复制脚本到目标主机执行；
+3. 或复制 enroll token，按下方手动步骤安装。
+
+手动安装：
 
 ```bash
 sudo iflygo-client enroll \
@@ -345,10 +389,14 @@ sudo iflygo-client enroll \
 # 前台运行（需要 root / TUN）
 sudo iflygo-client run --state-dir /var/lib/iflygo-client
 
-# 或安装为 systemd 服务
+# 安装为 systemd 服务（默认写入 --auto-update）
 sudo iflygo-client service install \
   --state-dir /var/lib/iflygo-client \
-  --config /etc/iflygo/client.yaml
+  --config /etc/iflygo/client.yaml \
+  --auto-update
+
+# 检查自动升级是否可用
+sudo iflygo-client self-update --server https://iflygo.example.com --check
 ```
 
 > `enroll` 会自动把服务端下发的全部文件写入状态目录：
@@ -378,7 +426,7 @@ iflygo-client config --state-dir /var/lib/iflygo-client
 > 服务端页面配置的 DNS/MTU/心跳间隔/数据面模式/TCP 中继会随 enroll/config
 > 自动写入 `client.yaml`，客户端无需手工填写。
 
-#### 6. 接入 Windows 客户端
+#### 6. 接入 Windows / macOS 客户端
 
 1. 下载 `iflygo-client-windows-amd64.zip`（或 `arm64`）并解压；
 2. **保持目录结构**：`iflygo-client-windows-amd64.exe` 与
@@ -396,11 +444,47 @@ iflygo-client config --state-dir /var/lib/iflygo-client
 # 安装为 Windows 服务（SCM，开机自启）
 .\iflygo-client-windows-amd64.exe service install `
   --state-dir C:\ProgramData\iflygo `
-  --config C:\ProgramData\iflygo\client.yaml
+  --config C:\ProgramData\iflygo\client.yaml `
+  --auto-update
 ```
 
 > Windows 服务以 LocalSystem 运行，需要管理员权限以加载 wintun 驱动。
 > 若使用裸 `.exe`（不下载 zip），需手动补齐 `dist\windows\wintun\bin\<arch>\wintun.dll`。
+> `service install` 默认写入 `--auto-update`，并配置 SCM 恢复动作。
+
+**macOS（二进制）**：
+
+```bash
+# 按需替换 ARCH：amd64 / arm64
+ARCH=arm64
+BASE=https://github.com/iflyelf/iflygo/releases/latest/download
+cd /tmp
+curl -fLO "$BASE/iflygo-client-darwin-${ARCH}.tar.gz"
+tar -xzf "iflygo-client-darwin-${ARCH}.tar.gz"
+sudo install -m 0755 "iflygo-client-darwin-${ARCH}" /usr/local/bin/iflygo-client
+
+sudo iflygo-client enroll \
+  --server https://iflygo.example.com \
+  --token '<ENROLL_TOKEN>' \
+  --state-dir /var/lib/iflygo-client
+```
+
+macOS 可使用页面生成的 LaunchDaemon 脚本（推荐），或手写
+`/Library/LaunchDaemons/com.iflyelf.iflygo-client.plist`：
+
+```xml
+<key>ProgramArguments</key><array>
+  <string>/usr/local/bin/iflygo-client</string><string>run</string>
+  <string>--state-dir</string><string>/var/lib/iflygo-client</string>
+  <string>--auto-update</string>
+</array>
+<key>RunAtLoad</key><true/>
+<key>KeepAlive</key><true/>
+```
+
+```bash
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.iflyelf.iflygo-client.plist
+```
 
 #### 7. 自动升级与接入脚本
 
@@ -446,17 +530,144 @@ sudo iflygo-client run --state-dir /var/lib/iflygo-client --auto-update
 - 该脚本/令牌接口与 upgrade_mgr 一致，仅建议内网使用，务必用防火墙限制来源；
 - 一体化安装脚本使用默认租户（tenant 1）；多租户环境请使用「自动化令牌」按租户创建。
 
-#### 8. 升级 / 卸载
+#### 8. CrossDesk 主机端（二进制）
+
+推荐使用页面脚本：
+
+- **远程桌面（CrossDesk）→ 生成接入脚本**；
+- 选择 Linux / macOS / Windows，可填写 `--file-root`，勾选音频/视频；
+- 脚本自动下载二进制、创建设备凭据、安装 systemd/launchd/计划任务，并启用自动升级。
+
+手动部署 Linux 主机端：
 
 ```bash
-# 升级：替换二进制后重启，迁移自动执行
+BASE=https://github.com/iflyelf/iflygo/releases/latest/download
+ARCH=amd64
+cd /tmp
+curl -fLO "$BASE/iflygo-client-linux-${ARCH}"
+sudo install -m 0755 "iflygo-client-linux-${ARCH}" /usr/local/bin/iflygo-client
+sudo mkdir -p /var/lib/iflygo-crossdesk
+```
+
+`/etc/systemd/system/iflygo-crossdesk.service`：
+
+```ini
+[Unit]
+Description=iFlyGo CrossDesk Host Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/iflygo-client crossdesk host \
+  --server=https://iflygo.example.com \
+  --credentials=/var/lib/iflygo-crossdesk/device.json \
+  --auto-update
+Restart=always
+RestartSec=3
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now iflygo-crossdesk
+journalctl -u iflygo-crossdesk -f
+```
+
+常用参数：
+
+| 参数 | 说明 |
+|---|---|
+| `--file-root <dir>` | 开放文件浏览/传输目录，可重复；不填则关闭文件传输 |
+| `--file-max-upload <MB>` | 单文件上传上限 |
+| `--audio` | 主机系统音频 → 浏览器（Linux 默认 `parec`；其他平台可用 `--audio-cmd`） |
+| `--mic` | 浏览器麦克风 → 主机播放（`--mic-play-cmd` 可覆盖） |
+| `--video-codec vp8\|h264` | 标准 WebRTC 视频轨道（需 ffmpeg） |
+| `--video-hwaccel auto` | H.264 硬件编码预设 |
+| `--capture-cmd "grim -t png -"` | 外部抓屏（Wayland 等） |
+
+> 首次启动自动注册设备，凭据保存到 `--credentials` 指定路径（0600）。
+> Linux 采集需要 X11 会话；Windows/macOS 需授予屏幕录制/辅助功能权限。
+> 视频/音频采集依赖 ffmpeg；未启用的能力不会创建对应通道。
+
+#### 9. 升级 / 卸载
+
+**服务端升级**：
+
+```bash
+# 1. 备份数据库与 /var/lib/iflygo（CA、制品）
+# 2. 下载并校验新版本
+BASE=https://github.com/iflyelf/iflygo/releases/latest/download
+cd /tmp
+wget -O iflygo-server-linux-amd64.tar.gz "$BASE/iflygo-server-linux-amd64.tar.gz"
+wget -O checksums.txt "$BASE/checksums.txt"
+sha256sum -c checksums.txt --ignore-missing
+tar -xzf iflygo-server-linux-amd64.tar.gz
+
+# 3. 替换并重启（迁移自动执行）
 install -m 0755 /tmp/iflygo-server-linux-amd64 /usr/local/bin/iflygo-server
 systemctl restart iflygo-server
+```
 
-# 卸载
+**客户端升级**：
+
+```bash
+# 手动检查 / 升级（推荐先 --check）
+iflygo-client self-update --server https://iflygo.example.com --check
+iflygo-client self-update --server https://iflygo.example.com
+
+# 服务自动升级（service install 默认开启）
+# 检查间隔默认 6h；Unix 原地 exec，Windows 退出 75 由 SCM/计划任务拉起
+systemctl status iflygo-client
+```
+
+> 自动升级依赖 Release 的 `iflygo-client-manifest.json` 与 `VERSION`。
+> 发布新版本时必须提升 `VERSION`，否则清单版本相同不会触发升级。
+> 旧版已安装服务建议重新执行 `service install`，以获得 `--auto-update`
+> 与 Windows SCM 恢复动作。
+
+**CrossDesk 主机端升级**：同一 `iflygo-client` 二进制；使用 `--auto-update` 时自动升级，
+或重新执行接入脚本覆盖安装。
+
+```bash
+systemctl restart iflygo-crossdesk
+```
+
+**卸载**：
+
+```bash
+# 服务端
 systemctl disable --now iflygo-server
 rm -f /etc/systemd/system/iflygo-server.service
 rm -rf /opt/iflygo /var/lib/iflygo   # 确认已备份 CA/数据库/制品后再删
+
+# 隧道客户端
+iflygo-client service uninstall || true
+rm -f /usr/local/bin/iflygo-client
+rm -rf /var/lib/iflygo-client
+
+# CrossDesk 主机端
+systemctl disable --now iflygo-crossdesk
+rm -f /etc/systemd/system/iflygo-crossdesk.service
+rm -rf /var/lib/iflygo-crossdesk
+```
+
+Windows 卸载：
+
+```powershell
+.\iflygo-client.exe service uninstall
+Remove-Item -Recurse -Force "$env:ProgramData\iFlyGo"
+```
+
+macOS 卸载：
+
+```bash
+sudo launchctl bootout system /Library/LaunchDaemons/com.iflyelf.iflygo-client.plist
+sudo rm -f /Library/LaunchDaemons/com.iflyelf.iflygo-client.plist
+sudo rm -rf /usr/local/bin/iflygo-client /var/lib/iflygo-client
 ```
 
 ---
