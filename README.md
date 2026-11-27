@@ -214,8 +214,12 @@ CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/iflygo-client ./cmd/cli
 | `checksums.txt` | 全部制品的 SHA256 |
 
 ```bash
-BASE=https://github.com/iflyelf/iflygo/releases/latest/download
-wget -qO /tmp/checksums.txt "$BASE/checksums.txt"
+PROXY="https://proxy.xiaonuo.live/?url="
+BASE="https://github.com/iflyelf/iflygo/releases/latest/download"
+# 国内默认走代理；海外可改为 DOWNLOAD="$BASE"
+DOWNLOAD="${PROXY}${BASE}"
+
+wget -q -c --no-check-certificate -O /tmp/checksums.txt "${DOWNLOAD}/checksums.txt"
 cd /tmp
 sha256sum -c checksums.txt --ignore-missing
 ```
@@ -229,12 +233,15 @@ sha256sum -c checksums.txt --ignore-missing
 ```bash
 # 按需替换 ARCH：amd64 / arm64 / arm
 ARCH=amd64
-BASE=https://github.com/iflyelf/iflygo/releases/latest/download
+PROXY="https://proxy.xiaonuo.live/?url="
+BASE="https://github.com/iflyelf/iflygo/releases/latest/download"
+# 国内默认走代理；海外可改为 DOWNLOAD="$BASE"
+DOWNLOAD="${PROXY}${BASE}"
 cd /tmp
 
-wget -c "$BASE/iflygo-server-linux-${ARCH}.tar.gz"
-wget -c "$BASE/iflygo-client-linux-${ARCH}.tar.gz"
-wget -c "$BASE/checksums.txt"
+wget -q -c --no-check-certificate -O "iflygo-server-linux-${ARCH}.tar.gz" "${DOWNLOAD}/iflygo-server-linux-${ARCH}.tar.gz"
+wget -q -c --no-check-certificate -O "iflygo-client-linux-${ARCH}.tar.gz" "${DOWNLOAD}/iflygo-client-linux-${ARCH}.tar.gz"
+wget -q -c --no-check-certificate -O checksums.txt "${DOWNLOAD}/checksums.txt"
 
 # 使用 release 中的原始文件名校验（缺失的其他平台会跳过）
 sha256sum -c checksums.txt --ignore-missing
@@ -249,8 +256,9 @@ install -m 0755 "/tmp/iflygo-client-linux-${ARCH}" /usr/local/bin/iflygo-client
 /usr/local/bin/iflygo-client version
 ```
 
-> 国内访问慢时可使用代理前缀（可选）：
-> `https://proxy.xiaonuo.live/proxy?url=<原始 GitHub URL>`。
+> 国内默认使用代理前缀 `https://proxy.xiaonuo.live/?url=`；海外可改为直连。
+> `--no-check-certificate` / `curl -k` 仅用于代理证书异常的环境；
+> 生产环境请确认代理证书有效后去掉该参数。
 
 #### 2. 准备数据库
 
@@ -347,8 +355,12 @@ SERVER_EXTERNAL_URL=https://iflygo.example.com
 # CLIENT_EGRESS_EXCLUDE=10.0.0.0/8,192.168.0.0/16
 # 客户端自动升级（页面「设置 → 客户端升级」也可配置，页面优先）
 CLIENT_UPDATE_ENABLED=true
-CLIENT_UPDATE_MANIFEST_URL=https://github.com/iflyelf/iflygo/releases/latest/download/iflygo-client-manifest.json
-CLIENT_UPDATE_BASE_URL=https://github.com/iflyelf/iflygo/releases/latest/download
+# 国内无法直连 GitHub 时，清单与制品也走代理：
+CLIENT_UPDATE_MANIFEST_URL=https://proxy.xiaonuo.live/?url=https://github.com/iflyelf/iflygo/releases/latest/download/iflygo-client-manifest.json
+CLIENT_UPDATE_BASE_URL=https://proxy.xiaonuo.live/?url=https://github.com/iflyelf/iflygo/releases/latest/download
+# 海外直连示例：
+# CLIENT_UPDATE_MANIFEST_URL=https://github.com/iflyelf/iflygo/releases/latest/download/iflygo-client-manifest.json
+# CLIENT_UPDATE_BASE_URL=https://github.com/iflyelf/iflygo/releases/latest/download
 ```
 
 > 优先级：**页面设置 > 环境变量 > 配置文件 > 内置默认值**。
@@ -434,6 +446,14 @@ iflygo-client config --state-dir /var/lib/iflygo-client
 3. 以管理员身份打开 PowerShell：
 
 ```powershell
+$proxy = "https://proxy.xiaonuo.live/?url="
+$base = "https://github.com/iflyelf/iflygo/releases/latest/download"
+$download = "$proxy$base"
+$zip = Join-Path $env:TEMP "iflygo-client-windows-amd64.zip"
+Invoke-WebRequest -UseBasicParsing "$download/iflygo-client-windows-amd64.zip" -OutFile $zip
+Expand-Archive -Path $zip -DestinationPath "$env:TEMP\iflygo-client-windows-amd64" -Force
+Set-Location "$env:TEMP\iflygo-client-windows-amd64"
+
 .\iflygo-client-windows-amd64.exe enroll `
   --server https://iflygo.example.com `
   --token "<ENROLL_TOKEN>" `
@@ -457,9 +477,12 @@ iflygo-client config --state-dir /var/lib/iflygo-client
 ```bash
 # 按需替换 ARCH：amd64 / arm64
 ARCH=arm64
-BASE=https://github.com/iflyelf/iflygo/releases/latest/download
+PROXY="https://proxy.xiaonuo.live/?url="
+BASE="https://github.com/iflyelf/iflygo/releases/latest/download"
+# 国内默认走代理；海外可改为 DOWNLOAD="$BASE"
+DOWNLOAD="${PROXY}${BASE}"
 cd /tmp
-curl -fLO "$BASE/iflygo-client-darwin-${ARCH}.tar.gz"
+curl -fL -k -o "iflygo-client-darwin-${ARCH}.tar.gz" "${DOWNLOAD}/iflygo-client-darwin-${ARCH}.tar.gz"
 tar -xzf "iflygo-client-darwin-${ARCH}.tar.gz"
 sudo install -m 0755 "iflygo-client-darwin-${ARCH}" /usr/local/bin/iflygo-client
 
@@ -541,10 +564,13 @@ sudo iflygo-client run --state-dir /var/lib/iflygo-client --auto-update
 手动部署 Linux 主机端：
 
 ```bash
-BASE=https://github.com/iflyelf/iflygo/releases/latest/download
+PROXY="https://proxy.xiaonuo.live/?url="
+BASE="https://github.com/iflyelf/iflygo/releases/latest/download"
+# 国内默认走代理；海外可改为 DOWNLOAD="$BASE"
+DOWNLOAD="${PROXY}${BASE}"
 ARCH=amd64
 cd /tmp
-curl -fLO "$BASE/iflygo-client-linux-${ARCH}"
+curl -fL -k -o "iflygo-client-linux-${ARCH}" "${DOWNLOAD}/iflygo-client-linux-${ARCH}"
 sudo install -m 0755 "iflygo-client-linux-${ARCH}" /usr/local/bin/iflygo-client
 sudo mkdir -p /var/lib/iflygo-crossdesk
 ```
@@ -600,10 +626,12 @@ journalctl -u iflygo-crossdesk -f
 ```bash
 # 1. 备份数据库与 /var/lib/iflygo（CA、制品）
 # 2. 下载并校验新版本
-BASE=https://github.com/iflyelf/iflygo/releases/latest/download
+PROXY="https://proxy.xiaonuo.live/?url="
+BASE="https://github.com/iflyelf/iflygo/releases/latest/download"
+DOWNLOAD="${PROXY}${BASE}"   # 海外可改为 DOWNLOAD="$BASE"
 cd /tmp
-wget -O iflygo-server-linux-amd64.tar.gz "$BASE/iflygo-server-linux-amd64.tar.gz"
-wget -O checksums.txt "$BASE/checksums.txt"
+wget -q -c --no-check-certificate -O iflygo-server-linux-amd64.tar.gz "${DOWNLOAD}/iflygo-server-linux-amd64.tar.gz"
+wget -q -c --no-check-certificate -O checksums.txt "${DOWNLOAD}/checksums.txt"
 sha256sum -c checksums.txt --ignore-missing
 tar -xzf iflygo-server-linux-amd64.tar.gz
 
@@ -961,8 +989,11 @@ docker compose up -d
   发布资产命名为 `iflygo-android.apk`（附 `.sha256`），手动触发/tag 时附加到 Release
 - **下载**：
   ```bash
-  wget -O iflygo-android.apk \
-    https://github.com/iflyelf/iflygo/releases/latest/download/iflygo-android.apk
+  PROXY="https://proxy.xiaonuo.live/?url="
+  BASE="https://github.com/iflyelf/iflygo/releases/latest/download"
+  # 国内默认走代理；海外可改为 DOWNLOAD="$BASE"
+  DOWNLOAD="${PROXY}${BASE}"
+  wget -q -c --no-check-certificate -O iflygo-android.apk "${DOWNLOAD}/iflygo-android.apk"
   ```
   当前为 debug 签名（可直接安装）；正式分发建议配置自有 release keystore 后重新签名。
 - **本地构建**：见 `mobile/android/README.md`（需要 JDK 17、Android SDK 34、
