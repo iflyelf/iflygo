@@ -40,6 +40,25 @@ fi
 install -m 0755 "$TMP" /usr/local/bin/iflygo-client
 iflygo-client enroll --server "$BASE" --token "$TOKEN" --name "$NAME" --state-dir /var/lib/iflygo-client
 iflygo-client service install --state-dir /var/lib/iflygo-client --auto-update
+
+# 内置主机监控（独立服务 node_exporter:16666，与 iflygo-client 互不影响）
+WITH_MONITOR="${WITH_MONITOR:-1}"
+if [ "$WITH_MONITOR" = "1" ]; then
+  MON_TMP=$(mktemp)
+  if curl -fsSL "$BASE/api/external/binary/node-exporter-install.sh" -o "$MON_TMP"; then
+    if UPGRADE_MGR_EXTERNAL_URL="$BASE" NODE_EXPORTER_VERSION=latest \
+       NODE_EXPORTER_BASE=127.0.0.1:9 NODE_EXPORTER_PROXY=http:// \
+       bash "$MON_TMP" install; then
+      echo "✅ 主机监控已安装（node_exporter :16666）"
+    else
+      echo "⚠️ 主机监控安装失败；iflygo-client 已安装且不受影响"
+    fi
+  else
+    echo "⚠️ 无法获取监控安装脚本；iflygo-client 已安装且不受影响"
+  fi
+  rm -f "$MON_TMP"
+fi
+
 echo "✅ iFlyGo 客户端已安装并启动"
 `, qBase, qToken, qName)
 
@@ -83,6 +102,7 @@ cat > /Library/LaunchDaemons/com.iflyelf.iflygo-client.plist <<'PLIST'
 PLIST
 launchctl bootout system /Library/LaunchDaemons/com.iflyelf.iflygo-client.plist >/dev/null 2>&1 || true
 launchctl bootstrap system /Library/LaunchDaemons/com.iflyelf.iflygo-client.plist
+# macOS 暂未内置监控二进制；如需监控请单独部署，和客户端互不影响。
 echo "✅ iFlyGo 客户端已安装并启动"
 `, qBase, qToken, qName)
 
@@ -106,6 +126,26 @@ $exe = Get-ChildItem $dest -Filter "iflygo-client-windows-*.exe" | Select-Object
 if (-not $exe) { throw "未找到 iflygo-client.exe" }
 & $exe.FullName enroll --server $base --token $token --name $name --state-dir "$env:ProgramData\iFlyGo"
 & $exe.FullName service install --state-dir "$env:ProgramData\iFlyGo" --auto-update
+
+# 内置主机监控（独立服务 windows_exporter:16666，与 iflygo-client 互不影响）
+$withMonitor = $true
+if ($env:IFLYGO_WITH_MONITOR -eq "0") { $withMonitor = $false }
+if ($withMonitor) {
+  $mon = Join-Path $env:TEMP "windows-exporter-install.ps1"
+  try {
+    Invoke-WebRequest -UseBasicParsing "$base/api/external/binary/windows-exporter-install.ps1" -OutFile $mon
+    $env:UPGRADE_MGR_EXTERNAL_URL = $base
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $mon install
+    if ($LASTEXITCODE -ne 0) { throw "监控安装器退出码 $LASTEXITCODE" }
+    Write-Host "✅ 主机监控已安装（windows_exporter :16666）"
+  } catch {
+    Write-Warning "主机监控安装失败；iflygo-client 已安装且不受影响: $_"
+  } finally {
+    Remove-Item $mon -Force -ErrorAction SilentlyContinue
+    Remove-Item Env:UPGRADE_MGR_EXTERNAL_URL -ErrorAction SilentlyContinue
+  }
+}
+
 Write-Host "✅ iFlyGo 客户端已安装并启动"
 `, psQuoteStr(base), psQuoteStr(token), psQuoteStr(name))
 

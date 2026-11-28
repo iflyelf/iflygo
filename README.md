@@ -515,6 +515,10 @@ sudo launchctl bootstrap system /Library/LaunchDaemons/com.iflyelf.iflygo-client
 
 - 页面 **隧道 → 客户端 → 安装命令** 会弹出 Linux / macOS / Windows 脚本；
 - 脚本自动完成：下载当前平台二进制 → `enroll` → 安装服务 → 开启自动升级；
+- Linux/Windows 脚本内置独立主机监控（`node_exporter` / `windows_exporter`，
+  独立服务、独立目录、端口 16666），监控安装失败不影响客户端；
+  监控与客户端/CrossDesk 的启动、升级、卸载互不影响；
+  设置 `WITH_MONITOR=0`（Linux）或 `IFLYGO_WITH_MONITOR=0`（Windows）可跳过；
 - 页面 **远程桌面（CrossDesk）→ 生成接入脚本** 可生成主机端脚本，
   支持 Linux systemd、macOS launchd、Windows 计划任务，并可附带
   `--file-root`、`--audio`、`--video-codec vp8`。
@@ -681,6 +685,9 @@ rm -rf /var/lib/iflygo-client
 systemctl disable --now iflygo-crossdesk
 rm -f /etc/systemd/system/iflygo-crossdesk.service
 rm -rf /var/lib/iflygo-crossdesk
+
+# 监控与客户端/CrossDesk 独立，需单独卸载
+curl -fsSL "$BASE/api/external/binary/node-exporter-install.sh" | bash -s -- uninstall -y
 ```
 
 Windows 卸载：
